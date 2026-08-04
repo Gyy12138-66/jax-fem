@@ -15,12 +15,15 @@
 #
 # CLOCK.  One computational layer = N physical layers = N * 52 s (D-10
 #   legs-band layer clock, uniform across bands; the same uniform-clock
-#   deviation L0 registered). dt = 20 s, so steps/layer = N * 2.6 and the
-#   TOTAL number of build steps is 910 for EVERY N -- the sub-domain's
-#   simulated build time (350 * 52 s) does not depend on the lumping. That
-#   is what makes the N-sweep a clean lumping study: same physical clock,
-#   same step count, same mechanics cadence; only the z-discretisation and
-#   the deposition granularity change.
+#   deviation L0 registered). The sub-domain's simulated build time
+#   (350 * 52 s) does not depend on the lumping, so under the DEFAULT
+#   fixed_power convention dt is refined with N (29.87 / 14.93 / 5.97 s for
+#   N = 50/25/10) and steps per computational layer is CONSTANT at 87. Build
+#   steps therefore scale with the number of computational layers --
+#   609 / 1218 / 3045 -- i.e. refining N genuinely costs more, which is
+#   honest. (The older energy/power conventions instead pin dt = 20 s, which
+#   makes steps/layer N * 2.6 and total build steps 910 for every N; see the
+#   SCAN CONVENTION block below for why that convention is degenerate.)
 #
 # ENERGY. Real absorbed energy per physical layer for THIS 14 mm slice:
 #   laser-on time = leg area / (hatch * speed) = (5.0+0.5+2.5) mm * 5.0 mm
@@ -31,17 +34,22 @@
 #   0.157 * 19.34 kJ = 3.04 kJ = 50 * 60.45 J. Consistent by construction.
 #
 # SCAN PHASE. 4 serpentine hatch lines over the slice footprint (x 0-14 mm,
-#   y +-2.5 mm), S steps per line, S = N/6.25 rounded to 8/4/2 for N =
-#   50/25/10 -> t_scan = 640/320/160 s (~25 % of the layer clock, matching
-#   L0's 640/2660). Instantaneous power is an aggregation construct at
-#   dt = 20 s lumping (peaks are sub-grid at part scale; consolidation is
-#   activation-driven), exactly as registered for L0 rev 3.
+#   y +-2.5 mm). Under fixed_power the scan phase is the slice's exact share
+#   of L0's scan work (640 s * N/50 * 14/75 = 2.389 * N s), realised as 1 step
+#   per line with dt set to match -- so laser power comes out CONSTANT at
+#   40.8 W, inside L0's own band, for every N. Instantaneous power is an
+#   aggregation construct at this lumping (peaks are sub-grid at part scale;
+#   consolidation is activation-driven), exactly as registered for L0 rev 3.
 #
-# MECHANICS. --mechanics-every 13 = one mechanics solve per 260 s of
-#   simulated time for every N (76 solves per run, identical cost and
-#   identical physical cadence across the sweep). Acceptance quartet is the
-#   Kaess-golden-validated one L0 rev 3 wired (rel-tol 5e-5 / abaqus / 50 /
-#   line search) - the default 1e-9/1e-11 is the known j2 stagnation trap.
+# MECHANICS. --mechanics-every is DERIVED to give a fixed number of solves
+#   PER COMPUTATIONAL LAYER (default 6, override D11_MECH_PER_LAYER) rather
+#   than a fixed step or wall-clock interval: a fixed step interval would
+#   hand coarse-N runs more solves per deposited layer than fine-N runs and
+#   confound the lumping sweep, and a fixed wall-clock interval breaks once
+#   dt varies with N. Under fixed_power that is --mechanics-every 15 at every
+#   N. Acceptance quartet is the Kaess-golden-validated one L0 rev 3 wired
+#   (rel-tol 5e-5 / abaqus / 50 / line search) - the default 1e-9/1e-11 is
+#   the known j2 stagnation trap.
 #
 # T_cut. --stress-relaxation-temperature <T_cut_K>; the "none" arm OMITS the
 #   flag (schema default None => relaxation disabled), which is the correct

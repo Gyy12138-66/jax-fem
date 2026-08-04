@@ -1,0 +1,68 @@
+{
+ "schema_version": "ambench.d11-matrix-report/1",
+ "decision": "D-11 / PREREQUISITES.md D.7",
+ "threshold": 0.05,
+ "members_present": [
+  "N10_T1000_mean",
+  "N25_T1000_mean",
+  "N50_T1000_mean"
+ ],
+ "members_expected": 15,
+ "convergence": {
+  "1000": {
+   "N50_vs_N25": {
+    "M1_per_leg": {
+     "L1_thick": 0.2669945370912835,
+     "L2_thin": 2.003586808733929,
+     "L3_med": 0.6771522446127065
+    },
+    "M2_per_leg": {
+     "L1_thick": 0.16899501710327738,
+     "L2_thin": 0.7239804178536726,
+     "L3_med": 1.3875018151974317
+    },
+    "M1": 2.003586808733929,
+    "M2": 1.3875018151974317,
+    "M3_advisory": 1.210936370544481,
+    "converged": false
+   },
+   "N25_vs_N10": {
+    "M1_per_leg": {
+     "L1_thick": 0.4454038568857592,
+     "L2_thin": 0.7591862642957273,
+     "L3_med": 1.6901112992669691
+    },
+    "M2_per_leg": {
+     "L1_thick": 0.46475990222131336,
+     "L2_thin": 2.0635477068549277,
+     "L3_med": 23.19853288222269
+    },
+    "M1": 1.6901112992669691,
+    "M2": 23.19853288222269,
+    "M3_advisory": 3.9337517444097223,
+    "converged": false
+   }
+  }
+ },
+ "tcut_band": {
+  "10": {}
+ },
+ "yield_uncertainty": {},
+ "frozen_N": 10,
+ "frozen_N_basis": "dual metric on the T_cut = 1000 C column; the coarsest N whose pair against the next finer N satisfies M1 < 5 % AND M2 < 5 %. If no pair converges, N = 10 is reported as NOT converged and the matrix does not license a freeze.",
+ "frozen_N_converged": false,
+ "tcut_band_max": {
+  "M1": null,
+  "M2": null
+ },
+ "yield_uncertainty_max": {
+  "M1": null,
+  "M2": null
+ },
+ "recommendation": {
+  "N": 10,
+  "T_cut": "undetermined",
+  "reason": "T_cut column on the frozen N is incomplete",
+  "decided_by": "proposal only - D.7 gives the call to the reviewer"
+ }
+}

@@ -74,8 +74,12 @@ def load(runs_root):
         if d.get('schema_version') != 'ambench.d11-metrics/1':
             continue
         case = d.get('case') or {}
-        arm = case.get('arm', 'mean')
-        key = (int(case['N']), str(case['T_cut_C']), arm)
+        try:
+            key = (int(case['N']), str(case['T_cut_C']),
+                   case.get('arm', 'mean'))
+        except (KeyError, TypeError, ValueError):
+            print(f'skipping {f}: no usable d11_case.json provenance')
+            continue
         runs[key] = d
     return runs
 
