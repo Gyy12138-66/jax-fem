@@ -1,0 +1,79 @@
+{
+ "schema_version": "ambench.d11-macto-closure/1",
+ "decision": "D-11 / PREREQUISITES.md D.7",
+ "source": {
+  "file": "references/material/amb2022-04-macto/CHAL-AMB2022-04-MaCTO_submission_ANSWERS.xlsx",
+  "sheet": "true macroscopic stress, 0.2 % offset yield column",
+  "note": "AMB2022-04 specimens machined from a reserved AMB2018-01 bridge (PREREQUISITES.md note on MaCTO)"
+ },
+ "measured_MPa": {
+  "BD": {
+   "298.0": 750.0,
+   "523.0": 608.0,
+   "773.0": 622.0
+  },
+  "TD": {
+   "298.0": 740.0,
+   "523.0": 600.0,
+   "773.0": 577.0
+  }
+ },
+ "isotropic_mean_MPa": {
+  "298.0": 745.0,
+  "523.0": 604.0,
+  "773.0": 599.5
+ },
+ "hardening_chord_MPa": {
+  "BD": {
+   "298.0": 2992.6,
+   "523.0": 2803.0,
+   "773.0": 2626.6
+  },
+  "TD": {
+   "298.0": 2070.5,
+   "523.0": 1957.3,
+   "773.0": 1959.4
+  }
+ },
+ "hardening_definition": "true-stress chord over 2-10 % strain, elastic part removed with the L0 E(T); long chord avoids the D-V2-22 H > E trap",
+ "jc_fit": {
+  "form_below_773K": "MaCTO three points interpolated as-is",
+  "form_above_773K": "sigma_y(773) * [1 - ((T-773)/(T_zero-773))^m]",
+  "T_zero_K": 1552.0,
+  "m_fitted": 1.4003,
+  "m_low_523K_exact": 0.969,
+  "m_high_773K_exact": 1.6826,
+  "residual_sse_MPa2": 7548.11,
+  "fit_procedure": "same one-parameter family anchored at the 298 K point, least-squares over the 523 and 773 K points; no new free parameter"
+ },
+ "propagated_yield_uncertainty": {
+  "bd_td_relative_spread": {
+   "298.0": 0.0134,
+   "523.0": 0.0132,
+   "773.0": 0.0751
+  },
+  "m_bracket": [
+   0.969,
+   1.6826
+  ],
+  "sigma_y_at_1273K_MPa": {
+   "m_fitted": 277.2,
+   "m_low": 209.3,
+   "m_high": 315.1
+  },
+  "note": "the run-level propagated uncertainty is measured by rerunning the frozen case on the m_low / m_high arms and reading M1/M2 (HIGH-T-EXTRAPOLATION-NOTE 2b)"
+ },
+ "replaces": "derived/material/yield_table.csv + hardening_table.csv (PROVISIONAL-L0, labelled \"D-11 MaCTO tables replace this\")",
+ "outputs": {
+  "yield": "derived/d11/yield_table_d11.csv",
+  "hardening": "derived/d11/hardening_table_d11.csv",
+  "yield_mlow": "derived/d11/yield_table_d11_mlow.csv",
+  "hardening_mlow": "derived/d11/hardening_table_d11_mlow.csv",
+  "yield_mhigh": "derived/d11/yield_table_d11_mhigh.csv",
+  "hardening_mhigh": "derived/d11/hardening_table_d11_mhigh.csv",
+  "yield_bd": "derived/d11/yield_table_d11_bd.csv",
+  "hardening_bd": "derived/d11/hardening_table_d11_bd.csv",
+  "yield_td": "derived/d11/yield_table_d11_td.csv",
+  "hardening_td": "derived/d11/hardening_table_d11_td.csv"
+ }
+}
