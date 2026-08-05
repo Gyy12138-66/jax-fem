@@ -160,6 +160,46 @@ Suggested order so a truncated campaign still decides something:
 Members are independent — run them concurrently if RAM allows (~31 GB total on
 this box, one L0-scale member peaked ~6 GB).
 
+## 3b. PRE-REGISTERED CONVENTIONS (agreed 2026-08-04, binding before B)
+
+Registered before the B production runs so they cannot be chosen after seeing
+results:
+
+1. **Deciding metric is the load-bearing thick leg L1 only** (M1 and M2 both
+   < 5 %, unchanged). L2/L3 are reported as **absolute** differences
+   (MPa / N·mm), never relative, and do not enter the verdict — their signal is
+   5-20x smaller so relative metrics on them are noise (stage 1 produced 2320 %
+   on L3 from a moment of 1.4 N·mm).
+2. **Gate 2 quantified**: against stage 1 (L1: M1 26.7 %, M2 16.9 %), the
+   coarsened common-ruler metrics must **both fall >= 50 %** to count as
+   "significant improvement".
+3. **If B still fails the 5 % gate on both pairs** -> true aggregation
+   non-convergence; go straight to D.5-style interval publication
+   ("aggregation coarser than X gives moment deviation Y %"). Option C is
+   discarded: thermal cycles per unit build height (7/14/35 over the same
+   7 mm) is what layer lumping IS, and no mesh or scan convention removes it.
+4. **`fixed_power` stays**. Re-enabling any other convention is a convention
+   re-approval and needs its own record.
+
+**Convention change registered for D.7**: the N sweep moved from "mesh z
+resolution varies with N" to "one fixed 0.1 mm mesh, N controls only the
+deposition grouping". This makes M1/M2 differences attributable to aggregation
+alone. Side effect: absolute quantities (moment, displacement) from B are
+shifted relative to the stage-1 values and are **not** directly comparable.
+
+### The shared mesh
+
+`python tools/make_d11_mesh.py 5` -> `amb_d11_N5.inp`: 0.1 mm z rows, 70 build
+rows, **90 720 elements / 98 154 nodes**. Select it with `D11_MESH=<path>`,
+which overrides **only** the mesh; layer thickness, layer count, dt, power and
+mechanics cadence still derive from N.
+
+`run_d11_case.sh` asserts the alignment and refuses to run if the computational
+layer is not an integer number of mesh rows. Verified: 0.1 mm mesh gives
+**10 / 5 / 2 rows** for N = 50/25/10, and the 0.2 mm mesh at N=25 gives 2.5
+rows and is **rejected with exit 3** — that is exactly the [3,2,3,2,…] uneven
+grouping the 0.2 mm shared mesh would have produced.
+
 ## 4. What the metrics compute
 
 D.7 verbatim, with the implementation choices stated:

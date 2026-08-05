@@ -70,7 +70,12 @@ D11_ARM="${D11_ARM:-mean}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 TAG="N${N}_T${TCUT_C}"
 OUT_ROOT="${OUT_ROOT:-/home/user/work/output/d11_${TAG}_${RUN_ID}}"
-MESH="${CASE_DIR}/derived/meshes/amb_d11_N${N}.inp"
+# D11_MESH overrides ONLY the mesh path. Every derived quantity (layer
+# thickness, layer count, dt, power, mechanics cadence) still comes from N.
+# This is what decouples the z DISCRETISATION from the layer LUMPING: all
+# three members share one 0.1 mm mesh and N controls only how many mesh rows
+# are activated per deposition event (10 / 5 / 2 for N = 50 / 25 / 10).
+MESH="${D11_MESH:-${CASE_DIR}/derived/meshes/amb_d11_N${N}.inp}"
 CONFIG="${CASE_DIR}/derived/d11/amb_material_config_D11_${D11_ARM}.json"
 
 [[ -f "${MESH}" ]] || { echo "d11: missing mesh ${MESH}; run: python ${SCRIPT_DIR}/make_d11_mesh.py ${N}" >&2; exit 2; }
@@ -178,6 +183,26 @@ fi
 
 PLATE_K=347.05                  # A.3/D-07 substrate underside Dirichlet
 
+# ---- mesh / lumping alignment assertion ------------------------------------
+# The mesh z rows must divide the computational layer EXACTLY, or the runner's
+# centroid activation splits layers unevenly (the [3,2,3,2,...] failure mode a
+# 0.2 mm shared mesh produces at N=25). Read the two smallest distinct build-z
+# node coordinates out of the mesh to get the row height.
+MESH_ROW_MM=$(awk -F',' '/^\*NODE/{n=1;next} /^\*/{n=0} n && NF>=4 {z=$4+0; if (z>1e-9) print z}' "${MESH}" \
+  | sort -g -u | head -2 | awk 'NR==1{a=$1} NR==2{printf "%.6f", $1-a} END{if(NR<2) printf "0"}')
+if [[ -z "${MESH_ROW_MM}" || "${MESH_ROW_MM}" == "0" ]]; then
+  MESH_ROW_MM=$(awk -F',' '/^\*NODE/{n=1;next} /^\*/{n=0} n && NF>=4 {z=$4+0; if (z>1e-9) print z}' "${MESH}" | sort -g -u | head -1)
+fi
+ROWS_PER_LAYER=$(awk -v t="${LAYER_THICK}" -v r="${MESH_ROW_MM}" 'BEGIN{printf "%.6f", (t*1000.0)/r}')
+ROWS_INT=$(awk -v x="${ROWS_PER_LAYER}" 'BEGIN{printf "%d", int(x+0.5)}')
+if awk -v x="${ROWS_PER_LAYER}" -v i="${ROWS_INT}" 'BEGIN{exit !(((x-i)>1e-6)||((i-x)>1e-6))}'; then
+  echo "d11: MESH/LUMPING MISALIGNED -- computational layer ${LAYER_THICK} m" >&2
+  echo "     over mesh row ${MESH_ROW_MM} mm = ${ROWS_PER_LAYER} rows (not integer)." >&2
+  echo "     Activation would split layers unevenly; refusing to run." >&2
+  exit 3
+fi
+echo "d11: mesh row ${MESH_ROW_MM} mm, ${ROWS_INT} rows per computational layer (N=${N})"
+
 mkdir -p "${OUT_ROOT}"
 cat > "${OUT_ROOT}/d11_case.json" <<EOF
 {
@@ -188,6 +213,9 @@ cat > "${OUT_ROOT}/d11_case.json" <<EOF
  "arm": "${D11_ARM}",
  "scan_convention": "${CONV}",
  "dt_s": ${DT},
+ "mesh_row_mm": ${MESH_ROW_MM},
+ "rows_per_computational_layer": ${ROWS_INT},
+ "shared_mesh_override": "${D11_MESH:-none}",
  "computational_layers": ${COMP_LAYERS},
  "layer_thickness_m": ${LAYER_THICK},
  "steps_per_layer": ${STEPS_PER_LAYER},
