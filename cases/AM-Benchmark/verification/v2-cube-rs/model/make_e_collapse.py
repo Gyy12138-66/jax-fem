@@ -56,7 +56,26 @@ def main():
     # 末段斜率:用数据表最后两行,保持与原表同一外推口径
     (Ta, va, _), (Tb, vb, _) = sheet[-2], sheet[-1]
     slope = (vb - va) / (Tb - Ta)
-    e_at_tc = vb + slope * (t_c - Tb)
+
+    # 坍塌起点可能落在数据段**内部**(collapse-frac 0.7 -> T_c = 1094.2 K,
+    # 低于数据段末行 1144.15 K)。那时 T_c 之上的数据行已经在坍塌斜坡上,不能保留:
+    # 保留会让温度列非单调(1144.15 后跟 1094.20),而 material_validation 要求
+    # 严格递增,该成员会在启动时直接抛错。正确构造是数据段只保留 T < T_c 的行,
+    # E(T_c) 由数据段内部插值给出;T_c 高于数据段时才用末段斜率外推。
+    if t_c <= sheet[-1][0]:
+        e_at_tc = None
+        for (T1, v1, _), (T2, v2, _) in zip(sheet, sheet[1:]):
+            if T1 <= t_c <= T2:
+                e_at_tc = v1 + (t_c - T1) / (T2 - T1) * (v2 - v1)
+                break
+        if e_at_tc is None:      # t_c 低于数据段首行
+            e_at_tc = sheet[0][1]
+        kept = [r for r in sheet if r[0] < t_c]
+        dropped = len(sheet) - len(kept)
+    else:
+        e_at_tc = vb + slope * (t_c - Tb)
+        kept = list(sheet)
+        dropped = 0
 
     note = (f"D-V2-17 option (c): stiffness collapse toward the solidus with a "
             f"finite floor. Sheet rows (<=1144.15 K) unchanged from [63]; "
@@ -66,9 +85,15 @@ def main():
             f"floor trades a degenerate tangent for a singular matrix). "
             f"Declarative numerical convention, nothing calibrated to measurement.")
 
-    rows = [(T, v, s) for T, v, s in sheet]
+    rows = [(T, v, s) for T, v, s in kept]
     rows.append((t_c, e_at_tc, note))
     rows.append((T_SOLIDUS, floor, note))
+
+    # 温度必须严格递增,否则 material_validation._table_values 会在启动时抛错。
+    # 在这里失败,好过在一个 5-10 小时的扫描里第 N 个成员起步即死。
+    Ts = [r[0] for r in rows]
+    if any(b <= a for a, b in zip(Ts, Ts[1:])):
+        raise SystemExit(f"温度列非严格递增,拒绝写出: {Ts}")
 
     with open(args.dst, "w", newline="") as f:
         w = csv.writer(f)
@@ -81,6 +106,9 @@ def main():
     print(f"  T_c            = {t_c:.2f} K  ({args.collapse_frac:g} * T_sol)")
     print(f"  E(T_c)         = {e_at_tc:.4g} Pa   (sheet slope {slope:.4g} Pa/K)")
     print(f"  floor at T_sol = {floor:.4g} Pa   ({args.floor_frac:g} * E_RT)")
+    if dropped:
+        print(f"  NOTE: T_c 落在数据段内部,已丢弃 {dropped} 个 T >= T_c 的数据行"
+              f"(它们本就在坍塌斜坡上);E(T_c) 由数据段插值给出")
     print()
     print(f"{'T(K)':>9} {'E_old GPa':>11} {'E_new GPa':>11} {'ratio':>8}")
     old = dict((T, v) for T, v, _ in src)
