@@ -200,6 +200,25 @@ layer is not an integer number of mesh rows. Verified: 0.1 mm mesh gives
 rows and is **rejected with exit 3** — that is exactly the [3,2,3,2,…] uneven
 grouping the 0.2 mm shared mesh would have produced.
 
+### Running B
+
+One command; everything the campaign must not get wrong is encoded in it:
+
+```bash
+bash tools/d11_run_b.sh --dry-run     # preflight: mesh, config, 10/5/2 alignment
+bash tools/d11_run_b.sh               # the triple, serial, resumable
+```
+
+- **Serial is mandatory** (`D11_SERIAL=1`, set by the driver). The B smoke
+  measured 13 GB RAM + 11.8 GB GPU for ONE member at 294k mechanics DOF; two
+  concurrent members do not fit in a 31 GB / 16.3 GB box.
+- **Resumable** (`D11_RESUME=1`, default on): a member that already has
+  `d11_metrics.json` is skipped, so an interruption in a ~21 h campaign costs
+  one member rather than the campaign.
+- Output root defaults to `/home/user/work/output/d11_B`, deliberately separate
+  from stage 1 — B's absolute values are **not** comparable with the stage-1
+  per-N-mesh values.
+
 ## 4. What the metrics compute
 
 D.7 verbatim, with the implementation choices stated:
