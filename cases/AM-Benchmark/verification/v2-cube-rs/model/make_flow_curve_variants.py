@@ -280,8 +280,12 @@ def main():
                     help=f"D-V2-19 附加硬化模量,默认 {H_REG_PA:.0e} Pa")
     ap.add_argument("--min-tangent-frac", type=float, default=0.0,
                     help="D-V2-19-R1:逐段最小塑性切线 H >= frac*E(T)。0 = 关闭。")
-    ap.add_argument("--e-table", default=str(TABLES / "E.csv"),
-                    help="E(T) 表。换成 E_collapse.csv 即 D-V2-17 方案 (c)。")
+    # 默认取**基准配置自己声明的** E_table,而不是硬编码 E.csv。
+    # 理由是踩过:生成器按 A 表算最小切线、配置却让求解器读 B 表,两者不自洽,
+    # H/E 会掉回病态区而表面上一切正常。让它们共用同一个来源,这种错就无法发生。
+    _base_cfg = json.loads((HERE / "v2_material_config.json").read_text(encoding="utf-8"))
+    ap.add_argument("--e-table", default=_base_cfg.get("E_table", str(TABLES / "E.csv")),
+                    help="E(T) 表,默认跟随 v2_material_config.json 的 E_table。")
     ap.add_argument("--t-cut-K", type=float, default=None,
                     help="截断温度 (K):其上把本构钳制在 T_cut 处的值。")
     args = ap.parse_args()
