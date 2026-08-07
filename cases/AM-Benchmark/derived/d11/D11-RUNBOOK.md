@@ -219,6 +219,85 @@ bash tools/d11_run_b.sh               # the triple, serial, resumable
   from stage 1 — B's absolute values are **not** comparable with the stage-1
   per-N-mesh values.
 
+## 3c. T_cut BAND — PRE-REGISTERED (2026-08-07, binding before the campaign)
+
+B closed with **true aggregation non-convergence**, so there is no frozen N.
+The band is therefore reported on a **reference member N = 10** (finest
+lumping, closest to real layer-by-layer physics). Reporting on a reference N
+is a reporting choice, **not** a freeze.
+
+Members: shared 0.1 mm mesh, N = 10, `T_cut ∈ {800, 900, 1100, none}`, joining
+the existing `N10_T1000` from B to make a 5-point band. Order 800 → 900 →
+1100 → **none last** (most likely to diverge; last means a divergence cannot
+cost the other three).
+
+### Band formulas
+
+```
+band_M1 = max_i M1(member i vs T1000)                    [L1 only]
+band_M2 = (max Mroot − min Mroot) / |Mroot(T1000)|       [L1 only]
+```
+
+Arms side, isomorphic and on the SAME mesh/N/T_cut:
+
+```
+arm_band_M2 = |Mroot(m_high) − Mroot(m_low)| / |Mroot(mean)|
+arm_band_M1 = spread of M1(arm vs mean)                  [L1 only]
+```
+
+`band_M2` is a **spread over available members**, not a max of pairwise
+differences, so a missing member (e.g. a diverged `none`) narrows the band
+rather than corrupting it. With fewer than two members the tool reports `n/a`,
+never `0 %` — a trivial zero would read as "no sensitivity" when it means
+"not measured".
+
+### The decision awaits both arms
+
+The freeze / interval decision **may not be recorded from this campaign
+alone**. `m_low` and `m_high` must run on this same shared mesh at N = 10,
+T_cut = 1000 to give a like-for-like denominator. **Stage-1 arm values are on
+the old per-N meshes and must not be compared across that convention change.**
+`d11_matrix_report.py` returns `T_cut: undetermined` until both arms are
+present — by design, not as a gap.
+
+### `none` decomposes two separate questions
+
+- **(i) Is the memory-reset mechanism necessary at all?** Answered by whether
+  `none` is feasible. Divergence is itself strong evidence for "necessary".
+- **(ii) Is the threshold sensitive within 800–1100 °C?** Answered by the four
+  finite members. **A missing `none` does not contaminate (ii)**, and the
+  freeze rule only ever acts on (ii).
+
+### `none` guardrail — two tiers, never a rescue
+
+`tools/d11_none_guard.py` classifies a failed `none` member:
+
+| tier | trigger | may be registered as infeasible? |
+|---|---|---|
+| `wiring-suspect` | ledger ≤ 12 steps (died before real activation/thermal cycling) | **NO** — report, fix, re-run |
+| `infeasible-candidate` | divergence after build progress, with Newton cutback / acceptance violations | yes, and only with evidence on disk |
+
+Evidence for the second tier (tail residuals, Newton cutback history, ledger
+tail) is written to `none_guard_evidence.txt` before abort. **No parameter is
+ever tuned to rescue `none`** — publishing a bug as a physical result is worse
+than the run failing.
+
+### Duration
+
+Registered as a **range: 24–28 h** at `D11_TOTAL_THREADS=20` (leaving ~10 CPU
+threads for the concurrent side campaign). Not "one night". If the side
+campaign finishes early, 26 threads is safe — B verified hot switching.
+
+### Running it
+
+```bash
+bash tools/d11_run_tcut.sh --dry-run    # mesh 90720, N=10 -> 2 rows, tag collisions
+bash tools/d11_run_tcut.sh              # 800 -> 900 -> 1100 -> none, serial, resumable
+```
+
+`D11_ARM` is passed through, so the m_low/m_high arm campaign is a thin
+wrapper: `D11_ARM=mlow bash tools/d11_run_tcut.sh 10:1000`.
+
 ## 4. What the metrics compute
 
 D.7 verbatim, with the implementation choices stated:
