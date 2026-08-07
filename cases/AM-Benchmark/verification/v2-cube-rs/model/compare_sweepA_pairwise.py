@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from compare_sweepA import CENTER, FIELDS, OUT, PREFIX, TOP, load, top  # noqa: E402
 
 ALL_TAGS = ["f0005_c08", "f001_c08", "f002_c08", "f001_c07", "f001_c09",
-            "f0005_c07", "f002_c09"]
+            "f0005_c07", "f002_c09", "f0005_c09", "f002_c07"]
 KEY_FIELDS = ["vm", "p1", "sxx"]
 LAYER = 4.0e-5
 
