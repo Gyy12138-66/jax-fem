@@ -18,7 +18,7 @@
   "emissivity": 0.5312,
   "convection_h": 20.0,
   "powder_mode": "powder",
-  "E_table": "/home/user/work/159/jax-fem/cases/AM-Benchmark/verification/v2-cube-rs/model/tables/E.csv",
+  "E_table": "/home/user/work/159/jax-fem/cases/AM-Benchmark/verification/v2-cube-rs/model/tables/E_collapse.csv",
   "alpha_table": "/home/user/work/159/jax-fem/cases/AM-Benchmark/verification/v2-cube-rs/model/tables/alpha.csv",
   "poisson_table": "/home/user/work/159/jax-fem/cases/AM-Benchmark/verification/v2-cube-rs/model/tables/poisson.csv",
   "flow_curve_table": "/home/user/work/159/jax-fem/cases/AM-Benchmark/verification/v2-cube-rs/model/tables/flow_curve_adopted.csv",
