@@ -308,15 +308,17 @@ def main():
               f"|graded-coarse| = {gc_vm['abs_rms_diff']/1e6:.3f} MPa -> "
               f"{'通过' if b2 else '不通过'}")
     if b1 is not None and b2 is not None:
-        if b1 and b2:
-            concl = "收敛:D-V2-07 可关闭,并登记 |fine-graded| 为离散度残余"
-        elif b1:
-            concl = ("被括号包住但**未证收敛**:D-V2-07 只能带 caveat 关闭,"
-                     "不得写成'对基板剖分不敏感'")
+        # 判决判据 = b2 收缩(2026-08-07 预注册裁定:b2 升为判决判据,b1 降为
+        # 报告行)。旧版在此按 b1 分支,与裁定矛盾 —— Kimi 2026-08-18 审查发现。
+        if b2:
+            concl = ("b2 收缩通过,D-V2-07 可关闭(收敛中,非'不敏感');"
+                     + ("b1 报告行:幅度亦落入括号" if b1 else
+                        "b1 报告行:幅度未入括号 -> graded 出数登记网格不确定度"))
         else:
-            concl = "未通过幅度判据:D-V2-07 不能关闭"
+            concl = "b2 收缩未通过:序列未收敛,D-V2-07 不能关闭"
         print(f"\n  结论: {concl}")
-        verdict = {"b1_magnitude": b1, "b2_contraction": b2, "conclusion": concl}
+        verdict = {"criterion": "b2_contraction (pre-registered 2026-08-07)",
+                   "b1_magnitude": b1, "b2_contraction": b2, "conclusion": concl}
 
     # --- 补充观测量 ------------------------------------------------------
     print("\n补充观测量(不进判据):")
