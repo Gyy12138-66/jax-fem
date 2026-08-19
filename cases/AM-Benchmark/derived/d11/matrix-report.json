@@ -4,6 +4,11 @@
  "threshold": 0.05,
  "members_present": [
   "N10_T1000_mean",
+  "N10_T1000_mlow",
+  "N10_T1100_mean",
+  "N10_T800_mean",
+  "N10_T900_mean",
+  "N10_Tnone_mean",
   "N25_T1000_mean",
   "N50_T1000_mean"
  ],
@@ -12,57 +17,190 @@
   "1000": {
    "N50_vs_N25": {
     "M1_per_leg": {
-     "L1_thick": 0.2669945370912835,
-     "L2_thin": 2.003586808733929,
-     "L3_med": 0.6771522446127065
+     "L1_thick": 0.666259779465896,
+     "L2_thin": 0.9569918464317717,
+     "L3_med": 2.123821620696592
     },
     "M2_per_leg": {
-     "L1_thick": 0.16899501710327738,
-     "L2_thin": 0.7239804178536726,
-     "L3_med": 1.3875018151974317
+     "L1_thick": 0.36023217236748317,
+     "L2_thin": 1.2194473903814758,
+     "L3_med": 2.0269129993428687
     },
-    "M1": 2.003586808733929,
-    "M2": 1.3875018151974317,
-    "M3_advisory": 1.210936370544481,
+    "M1_L1": 0.666259779465896,
+    "M2_L1": 0.36023217236748317,
+    "M1": 2.123821620696592,
+    "M2": 2.0269129993428687,
+    "M3_advisory": 2.3081546946107365,
     "converged": false
    },
    "N25_vs_N10": {
     "M1_per_leg": {
-     "L1_thick": 0.4454038568857592,
-     "L2_thin": 0.7591862642957273,
-     "L3_med": 1.6901112992669691
+     "L1_thick": 0.693881374079813,
+     "L2_thin": 2.3283297765897895,
+     "L3_med": 3.870772241686085
     },
     "M2_per_leg": {
-     "L1_thick": 0.46475990222131336,
-     "L2_thin": 2.0635477068549277,
-     "L3_med": 23.19853288222269
+     "L1_thick": 0.6133423231362477,
+     "L2_thin": 13.95538590669933,
+     "L3_med": 52.61954559485005
     },
-    "M1": 1.6901112992669691,
-    "M2": 23.19853288222269,
-    "M3_advisory": 3.9337517444097223,
+    "M1_L1": 0.693881374079813,
+    "M2_L1": 0.6133423231362477,
+    "M1": 3.870772241686085,
+    "M2": 52.61954559485005,
+    "M3_advisory": 2.2222715508377746,
     "converged": false
    }
   }
  },
  "tcut_band": {
-  "10": {}
+  "10": {
+   "800": {
+    "M1_per_leg": {
+     "L1_thick": 0.004302914353114671,
+     "L2_thin": 0.044728722009685,
+     "L3_med": 0.14514052723950582
+    },
+    "M2_per_leg": {
+     "L1_thick": 0.007651977242946257,
+     "L2_thin": 0.5330091739720629,
+     "L3_med": 3.5604071951822083
+    },
+    "M1_L1": 0.004302914353114671,
+    "M2_L1": 0.007651977242946257,
+    "M1": 0.14514052723950582,
+    "M2": 3.5604071951822083,
+    "M3_advisory": 2.386232965570674
+   },
+   "900": {
+    "M1_per_leg": {
+     "L1_thick": 0.002197424409905943,
+     "L2_thin": 0.009574887919210741,
+     "L3_med": 0.056634008278542175
+    },
+    "M2_per_leg": {
+     "L1_thick": 0.000755665307759593,
+     "L2_thin": 0.05436381700137335,
+     "L3_med": 1.4683654897002696
+    },
+    "M1_L1": 0.002197424409905943,
+    "M2_L1": 0.000755665307759593,
+    "M1": 0.056634008278542175,
+    "M2": 1.4683654897002696,
+    "M3_advisory": 0.19758778684969217
+   },
+   "1100": {
+    "M1_per_leg": {
+     "L1_thick": 0.003321625671597488,
+     "L2_thin": 0.03005306933670313,
+     "L3_med": 0.05655777051549627
+    },
+    "M2_per_leg": {
+     "L1_thick": 0.0015147555282728172,
+     "L2_thin": 0.002550860472315473,
+     "L3_med": 1.0826526203229478
+    },
+    "M1_L1": 0.003321625671597488,
+    "M2_L1": 0.0015147555282728172,
+    "M1": 0.05655777051549627,
+    "M2": 1.0826526203229478,
+    "M3_advisory": 0.48653309908119974
+   },
+   "none": {
+    "M1_per_leg": {
+     "L1_thick": 0.004089138956795569,
+     "L2_thin": 0.02746366650954,
+     "L3_med": 0.10217021333334093
+    },
+    "M2_per_leg": {
+     "L1_thick": 0.0032598829016624886,
+     "L2_thin": 0.07255079523074238,
+     "L3_med": 2.8270366739907433
+    },
+    "M1_L1": 0.004089138956795569,
+    "M2_L1": 0.0032598829016624886,
+    "M1": 0.10217021333334093,
+    "M2": 2.8270366739907433,
+    "M3_advisory": 0.5516003633577886
+   }
+  }
  },
- "yield_uncertainty": {},
+ "yield_uncertainty": {
+  "mlow": {
+   "M1_per_leg": {
+    "L1_thick": 1.9490899230711466e-06,
+    "L2_thin": 6.923068905390378e-05,
+    "L3_med": 0.0023598221967488986
+   },
+   "M2_per_leg": {
+    "L1_thick": 3.7441239530387274e-06,
+    "L2_thin": 0.0001441355137449642,
+    "L3_med": 0.002633804711056664
+   },
+   "M1_L1": 1.9490899230711466e-06,
+   "M2_L1": 3.7441239530387274e-06,
+   "M1": 0.0023598221967488986,
+   "M2": 0.002633804711056664,
+   "M3_advisory": 0.05992700925566197
+  }
+ },
  "frozen_N": 10,
  "frozen_N_basis": "dual metric on the T_cut = 1000 C column; the coarsest N whose pair against the next finer N satisfies M1 < 5 % AND M2 < 5 %. If no pair converges, N = 10 is reported as NOT converged and the matrix does not license a freeze.",
  "frozen_N_converged": false,
- "tcut_band_max": {
-  "M1": null,
-  "M2": null
+ "band_N": 10,
+ "band_N_basis": "frozen N when the dual metric licenses one; otherwise the reference member N=10 (finest lumping = closest to real layer-by-layer physics). Reporting on a reference N is NOT a freeze.",
+ "tcut_band_preregistered": {
+  "formula_M1": "max_i M1(member i vs T1000), L1 only",
+  "formula_M2": "(max Mroot - min Mroot) / |Mroot(T1000)|, L1",
+  "members_used": [
+   "1000",
+   "1100",
+   "800",
+   "900",
+   "none"
+  ],
+  "members_missing": [],
+  "Mroot_N_mm": {
+   "1000": -683.4944314485788,
+   "800": -678.2643476134538,
+   "900": -684.0109244784713,
+   "1100": -682.4591044799984,
+   "none": -681.266319638118
+  },
+  "band_M1": 0.004302914353114671,
+  "band_M2": 0.008407642550705849,
+  "band_complete": true
+ },
+ "tcut_band_max_over_legs_background": {
+  "M1": 0.14514052723950582,
+  "M2": 3.5604071951822083
+ },
+ "zero_exposure_800C": {
+  "M1_L1": 0.004302914353114671,
+  "M2_L1": 0.007651977242946257,
+  "interpretation": "T_cut = 800 C exposes NO extrapolated sigma_y form (window [773,1073] only), no E extrapolation (data ends 1144 K) and no alpha extrapolation (data ends 1200 K). If its band vs 1000 C is inside the threshold, the sigma_y high-T form, the E extrapolation and the alpha extrapolation are all shown irrelevant to the result in one stroke."
+ },
+ "yield_uncertainty_preregistered": {
+  "formula_M1": "spread of M1(arm vs mean), L1 only",
+  "formula_M2": "|Mroot(mhigh) - Mroot(mlow)| / |Mroot(mean)|, L1",
+  "band_M1": 1.9490899230711466e-06,
+  "band_M2": null,
+  "both_arms_present": false,
+  "note": "freeze/interval decision REQUIRES both arms on this same mesh; until then the comparison has no like-for-like denominator and no freeze may be recorded."
  },
  "yield_uncertainty_max": {
-  "M1": null,
+  "M1": 1.9490899230711466e-06,
   "M2": null
  },
  "recommendation": {
   "N": 10,
+  "band_N": 10,
   "T_cut": "undetermined",
-  "reason": "T_cut column on the frozen N is incomplete",
+  "reason": "band measured, but the freeze/interval decision is pre-registered as AWAITING BOTH ARMS: m_low and m_high must run on this same shared mesh at N=10, T_cut=1000. Stage-1 arm values are on the old per-N meshes and must not be compared across that convention change.",
+  "tcut_band": {
+   "band_M1": 0.004302914353114671,
+   "band_M2": 0.008407642550705849
+  },
   "decided_by": "proposal only - D.7 gives the call to the reviewer"
  }
 }
