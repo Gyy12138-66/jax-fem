@@ -1,0 +1,64 @@
+{
+ "schema_version": "ambench.d11-exposure/1",
+ "T_cut_K": 1273.15,
+ "plate_K": 347.05,
+ "dwell_steps": 8,
+ "shared_mesh": null,
+ "note": "thermal-only; dwell truncated, so exposure is a LOWER bound on a full-dwell run (material keeps cooling past the truncation). Comparison across N is like-for-like.",
+ "per_N": {
+  "50": {
+   "part_cells": 2480,
+   "steps_sampled": 76,
+   "peak_T_abs_K": 1644.728515625,
+   "peak_T_rise_K": 1297.678466796875,
+   "mean_peak_T_abs_K": 562.7547607421875,
+   "mean_peak_T_rise_K": 215.70477294921875,
+   "frac_cells_above_T_cut": 0.00564516129032258,
+   "exposure_above_T_cut_s": {
+    "max": 59.733334,
+    "mean": 0.22881720685483867,
+    "mean_over_hot_cells": 40.533333785714284,
+    "total_cell_seconds": 567.4666729999999
+   },
+   "dt_s": 29.866667,
+   "computational_layers": 7,
+   "cycles_per_mm_build": 1.0
+  },
+  "25": {
+   "part_cells": 4960,
+   "steps_sampled": 160,
+   "peak_T_abs_K": 1633.193359375,
+   "peak_T_rise_K": 1286.143310546875,
+   "mean_peak_T_abs_K": 522.0018310546875,
+   "mean_peak_T_rise_K": 174.95184326171875,
+   "frac_cells_above_T_cut": 0.005443548387096774,
+   "exposure_above_T_cut_s": {
+    "max": 44.799999,
+    "mean": 0.12946236270161288,
+    "mean_over_hot_cells": 23.78271551851851,
+    "total_cell_seconds": 642.1333189999999
+   },
+   "dt_s": 14.933333,
+   "computational_layers": 14,
+   "cycles_per_mm_build": 2.0
+  },
+  "10": {
+   "part_cells": 12400,
+   "steps_sampled": 412,
+   "peak_T_abs_K": 1432.6463623046875,
+   "peak_T_rise_K": 1085.596435546875,
+   "mean_peak_T_abs_K": 478.30743408203125,
+   "mean_peak_T_rise_K": 131.2574462890625,
+   "frac_cells_above_T_cut": 0.001532258064516129,
+   "exposure_above_T_cut_s": {
+    "max": 23.893332,
+    "mean": 0.019268816129032258,
+    "mean_over_hot_cells": 12.575437894736842,
+    "total_cell_seconds": 238.93331999999998
+   },
+   "dt_s": 5.973333,
+   "computational_layers": 35,
+   "cycles_per_mm_build": 5.0
+  }
+ }
+}
