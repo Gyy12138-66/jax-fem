@@ -19,7 +19,7 @@
     "liquidus_K": 1623.0,
     "boiling_K": 3000.0,
     "_provenance": "Balbaa2022 Table 1 (p.5)",
-    "_source_file": "C:\\Users\\user\\multica_workspaces_desktop-api.multica.ai\\cafe3fbb-d80e-43b6-a1fa-d1241d2936cc\\7e56a55d\\workdir\\jax-fem\\cases\\AM-Benchmark\\verification\\v1-single-track\\inputs\\balbaa-model.json"
+    "_source_file": "cases/AM-Benchmark/verification/v1-single-track/inputs/balbaa-model.json"
   },
   "rho_liquid_kg_m3": 7925.0,
   "process": {
@@ -34,6 +34,7 @@
   "characteristic_length": {
     "L_m": 7.05e-05,
     "source": "显式给定(--half-width)",
+    "source_run_fingerprint": null,
     "measurement": null,
     "chicken_and_egg": "L 是模型输出;这是 D-V1-10/D-V2-21 登记的固有循环,本实现用一次 Picard(as-is -> L -> parity)而不是迭代到自洽"
   },
