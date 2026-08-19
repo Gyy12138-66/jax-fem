@@ -202,6 +202,11 @@ def main():
     for tag, s in summary["code_to_experiment"].items():
         if isinstance(s, dict) and s.get("n"):
             print(f"  {tag:18s} n={s['n']}  RMS {s['rms']:8.1f}  max|.| {s['max_abs']:8.1f}")
+    # code-to-code 腿以前只进 JSON,判读时容易漏(Kimi 2026-08-19)
+    print("[汇总] 对 Balbaa 数值点的残差(code-to-code)RMS / 最大绝对 (K):")
+    for tag, s in summary["code_to_code"].items():
+        if isinstance(s, dict) and s.get("n"):
+            print(f"  {tag:18s} n={s['n']}  RMS {s['rms']:8.1f}  max|.| {s['max_abs']:8.1f}")
     print(f"  数字化读数不确定度 +/-{u_exp:.1f} degC(实测点):小于此的差异无判读意义")
     for w in doc["warnings"]:
         print(f"  [WARN] {w}")

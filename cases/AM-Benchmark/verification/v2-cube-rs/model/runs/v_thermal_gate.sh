@@ -149,18 +149,55 @@ fi
 
 # ---- 阶段 2:从 as-is 臂量 L,推 keff ----
 if has 2; then
+  # F2(Fable5 2026-08-19)第一处:as-is 臂没跑完就不许推 keff。
+  # 原来只有 ledger<=12 的起步即死护栏,半途死掉(rc!=0 但台账很长)会漏过去。
+  if ! is_complete "$ASIS"; then
+    say "as-is 臂未完成($ASIS),阶段 2 拒绝从半成品推 keff。先把阶段 1 跑完。"
+    exit 2
+  fi
+  # F2 第二处:幂等不能只看"文件在不在"。把 as-is 臂的指纹和已有 keff 台账里
+  # 记的比一比,不一致(例如 as-is 臂重跑过)就重算,否则 parity 臂会带着
+  # 陈旧 keff 跑完全程 —— 而且台账里看不出来。
+  STALE=1
   if [ -f "$KEFF_CSV" ] && [ -f "$KEFF_JSON" ]; then
-    say "keff 表已存在,跳过(幂等):$KEFF_CSV"
+    if python3 - "$KEFF_JSON" "$ASIS" <<'PY'
+import json, sys, os, hashlib
+rec = json.load(open(sys.argv[1], encoding="utf-8"))
+old = (rec.get("characteristic_length") or {}).get("source_run_fingerprint")
+if not old:
+    print("已有 keff 台账没有 source_run_fingerprint(旧版产物)-> 重算"); sys.exit(1)
+s = os.path.join(sys.argv[2], "thermal_energy_ledger_summary.json")
+cur = hashlib.sha256(open(s, "rb").read()).hexdigest() if os.path.isfile(s) else None
+if old.get("summary_sha256") != cur:
+    print(f"as-is 臂指纹变了({old.get('summary_sha256')} -> {cur})-> 重算")
+    sys.exit(1)
+print("as-is 臂指纹一致 -> keff 表可复用")
+PY
+    then STALE=0; fi
+  fi
+  if [ "$STALE" = "0" ]; then
+    say "keff 表与当前 as-is 臂一致,跳过(幂等):$KEFF_CSV"
   else
     say "阶段 2:从 as-is 臂量熔池半宽 -> Balbaa Eq 19-24"
-    # 量测窗限制到**单独一条道**上:多道的 y 跨度是整层,不是熔池宽度。
-    # 取窗中心那条道(mesh y = 2.0 mm)上下各半个 hatch。
+    # F1:不再在整层累积场上用 ±hatch/2 的窗做双侧量测 —— 那个量法在 M1 网格上
+    # 有 hatch/2 = 60 um 的结构性天花板,而且是静默的。改为:回到某一条穿窗道
+    # 刚跑完、下一道还没到的那一刻,做**单侧(上半)**量测。道号/时刻/窗口由
+    # pick_keff_measurement.py 从这次实际用过的 path.csv 推出,不硬编码。
+    # 先取回再解析:进程替换里的失败退出码 read 是看不见的
+    MEAS=$(python "$M/pick_keff_measurement.py" "$ASIS/path.csv" \
+             --nth "${MEAS_NTH:-3}" 2>&1) \
+      || { say "选取量测道/时刻失败:$MEAS"; exit 2; }
+    read -r MY MT MX0 MX1 MY0 MY1 <<< "$MEAS"
+    if [ -z "${MY1:-}" ]; then say "量测参数解析失败:$MEAS"; exit 2; fi
+    say "  量测:道中心线 y=${MY} m,取样时刻 t=${MT} s,窗 x[${MX0},${MX1}] y[${MY0},${MY1}]"
     python "$M/make_keff_table.py" \
       --power 220 --speed 0.650 \
-      --from-run "$ASIS" --from-run-window "0.5e-3,3.5e-3,1.94e-3,2.06e-3" \
+      --from-run "$ASIS" \
+      --from-run-window "${MX0},${MX1},${MY0},${MY1}" \
+      --from-run-time "$MT" --from-run-track-y "$MY" \
       --tag "$TAG" --output "$KEFF_CSV" --json "$KEFF_JSON" \
       2>&1 | tee -a "$LOG" | sed 's/^/    /'
-    [ -f "$KEFF_CSV" ] || { say "keff 表没生成,停止"; exit 2; }
+    [ -f "$KEFF_CSV" ] || { say "keff 表没生成(多半是饱和/分辨率护栏拦下了,看上面的原因),停止"; exit 2; }
   fi
 fi
 
