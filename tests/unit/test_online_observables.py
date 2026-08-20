@@ -198,6 +198,7 @@ class RecorderBehaviourTest(unittest.TestCase):
                               .read_text(encoding="utf-8"))
             self.assertEqual(meta["gauge_cells"], 4)
             self.assertTrue(meta["two_colour"]["uniform_field_self_check_passed"])
+            self.assertTrue(meta["probe_resolution"]["all_probes_contained"])
 
     def test_time_is_the_running_sum_of_dt(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -239,6 +240,99 @@ class RecorderBehaviourTest(unittest.TestCase):
             self.assertIn("gauge cell set is empty", recorder.disabled_reason)
             recorder.observe(problem, temperature, _step(1.0e-3, 0))
             recorder.finalize()
+
+    def test_probe_reads_the_containing_cell_mean_not_a_corner_node(self):
+        """Scoring spec 6.1. The discriminating case: a linear gradient, where
+        every corner node value differs from the cell's 8-node mean.
+
+        This is the test that fails against the old nearest-node implementation.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            problem = _FakeProblem()
+            points = problem.fes[0].points
+            cells = problem.fes[0].cells
+            # T = 1000 + 1e6 * y  ->  1000 K/mm, the order of magnitude Fig 16
+            # actually reports (|dT/dy| ~ 1750 degC/mm)
+            temperature = (1000.0 + 1.0e6 * points[:, 1]).reshape(-1, 1)
+
+            # probe at the centre of the top-layer cell spanning x,y in [0,1] mm
+            probe = (0.5e-3, 0.5e-3, 6.0e-5)
+            recorder = self._recorder(temporary, probes_m=[probe])
+            recorder.observe(problem, temperature, _step(1.0e-3, 0))
+            recorder.finalize()
+
+            meta = json.loads((Path(temporary) / "online_observables_meta.json")
+                              .read_text(encoding="utf-8"))
+            record = meta["probes"][0]
+            self.assertTrue(record["contains_probe"])
+            cell = cells[record["cell_index"]]
+            expected = float(temperature[cell, 0].mean())
+
+            row = json.loads((Path(temporary) / "online_observables.jsonl")
+                             .read_text(encoding="utf-8").splitlines()[0])
+            self.assertAlmostEqual(row["probe_K"][0], expected, places=9)
+
+            # and it is genuinely different from every corner node -- otherwise
+            # this test would pass against the nearest-node implementation too
+            corner_values = temperature[cell, 0]
+            self.assertEqual(len(set(corner_values.tolist())), 2)
+            for corner in corner_values:
+                self.assertGreater(abs(float(corner) - expected), 100.0)
+
+    def test_probe_pool_is_the_whole_top_layer_not_the_gauge_set(self):
+        """The pre-registered probes sit on and outside the 2 mm circle, so
+        restricting the pool to gauge cells would silently relocate them."""
+        with tempfile.TemporaryDirectory() as temporary:
+            problem = _FakeProblem()
+            # a circle tight enough to hold exactly one of the four top-layer
+            # cells, and a probe in a different cell -- outside the gauge set
+            # but still inside the top layer
+            recorder = self._recorder(
+                temporary, spot_center_m=(0.5e-3, 0.5e-3),
+                spot_diameter_m=4.0e-4, probes_m=[(1.5e-3, 1.5e-3, 6.0e-5)])
+            temperature = np.full((len(problem.fes[0].points), 1), 1500.0)
+            recorder.observe(problem, temperature, _step(1.0e-3, 0))
+            recorder.finalize()
+            meta = json.loads((Path(temporary) / "online_observables_meta.json")
+                              .read_text(encoding="utf-8"))
+            self.assertTrue(meta["probes"][0]["contains_probe"])
+            self.assertGreater(meta["top_layer_cells"], meta["gauge_cells"])
+
+    def test_probe_outside_the_mesh_is_flagged_not_silently_snapped(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            problem = _FakeProblem()
+            recorder = self._recorder(temporary, probes_m=[(9.0, 9.0, 9.0)])
+            temperature = np.full((len(problem.fes[0].points), 1), 1500.0)
+            recorder.observe(problem, temperature, _step(1.0e-3, 0))
+            recorder.finalize()
+            meta = json.loads((Path(temporary) / "online_observables_meta.json")
+                              .read_text(encoding="utf-8"))
+            self.assertFalse(meta["probes"][0]["contains_probe"])
+            self.assertFalse(meta["probe_resolution"]["all_probes_contained"])
+
+    def test_distance_ties_resolve_to_the_smallest_element_id(self):
+        """Spec 6.1 second-level tie-break. A point on the shared face of two
+        cells is equidistant from neither centre, but a point on the shared
+        EDGE of four cells is equidistant from all four."""
+        with tempfile.TemporaryDirectory() as temporary:
+            problem = _FakeProblem()
+            cells = problem.fes[0].cells
+            centers = problem.fes[0].points[cells].mean(axis=1)
+            # the interior vertical edge at x = y = 1 mm is shared by all four
+            # top-layer cells, and sits equidistant from all four centres
+            probe = (1.0e-3, 1.0e-3, 6.0e-5)
+            recorder = self._recorder(temporary, probes_m=[probe])
+            temperature = np.full((len(problem.fes[0].points), 1), 1500.0)
+            recorder.observe(problem, temperature, _step(1.0e-3, 0))
+            recorder.finalize()
+            meta = json.loads((Path(temporary) / "online_observables_meta.json")
+                              .read_text(encoding="utf-8"))
+            record = meta["probes"][0]
+            self.assertTrue(record["contains_probe"])
+            self.assertEqual(record["n_tied_on_distance"], 4)
+            # of the four tied top-layer cells, the smallest element id wins
+            top = [i for i in range(len(cells)) if centers[i][2] > 3.0e-5]
+            self.assertEqual(record["cell_index"], min(top))
 
     def test_over_range_is_flagged_but_the_reading_is_not_clamped(self):
         with tempfile.TemporaryDirectory() as temporary:

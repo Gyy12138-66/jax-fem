@@ -31,7 +31,10 @@ different rates, and can be compared directly.
   two_colour_K (+ S1, S2)      the D-V2-24 synthetic instrument
   full_spot_avg_K              the D-V2-24 unthresholded diagnostic bound
   probe_K[]                    fixed-point probes for the Fig 15 / 16 target
-                               (D-V2-27) -- no conditional average, no n_hot
+                               (D-V2-27) -- no conditional average, no n_hot.
+                               Each probe reads the top-layer cell CONTAINING
+                               its coordinate, as an 8-node mean, per scoring
+                               spec 6.1; see `probe_resolution` in the meta file
 
 The two channel signals S1 and S2 are written per step precisely so a consumer
 can form a true 10 ms RESPONSE INTEGRAL by averaging radiance over the window
@@ -140,7 +143,8 @@ class OnlineObservableRecorder:
     def __init__(self, output_dir, *, spot_center_m, spot_diameter_m,
                  threshold_c, range_max_c, wavelengths_m, window_s,
                  every, probes_m, layer_top_z_m=None, layer_thickness_m=40.0e-6,
-                 all_depths=False, filename="online_observables.jsonl"):
+                 all_depths=False, filename="online_observables.jsonl",
+                 probe_containment_tol_m=1.0e-12, probe_tie_tol_m=1.0e-12):
         self.output_dir = str(output_dir)
         self.path = os.path.join(self.output_dir, filename)
         self.meta_path = os.path.join(
@@ -156,6 +160,13 @@ class OnlineObservableRecorder:
         self.layer_top_z_m = layer_top_z_m
         self.layer_thickness_m = float(layer_thickness_m)
         self.all_depths = bool(all_depths)
+        # A pre-registered probe coordinate can land exactly on a cell face, so
+        # containment needs a round-off tolerance; the tie tolerance implements
+        # spec 6.1's "distances tied" branch. Both are round-off scale, not
+        # snapping distances -- widening them would start moving probes, which
+        # the spec forbids.
+        self.probe_containment_tol_m = float(probe_containment_tol_m)
+        self.probe_tie_tol_m = float(probe_tie_tol_m)
 
         self.time_s = 0.0
         self.step_index = 0
@@ -192,27 +203,85 @@ class OnlineObservableRecorder:
                 "online observables: the gauge cell set is empty -- check "
                 "--online-observables-spot-center / -diameter / depth options")
 
-        probe_nodes = []
+        # ---- probes: the CELL CONTAINING the point, per scoring spec 6.1 ----
+        # NOT the nearest node. On a hex cell the eight corners are equidistant
+        # from the cell centre, so a nearest-node argmin degenerates into "the
+        # corner with the smallest node index" -- an arbitrary corner, not the
+        # element. At the gradients this case actually runs (Fig 16 gives
+        # |dT/dy| ~ 1750 degC/mm) a corner and the 8-node mean differ by tens of
+        # K across a 40 um cell, which is wider than the +/-14 degC digitisation
+        # budget the Fig 15/16 leg is scored against.
+        #
+        # The probe cell set is the WHOLE top layer, not the gauge set: the
+        # pre-registered probes P1=(1,2) and P3=(3,2) mm sit on and outside the
+        # 2 mm circle centred at (2,2) mm.
+        probe_pool = np.where(in_depth)[0]
+        if self.probes_m and probe_pool.size == 0:
+            raise ValueError(
+                "online observables: no top-layer cells to resolve probes into")
+        node_xyz = points[cells[probe_pool]]          # (n_pool, 8, 3)
+        lower = node_xyz.min(axis=1)
+        upper = node_xyz.max(axis=1)
+        pool_centers = centers[probe_pool]
+
+        probe_records = []
         for probe in self.probes_m:
-            d2 = ((points[:, 0] - probe[0]) ** 2
-                  + (points[:, 1] - probe[1]) ** 2
-                  + (points[:, 2] - probe[2]) ** 2)
-            idx = int(np.argmin(d2))
-            probe_nodes.append(
-                {"requested_m": list(probe),
-                 "node_index": idx,
-                 "actual_m": [float(v) for v in points[idx]],
-                 "offset_m": float(math.sqrt(float(d2[idx])))})
+            point = np.asarray(probe, dtype=np.float64)
+            # Containment on the element's axis-aligned bounds. Exact for the
+            # structured hex meshes this case uses; tol absorbs the round-off
+            # that puts a pre-registered coordinate exactly on a face.
+            tol = self.probe_containment_tol_m
+            inside = np.all((point >= lower - tol) & (point <= upper + tol), axis=1)
+            offsets = np.linalg.norm(pool_centers - point, axis=1)
+            candidates = np.where(inside)[0]
+            contains = candidates.size > 0
+            if not contains:
+                # Spec 6.1 only legislates ties, not "outside the mesh". Resolve
+                # to the nearest cell centre so an observability feature cannot
+                # abort a run, but record contains_probe=false so the C package
+                # can see the probe was never actually inside the domain.
+                candidates = np.arange(pool_centers.shape[0])
+            # Spec 6.1 tie-break, in order: nearest cell-centre Euclidean
+            # distance, then smallest element id.
+            best_offset = offsets[candidates].min()
+            tied = candidates[
+                np.isclose(offsets[candidates], best_offset,
+                           rtol=0.0, atol=self.probe_tie_tol_m)]
+            cell_index = int(probe_pool[tied].min())          # smallest element id
+            local = int(np.where(probe_pool == cell_index)[0][0])
+            probe_records.append({
+                "requested_m": [float(v) for v in point],
+                "cell_index": cell_index,
+                "cell_center_m": [float(v) for v in centers[cell_index]],
+                "offset_from_cell_center_m": float(offsets[local]),
+                "contains_probe": bool(contains),
+                "n_candidate_cells": int(candidates.size),
+                "n_tied_on_distance": int(tied.size),
+                "cell_bounds_m": {
+                    "lower": [float(v) for v in lower[local]],
+                    "upper": [float(v) for v in upper[local]],
+                },
+            })
+
+        for record, probe in zip(probe_records, self.probes_m):
+            if not record["contains_probe"]:
+                print("online observables WARNING: probe "
+                      f"{tuple(probe)} m is not inside any top-layer cell; "
+                      f"resolved to the nearest one (element {record['cell_index']}, "
+                      f"offset {record['offset_from_cell_center_m']:.3e} m). "
+                      "Reported as contains_probe=false -- this is NOT a "
+                      "spec-6.1-compliant probe reading.")
 
         self._geometry = {
             "gauge_conn": cells[gauge],
-            "probe_node_index": np.asarray(
-                [p["node_index"] for p in probe_nodes], dtype=np.int64),
+            "probe_conn": (cells[[r["cell_index"] for r in probe_records]]
+                           if probe_records else np.zeros((0, 8), dtype=np.int64)),
             "spot_center_m": [float(cx), float(cy)],
             "layer_bottom_z_m": float(layer_bottom),
             "gauge_cells": int(gauge.sum()),
             "gauge_cells_in_circle": int(in_circle.sum()),
-            "probes": probe_nodes,
+            "top_layer_cells": int(in_depth.sum()),
+            "probes": probe_records,
         }
         return self._geometry
 
@@ -237,6 +306,7 @@ class OnlineObservableRecorder:
                             else f"top layer (z >= {geometry['layer_bottom_z_m']:.6e} m)"),
             "gauge_cells": geometry["gauge_cells"],
             "gauge_cells_in_circle": geometry["gauge_cells_in_circle"],
+            "top_layer_cells": geometry["top_layer_cells"],
             "window_s": list(self.window_s),
             "record_every_n_steps": self.every,
             "two_colour": {
@@ -252,6 +322,32 @@ class OnlineObservableRecorder:
             "probes": geometry["probes"],
             "probe_purpose": "Fig 15/16 fixed-point target (D-V2-27): no "
                              "conditional average, so no 1/n_hot dilution",
+            "probe_resolution": {
+                "_spec": "scoring-spec-thermal-gate-v2.md 6.1 @ 3b9c220",
+                "rule": "value is taken from the top-layer cell CONTAINING the "
+                        "coordinate; cell temperature = arithmetic mean of its 8 "
+                        "nodes. Boundary ambiguity resolves to the nearest cell "
+                        "centre by Euclidean distance, ties to the smallest "
+                        "element id. Probes are never moved to fit.",
+                "element_id_convention": "0-based row index into fe.cells, i.e. "
+                                         "the element order of the .inp mesh. The "
+                                         "spec says 'smallest element id' without "
+                                         "fixing the numbering base -- recorded "
+                                         "here so the tie-break is auditable.",
+                "pool": "the WHOLE top layer, not the gauge set: the "
+                        "pre-registered probes at (1,2) and (3,2) mm sit on and "
+                        "outside the 2 mm circle centred at (2,2) mm.",
+                "containment_tol_m": self.probe_containment_tol_m,
+                "tie_tol_m": self.probe_tie_tol_m,
+                "not_nearest_node": "a nearest-node argmin would degenerate to an "
+                                    "arbitrary corner (the 8 corners of a hex are "
+                                    "equidistant from its centre) and, at the "
+                                    "~1750 degC/mm gradients of Fig 16, differ "
+                                    "from the cell mean by more than the +/-14 "
+                                    "degC digitisation budget.",
+                "all_probes_contained": all(p["contains_probe"]
+                                            for p in geometry["probes"]),
+            },
             "zero_calibration": "nothing here is tunable toward the measurement",
         }
         if not ok:
@@ -333,9 +429,13 @@ class OnlineObservableRecorder:
             # D-V2-24 unthresholded diagnostic bound
             "full_spot_avg_K": float(cell_t.mean()),
         }
-        if geometry["probe_node_index"].size:
+        if geometry["probe_conn"].size:
+            # Spec 6.1: the probe value is its CELL's temperature, and cell
+            # temperature is the arithmetic mean of the 8 nodes -- the same
+            # definition the adopted reading uses, so the two legs cannot
+            # silently disagree about what "temperature at a place" means.
             row["probe_K"] = [float(v) for v in
-                              temperature[geometry["probe_node_index"]]]
+                              temperature[geometry["probe_conn"]].mean(axis=1)]
         self._handle.write(json.dumps(row) + "\n")
         self.rows_written += 1
 

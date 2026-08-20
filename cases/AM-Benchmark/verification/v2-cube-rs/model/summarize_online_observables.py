@@ -130,11 +130,23 @@ def main():
                   f"{f(s['full_spot_avg_K'])} {f(s['max_K'])}")
         if len(valid) > 24:
             print(f"  ... 另有 {len(valid)-24} 个有效箱")
-    if "probe_mean_K" in (series[0] if series else {}):
-        n = len(series[0]["probe_mean_K"])
-        print(f"  定点探针 {n} 个(Fig 15/16 靶子):峰值 "
-              + ", ".join(f"{max(s['probe_max_K'][i] for s in series):.1f} K"
-                          for i in range(n)))
+    if "probe_K" in rows[0]:
+        # 峰值**和峰时刻**一起报(规范 §6.2 要求"直接受热主峰温度与时刻")。
+        # 只报温度会误导:单道等速扫描下三个探针看到的是同一束流经过,峰值
+        # 本来就该几乎相同,差别全在**时刻**上 —— 相邻探针应差 1 mm / 扫描速度。
+        n = len(rows[0]["probe_K"])
+        print(f"  定点探针 {n} 个(Fig 15/16 靶子,规范 §6.1 包含单元 8 节点均值):")
+        peaks = []
+        for i in range(n):
+            top = max(rows, key=lambda r: r["probe_K"][i])
+            peaks.append((top["probe_K"][i], top["time_s"]))
+            print(f"    P{i+1}  主峰 {top['probe_K'][i]:9.3f} K"
+                  f"  @ t = {top['time_s']:.5f} s")
+        if n > 1:
+            gaps = [peaks[i + 1][1] - peaks[i][1] for i in range(n - 1)]
+            print("    相邻主峰时刻差 "
+                  + ", ".join(f"{g*1e3:.3f} ms" for g in gaps)
+                  + "(等速单道下应 ≈ 探针间距 / 扫描速度)")
     if args.output:
         print(f"  写出 {args.output}")
     return 0

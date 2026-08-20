@@ -55,10 +55,26 @@ fi
 MESH=$M/v2_multitrack_c3d8.inp
 CFG=$M/v2_material_config_thermal_asis.json
 
+# 中立工作目录:cwd 里若有 jax_fem_am/,它会**排在 PYTHONPATH 前面**把目标仓库
+# 顶掉(sys.path 的 '' 在前)。这不是理论风险——从 /home/user/work/159/jax-fem
+# 里启动本脚本时就发生过,onB 那遍实际加载的是 HEAD 代码。更坏的情形是它安静
+# 生效:offA 若被 HEAD 顶掉,逐字节比对会**因为错误的原因通过**。
+cd /tmp || exit 2
+
 run_case() {
   local TAG=$1 REPO=$2 OUT=$OUTROOT/iet20_reg_$1; shift 2
   rm -rf "$OUT"; mkdir -p "$OUT"
   say "---- $TAG (repo=$REPO) ----"
+  # 断言待会儿真正被 import 的 jax_fem_am 就是这一遍要测的那个仓库。
+  local LOADED
+  LOADED=$(PYTHONPATH=$REPO python -c 'import jax_fem_am,os;print(os.path.realpath(os.path.dirname(jax_fem_am.__file__)))' 2>/dev/null)
+  if [ "$LOADED" != "$(cd "$REPO" && pwd -P)/jax_fem_am" ]; then
+    say "$TAG 加载到的 jax_fem_am 不是目标仓库:"
+    say "    期望 $(cd "$REPO" && pwd -P)/jax_fem_am"
+    say "    实际 ${LOADED:-<import 失败>}"
+    say "回归无效,停止。"; exit 2
+  fi
+  say "  加载校验通过:$LOADED"
   PYTHONPATH=$REPO python "$M/make_v2_path_multitrack.py" --tracks 1 \
     --power 220 --speed 0.650 --hatch 0.12e-3 \
     --output "$OUT/path.csv" --ledger-json "$OUT/path_ledger.json" \
@@ -96,9 +112,14 @@ wants() { [ "${CASES#*$1}" != "$CASES" ]; }
 
 wants head && run_case head "$HEAD_REPO"
 wants offA && run_case offA "$NEW_REPO"
+# 探针用**评分规范预注册的坐标**(scoring-spec-thermal-gate-v2.md §6.1 @ 3b9c220):
+# P1=(1,2)、P2=(2,2)、P3=(3,2) mm,取顶层单元中心高度 z = 4.2e-4 m
+# (该网格顶层单元 z 从 4.0e-4 到 4.4e-4)。这样这一遍除了跑逐字节回归,
+# 还顺带证明三个预注册探针在真实 M1 网格上都落进了包含单元里
+# (meta 里的 contains_probe 全为 true)。
 wants onB  && run_case onB  "$NEW_REPO" --online-observables \
                             --online-observables-window 0.0,1.0 \
-                            --online-observables-probes "0.0018,0.0017,0.00044;0.0028,0.0017,0.00044;0.0038,0.0017,0.00044"
+                            --online-observables-probes "0.001,0.002,0.00042;0.002,0.002,0.00042;0.003,0.002,0.00042"
 if ! wants compare; then say "CASES='$CASES' 不含 compare,先到这里"; exit 0; fi
 
 python "$M/check_bytes_identical.py" \
