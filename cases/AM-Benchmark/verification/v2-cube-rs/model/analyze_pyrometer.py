@@ -18,6 +18,24 @@
 另外单独报一路 `range_limited`:该高温计量程上限 3000 degC,超出量程的单元
 不在其可测范围内。Balbaa 只写了下限,所以这一路是**诊断**不是采纳口径 ——
 as-is 臂峰值远在量程之上,这个差值是判读闸门时必须看到的。
+
+## 三路读数(2026-08-20 起为一等输出,IET-20)
+
+场级分析(Opus5 03:57,IET-19)证明采纳口径的形状几乎全部来自它自己的分母:
+观测窗内场的峰温趋势只有 -27 K,而采纳读数掉了 919 K,同期 n_hot 从 11 涨到
+140。采纳口径因此是**复现 Balbaa 协议的主尺**(必须原样保留,一个字不改),
+但它不是仪器的模型,也不是场的下界。三路并列、互不替换:
+
+| 路 | 字段 | 干什么用 | 谁定的口径 |
+|---|---|---|---|
+| 采纳(条件平均) | `avg_K` | code-to-code:复现他的协议与他的数值曲线 | Balbaa Sec 3.3 |
+| 双色合成 | `two_colour_K` | code-to-experiment:按仪器自己的物理读 | 我们,D-V2-24 |
+| 全光斑无阈值 | `full_spot_avg_K` | 诊断下界:分母取满时的读数 | 我们,D-V2-24 |
+
+三路共用**同一套几何**(同圆心、同直径、同顶层、同单元温度定义),所以可以
+逐列直接相比 —— 差异只可能来自读数定义本身。
+
+零标定:三路都没有可向实测回调的参数;阈值/量程是仪器规格,不是旋钮。
 """
 import argparse
 import csv
@@ -30,6 +48,8 @@ from pathlib import Path
 
 import meshio
 import numpy as np
+
+import two_colour_pyrometer as tc
 
 C2K = 273.15
 
@@ -72,8 +92,22 @@ def main():
     ap.add_argument("--layer-top-z", type=float, default=None,
                     help="粉层底面 z [m];缺省 = 网格 z 上界减一个层厚")
     ap.add_argument("--layer-thickness", type=float, default=40.0e-6)
+    ap.add_argument("--tc-wavelengths-um", default="0.95,1.05",
+                    help="双色合成读数的两个波长 [um](短波在前)")
+    ap.add_argument("--tc-sensitivity", action="store_true",
+                    help="额外输出波长分离的敏感性括号(峰值帧上)")
     ap.add_argument("--output", type=Path, default=None)
     args = ap.parse_args()
+
+    wl = tuple(float(v) * 1e-6 for v in args.tc_wavelengths_um.split(","))
+    if len(wl) != 2:
+        raise SystemExit("--tc-wavelengths-um 需要两个值,例如 0.95,1.05")
+    # 自检先跑:均匀场必须被精确还原。不过就不许出读数 —— 一个反演错了符号的
+    # 仪器模型会安静地产出看起来合理的曲线,那比没有这一路更糟。
+    tc_ok, tc_rows = tc.uniform_field_self_check(wavelengths=wl)
+    if not tc_ok:
+        raise SystemExit("双色合成读数的均匀场自检未通过,拒绝出读数:\n"
+                         + json.dumps(tc_rows, indent=2, ensure_ascii=False))
 
     vtus = sorted(glob.glob(os.path.join(args.run_dir, "*.vtu")))
     if not vtus:
@@ -122,6 +156,13 @@ def main():
         vals = T_cell[gauge]
         hot = vals >= thr_K
         inrange = hot & (vals <= ceil_K)
+        # ---- 三路读数,同一批 vals、同一套几何 ----
+        # (1) 采纳口径 avg_K —— Balbaa Sec 3.3,原样保留;
+        # (2) 双色合成 —— 仪器物理,无阈值,亮度积分后反演;
+        # (3) 全光斑无阈值算术平均 —— 诊断下界,分母取满。
+        tcr = tc.read_field(vals, wavelengths=wl,
+                            range_min_C=args.threshold_C,
+                            range_max_C=args.range_max_C)
         frames.append({
             "step": step, "time_s": t,
             "laser_on": bool(laser_on.get(step, False)),
@@ -131,6 +172,15 @@ def main():
             "n_in_range": int(inrange.sum()),
             "avg_range_limited_K": float(vals[inrange].mean()) if inrange.any() else None,
             "n_over_range": int((hot & (vals > ceil_K)).sum()),
+            # --- 路 2:双色辐射合成 ---
+            "two_colour_K": tcr["T_K"],
+            "two_colour_S1": tcr["S1"], "two_colour_S2": tcr["S2"],
+            "two_colour_over_range": tcr["over_range"],
+            "two_colour_under_range": tcr["under_range"],
+            "two_colour_cold_tail_frac": tcr["cold_tail_frac"],
+            # --- 路 3:全光斑无阈值平均 ---
+            "full_spot_avg_K": float(vals.mean()),
+            "n_gauge_cells": int(vals.size),
         })
     if not frames:
         raise SystemExit("没有一帧能在 path_used.csv 里配到时间")
@@ -152,6 +202,15 @@ def main():
         hot = [m for m in members if m["avg_K"] is not None]
         rng = [m for m in members if m["avg_range_limited_K"] is not None]
         nearest = min(members, key=lambda m: abs(m["time_s"] - center))
+        # 双色的箱读法:仪器 10 ms 响应积分的是**亮度**,不是温度。所以先把
+        # 箱内各帧的 S1/S2 平均,再反演一次。先逐帧反演再平均温度是另一个量
+        # (也一并给出,两者之差就是这个读法选择的曝光量)。
+        S1 = float(np.mean([m["two_colour_S1"] for m in members]))
+        S2 = float(np.mean([m["two_colour_S2"] for m in members]))
+        tc_bin = tc.read_accumulated(S1, S2, wavelengths=wl,
+                                     range_min_C=args.threshold_C,
+                                     range_max_C=args.range_max_C)
+        tc_frames = [m["two_colour_K"] for m in members if m["two_colour_K"] is not None]
         series.append({
             "bin_index": idx,
             "t_lo_s": lo, "t_center_s": center,
@@ -166,6 +225,15 @@ def main():
             "max_K": float(max(m["max_K"] for m in members)),
             "mean_n_hot": float(np.mean([m["n_hot"] for m in members])),
             "any_laser_on": any(m["laser_on"] for m in members),
+            # --- 路 2:双色辐射合成(箱内亮度平均后反演) ---
+            "two_colour_K": tc_bin["T_K"],
+            "two_colour_over_range": tc_bin["over_range"],
+            "two_colour_under_range": tc_bin["under_range"],
+            "two_colour_frame_mean_K": (float(np.mean(tc_frames)) if tc_frames else None),
+            "n_frames_two_colour_over_range": int(
+                sum(1 for m in members if m["two_colour_over_range"])),
+            # --- 路 3:全光斑无阈值平均 ---
+            "full_spot_avg_K": float(np.mean([m["full_spot_avg_K"] for m in members])),
         })
 
     dts = np.diff([f["time_s"] for f in frames]) if len(frames) > 1 else np.array([0.0])
@@ -190,6 +258,15 @@ def main():
             f"共 {over} 个单元-帧超出高温计量程上限 {args.range_max_C} degC:"
             "采纳口径按 Balbaa 原文只设下限,故它们仍进了平均;"
             "range_limited 一路给出剔除它们后的对照")
+    tc_over = sum(1 for s in series if s["two_colour_over_range"])
+    if tc_over:
+        warnings.append(
+            f"{tc_over} 个 10 ms 箱的双色合成读数超出仪器上限 "
+            f"{args.range_max_C} degC。真机在 Fig 14 的五个时刻**没有**超量程"
+            "(实测 1389-1470 degC),所以这不是读数口径问题,是场的绝对水平问题")
+    cold = [f["two_colour_cold_tail_frac"] for f in frames
+            if f["two_colour_cold_tail_frac"] is not None and f["n_hot"] > 0]
+    cold_max = max(cold) if cold else None
 
     doc = {
         "arm": args.arm or os.path.basename(os.path.normpath(args.run_dir)),
@@ -205,6 +282,35 @@ def main():
             "adopted_bin_reading": "箱内区间平均(nearest_frame_avg_K 为备选读法)",
             "registered_as": "D-V2-23(圆心/深度/分箱读法三项均为我们的约定)",
         },
+        "three_readings": {
+            "_why": "采纳口径的形状几乎全部来自它自己的分母(场峰温窗内趋势 "
+                    "-27 K,采纳读数掉 919 K,同期 n_hot 11 -> 140)。三路并列、"
+                    "互不替换:采纳口径复现他的协议,双色合成按仪器物理读,"
+                    "全光斑给分母取满时的下界",
+            "adopted_conditional_average": {
+                "field": "avg_K",
+                "definition": f"2 mm 圆内、顶层、T >= {args.threshold_C} degC 单元的算术平均",
+                "source": "Balbaa2022 Sec 3.3 逐字协议 —— 一个字不改",
+                "use": "code-to-code(复现他的数值曲线)",
+            },
+            "two_colour_synthetic": dict(
+                tc.PROTOCOL_NOTE,
+                field="two_colour_K",
+                wavelengths_m=list(wl),
+                use="code-to-experiment(按仪器自己的物理读)",
+                uniform_field_self_check=tc_rows,
+                uniform_field_self_check_passed=tc_ok,
+                max_cold_tail_fraction=cold_max,
+                cold_tail_meaning="低于 1000 degC 的单元对短波通道信号的最大贡献占比;"
+                                  "它证明'不设阈值'在 1 um 波段无害,而不是断言它无害",
+            ),
+            "full_spot_unthresholded": {
+                "field": "full_spot_avg_K",
+                "definition": "同一 2 mm 圆内、同一顶层,全部单元的算术平均(无阈值)",
+                "use": "诊断下界 —— 分母取满时读数是多少",
+                "registered_as": "D-V2-24",
+            },
+        },
         "gauge_cells": int(gauge.sum()),
         "gauge_cells_in_circle": int(in_circle.sum()),
         "n_frames": len(frames),
@@ -215,10 +321,31 @@ def main():
         "peak_K": float(max(f["max_K"] for f in frames)),
         "peak_avg_K": max((s["avg_K"] for s in series if s["avg_K"] is not None),
                           default=None),
+        "peak_two_colour_K": max(
+            (s["two_colour_K"] for s in series if s["two_colour_K"] is not None),
+            default=None),
+        "peak_full_spot_avg_K": max(
+            (s["full_spot_avg_K"] for s in series
+             if s["full_spot_avg_K"] is not None), default=None),
+        "n_bins_two_colour_over_range": tc_over,
         "series": series,
         "frames": frames,
         "warnings": warnings,
     }
+
+    if args.tc_sensitivity:
+        # 波长分离是我们定的(论文只写 "Si/Si ~1 um")。在采纳口径读数最高的
+        # 那一帧上给出括号 —— 那也是这个选择最有可能改变判读的地方。
+        peak_frame = max((f for f in frames if f["avg_K"] is not None),
+                         key=lambda f: f["avg_K"], default=None)
+        if peak_frame is not None:
+            m = meshio.read(next(v for v in vtus if step_of(v) == peak_frame["step"]))
+            T_cell = np.asarray(m.point_data["T"]).reshape(-1)[conn].mean(axis=1)
+            doc["two_colour_wavelength_sensitivity"] = {
+                "at_frame_time_s": peak_frame["time_s"],
+                "_why": "论文只写 Si/Si ~1 um,两通道的分离由我们定;这是该选择的曝光量",
+                "bracket": tc.sensitivity(T_cell[gauge]),
+            }
 
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -235,6 +362,22 @@ def main():
     if doc["peak_avg_K"]:
         print(f"  峰值箱均温 {doc['peak_avg_K']:.1f} K = {doc['peak_avg_K']-C2K:.1f} degC;"
               f"  单元峰温 {doc['peak_K']:.1f} K = {doc['peak_K']-C2K:.1f} degC")
+    print(f"  双色合成 {wl[0]*1e6:.2f}/{wl[1]*1e6:.2f} um,均匀场自检 "
+          f"{'通过' if tc_ok else '失败'}(最大 |err| "
+          f"{max(r['abs_error_K'] for r in tc_rows):.2e} K)")
+    if cold_max is not None:
+        print(f"  冷尾贡献 <= {cold_max*100:.3f}%(低于 1000 degC 的单元对短波通道)"
+              " -> 无阈值积分无害")
+    print(f"  三路读数(有效箱数 / 峰值 K):")
+    for label, key, peak in (("采纳(条件平均)", "avg_K", doc["peak_avg_K"]),
+                             ("双色合成", "two_colour_K", doc["peak_two_colour_K"]),
+                             ("全光斑无阈值", "full_spot_avg_K",
+                              doc["peak_full_spot_avg_K"])):
+        n = sum(1 for s in series if s.get(key) is not None)
+        pk = f"{peak:8.1f}" if peak is not None else "     n/a"
+        print(f"    {label:<16s} n={n:<4d} 峰值 {pk} K")
+    if tc_over:
+        print(f"    [!] {tc_over} 个箱的双色读数超出 {args.range_max_C} degC 量程上限")
     for w in warnings:
         print(f"  [WARN] {w}")
     if args.output:

@@ -23,6 +23,9 @@ from jax_fem_am.verification.thermal_ledger import (  # noqa: E402
     EnergyLedgerRecorder,
     extract_solver_step,
 )
+from jax_fem_am.verification.online_observables import (  # noqa: E402
+    recorder_from_args,
+)
 
 
 class _StateRegistry:
@@ -42,6 +45,10 @@ class _StateRegistry:
         self.step_states = None
         self.thermal_ledger = None
         self.previous_thermal_solution = None
+        # None unless --online-observables was passed (IET-20 red line:
+        # with no new flag the run takes exactly the old code path).
+        self.online_observables = None
+        self.online_observables_resolved = False
 
 
 REGISTRY = _StateRegistry()
@@ -329,6 +336,18 @@ def install_thermal_ledger_wrapper(base_module):
         )
         REGISTRY.thermal_ledger.append(row)
         REGISTRY.previous_thermal_solution = solution[0]
+        # --- online in-circle observables (D-V2-25, IET-20) -------------
+        # Resolved once, AFTER the ledger row is committed, so the recorder
+        # can never sit between the solver and the audit. Without
+        # --online-observables recorder_from_args returns None and the only
+        # residual cost is this attribute check.
+        if not REGISTRY.online_observables_resolved:
+            REGISTRY.online_observables_resolved = True
+            REGISTRY.online_observables = recorder_from_args(REGISTRY.args)
+        if REGISTRY.online_observables is not None:
+            REGISTRY.online_observables.observe(
+                problem, solution[0], REGISTRY.step_states[step_index]
+            )
         return solution
 
     solver_with_thermal_ledger._v06_thermal_ledger_wrapper = True
@@ -874,6 +893,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     finally:
         if REGISTRY.thermal_ledger is not None:
             REGISTRY.thermal_ledger.finalize(completed=completed)
+        if REGISTRY.online_observables is not None:
+            REGISTRY.online_observables.finalize()
         v04.load_base_solver = original_load
         v04.ProfilingReport = original_report
 

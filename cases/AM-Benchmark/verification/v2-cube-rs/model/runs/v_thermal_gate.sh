@@ -19,6 +19,15 @@
 #   STAGES="1 2" bash v_thermal_gate.sh 只跑指定阶段
 #
 # 红线:fork-only、零标定、不触实测回调、不改共享求解器。
+#
+# 2026-08-20(IET-20)删掉了 `--front-surface-loss-radiation`。它是**空转旗标**:
+# thermal.py:292 把整个 front-loss 块(含 :304 的辐射分支)门控在
+# `front_surface_loss_h > 0 且 thickness > 0` 之下,而本脚本两者都没传、配置里
+# 也没有这两个键(默认 0.0)。生产运行的 used_config.json 记的正是
+# h=0.0 / thickness=0.0 / radiation=true,台账里 front_loss_j 全程 8866 步
+# 合计 0.0000 J —— 它一点作用都没有,只会让人以为多了一项辐射。
+# 真正的对流/辐射走 `--surface-selection exterior` 的表面积分路径,未受影响:
+# 同一台账里 surface_loss_j = 0.1297 J,物理照旧。删除**不改变任何数值结果**。
 # ============================================================================
 set -u
 source /home/user/miniforge3/etc/profile.d/conda.sh
@@ -122,7 +131,6 @@ run_arm() {
     --powder-mode powder --surface-selection exterior --boundary-tol 1.0e-6 \
     --quadrature-order 2 --ambient 313.0 --preheat-temperature 353.15 \
     --bottom-thermal-bc fixed --bottom-temperature 353.15 \
-    --front-surface-loss-radiation \
     --cooling-steps "$COOL_STEPS" --cooling-dt 0.01 \
     --mechanics-every 0 \
     --thermal-mass-lumping --thermal-output-every "$OUT_EVERY" --summary-every 200 \

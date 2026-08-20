@@ -366,6 +366,53 @@ def build_parser(config=None):
     parser.add_argument("--thermal-output-every", type=int, default=cfg(config, "thermal_output_every", 0))
     parser.add_argument("--mechanics-output-every", type=int, default=cfg(config, "mechanics_output_every", 1))
     parser.add_argument("--summary-every", type=int, default=cfg(config, "summary_every", 1))
+    # ---- online in-circle pyrometer observables (D-V2-25, IET-20) ----
+    # DEFAULT OFF. With --online-observables absent, recorder_from_args() returns
+    # None and no observation code runs at all: the solve path is untouched.
+    # These exist because VTU-cadence output cannot resolve a 3.077 ms beam
+    # dwell without writing whole-mesh files; the recorder writes a few scalars
+    # per solver step instead, at dt = 76.9 us.
+    parser.add_argument("--online-observables", dest="online_observables",
+                        action="store_true",
+                        default=cfg(config, "online_observables", False),
+                        help="Accumulate in-circle pyrometer observables every "
+                             "solver step into online_observables.jsonl. Writes "
+                             "no VTU and stores no field. Off by default.")
+    parser.add_argument("--no-online-observables", dest="online_observables",
+                        action="store_false")
+    parser.add_argument("--online-observables-window",
+                        default=cfg(config, "online_observables_window", "0.45,0.90"),
+                        help="t_lo,t_hi [s] recording window (default 0.45,0.90).")
+    parser.add_argument("--online-observables-every", type=int,
+                        default=cfg(config, "online_observables_every", 1),
+                        help="Record every N-th solver step inside the window "
+                             "(1 = every step, the default).")
+    parser.add_argument("--online-observables-spot-center",
+                        default=cfg(config, "online_observables_spot_center", ""),
+                        help="x,y [m] pyrometer spot centre; empty = mesh xy "
+                             "bounding-box centre, matching analyze_pyrometer.py.")
+    parser.add_argument("--online-observables-spot-diameter", type=float,
+                        default=cfg(config, "online_observables_spot_diameter", 2.0e-3))
+    parser.add_argument("--online-observables-threshold-c", type=float,
+                        default=cfg(config, "online_observables_threshold_c", 1000.0),
+                        help="Pyrometer lower limit [degC] for the adopted "
+                             "conditional average.")
+    parser.add_argument("--online-observables-range-max-c", type=float,
+                        default=cfg(config, "online_observables_range_max_c", 3000.0),
+                        help="Pyrometer upper limit [degC]; used for over-range "
+                             "counting only, never to clamp a reading.")
+    parser.add_argument("--online-observables-wavelengths-um",
+                        default=cfg(config, "online_observables_wavelengths_um", "0.95,1.05"),
+                        help="Two-colour channel wavelengths [um], shorter first.")
+    parser.add_argument("--online-observables-probes",
+                        default=cfg(config, "online_observables_probes", ""),
+                        help="Fixed probe points as 'x,y,z;x,y,z;...' [m] for the "
+                             "Fig 15/16 target (D-V2-27). Empty = no probes.")
+    parser.add_argument("--online-observables-all-depths",
+                        dest="online_observables_all_depths", action="store_true",
+                        default=cfg(config, "online_observables_all_depths", False),
+                        help="Include sub-surface cells; default is top layer only, "
+                             "because a pyrometer is an optical surface instrument.")
     parser.add_argument("--calibration-dir", default=cfg(config, "calibration_dir", None))
     parser.add_argument("--output-dir", default=cfg(config, "output_dir", "/home/user/work/159/output/inp_thermal_stress_oneway_layers"))
     return parser
