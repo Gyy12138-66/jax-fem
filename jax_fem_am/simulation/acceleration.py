@@ -2989,6 +2989,11 @@ def install_loop_kernel_jit_patch(
         if (
             T_new_quad is None
             and _tables_are_empty(tables, THERMAL_TABLE_KEYS)
+            # The specialized kernel does not implement the
+            # follow-temperature fixture property branch; route such runs
+            # through the reference implementation.
+            and getattr(args, "fixture_thermal_phase", "frozen-solid")
+            == "frozen-solid"
         ):
             if printed_quad is None:
                 printed_quad = active_quad

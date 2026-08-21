@@ -192,6 +192,46 @@ def build_parser(config=None):
     )
     parser.add_argument("--beam-radius", type=float, default=cfg(config, "beam_radius", 1.0e-4))
     parser.add_argument("--source-depth", type=float, default=cfg(config, "source_depth", 6.0e-5))
+    parser.add_argument(
+        "--source-depth-cutoff",
+        type=float,
+        default=cfg(config, "source_depth_cutoff", 0.0),
+        help=(
+            "Optional cutoff depth in metres for the legacy exponential "
+            "volumetric source: no energy is deposited deeper than this "
+            "below the current laser surface, so the exponential tail "
+            "cannot reach substrate/support under a thin powder layer. "
+            "0 keeps the historical half-space behaviour. Only valid "
+            "with --source-model legacy."
+        ),
+    )
+    parser.add_argument(
+        "--source-cutoff-renormalize",
+        dest="source_cutoff_renormalize",
+        action="store_true",
+        default=cfg(config, "source_cutoff_renormalize", False),
+        help=(
+            "With --source-depth-cutoff, renormalize the truncated depth "
+            "profile so the band still receives the full absorbed power "
+            "(reading where absorption is confined to the powder layer). "
+            "Off leaves the truncated tail energy unabsorbed."
+        ),
+    )
+    parser.add_argument("--no-source-cutoff-renormalize", dest="source_cutoff_renormalize", action="store_false")
+    parser.add_argument(
+        "--fixture-thermal-phase",
+        choices=("frozen-solid", "follow-temperature"),
+        default=cfg(config, "fixture_thermal_phase", "frozen-solid"),
+        help=(
+            "Thermal property treatment for substrate/support quadrature "
+            "points. frozen-solid keeps the historical behaviour (always "
+            "solid-branch rho/cp/k regardless of temperature); "
+            "follow-temperature lets their rho/cp/k enter the "
+            "mushy/liquid branches once the local temperature crosses "
+            "solidus/liquidus, while the mechanical fixture identity is "
+            "unchanged."
+        ),
+    )
 
     parser.add_argument("--build-axis", choices=("x", "y", "z"), default=cfg(config, "build_axis", "x"))
     parser.add_argument("--base-side", choices=("min", "max"), default=cfg(config, "base_side", "min"))
