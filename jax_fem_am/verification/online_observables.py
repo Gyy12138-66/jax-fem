@@ -114,6 +114,47 @@ def invert_two_colour_ratio(ratio, wavelengths, t_lo=200.0, t_hi=100000.0):
     return 0.5 * (lo + hi)
 
 
+# HEX8 reference-element corners in the C3D8 node order (bottom face CCW, then
+# top face CCW), used for the trilinear gradient below.
+_HEX8_REF = np.array([
+    [-1.0, -1.0, -1.0], [+1.0, -1.0, -1.0], [+1.0, +1.0, -1.0], [-1.0, +1.0, -1.0],
+    [-1.0, -1.0, +1.0], [+1.0, -1.0, +1.0], [+1.0, +1.0, +1.0], [-1.0, +1.0, +1.0],
+], dtype=np.float64)
+
+
+def trilinear_gradient_at_centre(node_xyz, node_values):
+    """grad(T) of the trilinear field at the element centre (xi = eta = zeta = 0).
+
+    Scoring spec 6.3.5 wants a model-side |dT/dx| and |dT/dy|; the definition
+    adopted (Fable5 2026-08-20, registered under D-V2-27) is the trilinear
+    interpolant's gradient at the centre of the CONTAINING cell -- the same cell
+    the probe already reads, so the gradient and the temperature cannot come
+    from different places.
+
+    At the centre the shape-function derivatives are dN_i/dxi_b = xi_i[b] / 8,
+    so with J[a][b] = sum_i (dN_i/dxi_b) * x_i[a] and dT/dxi_b = sum_i
+    (dN_i/dxi_b) * T_i, the chain rule gives dT/dxi = J^T grad, i.e.
+    grad = solve(J^T, dT/dxi). Done through the Jacobian rather than as a face
+    difference so it stays exact for any hex, not just an axis-aligned brick;
+    on a structured grid it reduces to the +/-x, +/-y face-mean difference
+    quotient, which is what makes it auditable by hand.
+
+    Returns None when the element is degenerate (singular Jacobian) rather than
+    emitting a fabricated gradient.
+    """
+    xyz = np.asarray(node_xyz, dtype=np.float64)
+    values = np.asarray(node_values, dtype=np.float64).reshape(-1)
+    if xyz.shape != (8, 3) or values.shape != (8,):
+        raise ValueError("trilinear gradient needs 8 nodes with 8 values")
+    dn = _HEX8_REF / 8.0                       # (8, 3) dN_i/dxi_b at the centre
+    jac = xyz.T @ dn                           # J[a][b] = dx_a / dxi_b
+    dt_dxi = dn.T @ values                     # (3,)
+    try:
+        return np.linalg.solve(jac.T, dt_dxi)
+    except np.linalg.LinAlgError:
+        return None
+
+
 def uniform_field_self_check(wavelengths, temperatures=(1273.15, 2500.0, 4800.0),
                              atol_k=1.0e-4):
     """A uniform field must invert back to itself.  Run before recording."""
@@ -276,6 +317,8 @@ class OnlineObservableRecorder:
             "gauge_conn": cells[gauge],
             "probe_conn": (cells[[r["cell_index"] for r in probe_records]]
                            if probe_records else np.zeros((0, 8), dtype=np.int64)),
+            # nodal coordinates, kept for the spec-6.3.5 trilinear gradient
+            "probe_points": points,
             "spot_center_m": [float(cx), float(cy)],
             "layer_bottom_z_m": float(layer_bottom),
             "gauge_cells": int(gauge.sum()),
@@ -348,6 +391,43 @@ class OnlineObservableRecorder:
                 "all_probes_contained": all(p["contains_probe"]
                                             for p in geometry["probes"]),
             },
+            "probe_gradient": {
+                "_spec": "scoring-spec-thermal-gate-v2.md 6.3.5",
+                "field": "probe_grad_K_per_m = [dT/dx, dT/dy, dT/dz] in K/m",
+                "definition": "gradient of the trilinear interpolant evaluated at "
+                              "the centre of the CONTAINING cell -- the same cell "
+                              "the probe temperature is read from, so temperature "
+                              "and gradient cannot come from different places",
+                "equivalent_form": "on a structured axis-aligned grid this reduces "
+                                   "to the +/-x and +/-y face-mean difference "
+                                   "quotient, i.e. checkable by hand",
+                "sign_convention": "the signed vector is written; spec 6.3.5 wants "
+                                   "|dT/dx| and |dT/dy|, and taking the modulus "
+                                   "downstream keeps the sign auditable here",
+                "axis_swap_prohibition": "spec 6.3.5 forbids swapping x and y to "
+                                         "improve agreement; scan direction is +x "
+                                         "and hatch direction is +y by the D-V2-09 "
+                                         "path convention, fixed before any run",
+                "degenerate_element": "a singular Jacobian yields null rather than "
+                                      "a fabricated gradient",
+                "registered_as": "D-V2-27",
+            },
+            "band_accounting": {
+                "_spec": "scoring-spec-thermal-gate-v2.md 3.2 two-colour reporting",
+                "fields": ["band_cells", "band_radiance_weight_short",
+                           "band_radiance_weight_long",
+                           "two_colour_inversion_failed"],
+                "bands": {"below_range": f"< {self.threshold_k - C2K:g} degC",
+                          "in_range": f"{self.threshold_k - C2K:g}-"
+                                      f"{self.range_max_k - C2K:g} degC",
+                          "above_range": f"> {self.range_max_k - C2K:g} degC"},
+                "why_online": "cell counts could be recomputed later, but the "
+                              "RADIANCE weights depend on the field, and the field "
+                              "is deliberately never written to disk -- so these "
+                              "have to be produced during the solve or not at all",
+                "time_weighting": "recoverable downstream: every record carries "
+                                  "its own dt_s",
+            },
             "zero_calibration": "nothing here is tunable toward the measurement",
         }
         if not ok:
@@ -400,6 +480,22 @@ class OnlineObservableRecorder:
         two_colour = (invert_two_colour_ratio(s1 / s2, self.wavelengths_m)
                       if s2 > 0.0 else None)
 
+        # ---- spec 3.2 band accounting ------------------------------------
+        # The spec requires the below-1000 / 1000-3000 / above-3000 degC cell
+        # AND time weights plus the non-invertible count. Cell counts could be
+        # recomputed afterwards, but the RADIANCE weights cannot: they depend on
+        # the field, and the field is deliberately not written to disk. So they
+        # have to be produced here or not at all. Time weighting is recoverable
+        # downstream because every record carries its own dt_s.
+        below = cell_t < self.threshold_k
+        above = cell_t > self.range_max_k
+        within = ~below & ~above
+        total_l1 = float(l1.sum())
+        total_l2 = float(l2.sum())
+
+        def _weight(mask, channel, total):
+            return float(channel[mask].sum() / total) if total > 0.0 else None
+
         centre = geometry["spot_center_m"]
         laser = np.asarray(step_state.laser_center, dtype=np.float64).reshape(-1)
         beam_distance = float(math.hypot(laser[0] - centre[0],
@@ -426,6 +522,19 @@ class OnlineObservableRecorder:
             "two_colour_S2": s2,
             "two_colour_over_range": bool(
                 two_colour is not None and two_colour > self.range_max_k),
+            "two_colour_inversion_failed": bool(two_colour is None),
+            # spec 3.2: cell counts and RADIANCE weights per instrument band
+            "band_cells": {"below_range": int(below.sum()),
+                           "in_range": int(within.sum()),
+                           "above_range": int(above.sum())},
+            "band_radiance_weight_short": {
+                "below_range": _weight(below, l1, total_l1),
+                "in_range": _weight(within, l1, total_l1),
+                "above_range": _weight(above, l1, total_l1)},
+            "band_radiance_weight_long": {
+                "below_range": _weight(below, l2, total_l2),
+                "in_range": _weight(within, l2, total_l2),
+                "above_range": _weight(above, l2, total_l2)},
             # D-V2-24 unthresholded diagnostic bound
             "full_spot_avg_K": float(cell_t.mean()),
         }
@@ -436,6 +545,18 @@ class OnlineObservableRecorder:
             # silently disagree about what "temperature at a place" means.
             row["probe_K"] = [float(v) for v in
                               temperature[geometry["probe_conn"]].mean(axis=1)]
+            # Spec 6.3.5: model-side gradient, trilinear at the containing
+            # cell's centre. Reported as the signed vector; the spec asks for
+            # |dT/dx| and |dT/dy|, and taking the absolute value downstream
+            # keeps the sign auditable here. dT/dz comes along free and is
+            # worth having -- it is the build-direction gradient.
+            grads = []
+            for nodes in geometry["probe_conn"]:
+                gradient = trilinear_gradient_at_centre(
+                    geometry["probe_points"][nodes], temperature[nodes])
+                grads.append(None if gradient is None
+                             else [float(v) for v in gradient])
+            row["probe_grad_K_per_m"] = grads
         self._handle.write(json.dumps(row) + "\n")
         self.rows_written += 1
 

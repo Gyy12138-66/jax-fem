@@ -302,11 +302,41 @@ def digitize_fig15(im, args):
 
         # 判读用的派生量。峰值取该曲线所有列的最高像素(尖峰的顶),
         # 不做任何平滑 —— 平滑会把尖峰削掉,那正是这张图的信息所在。
-        peak = max(s["samples"], key=lambda p: p["temperature_C_hi"])
-        above = [p for p in s["samples"] if p["temperature_C_hi"] >= args.solidus_C]
+        # ---- 披露 (b):陡段上的有效不确定度由时间项主导 ----
+        # (Fable5 复审 2026-08-20 要求)近乎竖直的尖峰上,时间读数误差经局部
+        # 斜率映射成温度误差:sigma_T_from_t = sigma_t * |dT/dt|。斜率用相邻列
+        # 的中心线值做中心差分,只作**披露**,不改任何读数。
+        times = np.asarray([q["time_s"] for q in s["samples"]])
+        temps = np.asarray([q["temperature_C"] for q in s["samples"]])
+        slope = (np.gradient(temps, times) if times.size > 2
+                 else np.zeros_like(temps))
+        sigma_t = s["time_s_uncertainty"]
+        sigma_T = s["temperature_C_uncertainty"]
+        for q, dTdt in zip(s["samples"], slope):
+            q["dT_dt_C_per_s"] = round(float(dTdt), 3)
+            q["temperature_C_uncertainty_from_time"] = round(
+                float(abs(dTdt) * sigma_t), 3)
+            q["temperature_C_uncertainty_effective"] = round(
+                float(np.sqrt(sigma_T ** 2 + (dTdt * sigma_t) ** 2)), 3)
+        eff = np.asarray([q["temperature_C_uncertainty_effective"]
+                          for q in s["samples"]])
+        steep = int((eff > 2.0 * sigma_T).sum())
+        max_slope = float(np.abs(slope).max())
+
+        # 判读用的派生量。峰值取该曲线所有列的最高像素(尖峰的顶),
+        # 不做任何平滑 —— 平滑会削掉尖峰,那正是这张图的信息所在。
+        peak = max(s["samples"], key=lambda q: q["temperature_C_hi"])
+        above = [q for q in s["samples"] if q["temperature_C_hi"] >= args.solidus_C]
+        # ---- 披露 (a):峰值读的是描边**上缘**,含方向固定的单侧分量 ----
+        half_line_C = anchor * abs(sy)
         s["derived"] = {
             "peak_temperature_C": peak["temperature_C_hi"],
             "peak_time_s": peak["time_s"],
+            # 上缘 - 半线宽 = 中心线估计。两个都给,让判读的人自己选,
+            # 而不是替他把偏置吸收掉。
+            "peak_temperature_centerline_C": round(
+                float(peak["temperature_C_hi"] - half_line_C), 1),
+            "peak_one_sided_half_linewidth_C": round(float(half_line_C), 2),
             "n_columns_above_solidus": len(above),
             "solidus_C_used": args.solidus_C,
             "first_time_above_solidus_s": above[0]["time_s"] if above else None,
@@ -314,6 +344,22 @@ def digitize_fig15(im, args):
             "t_range_s": [s["samples"][0]["time_s"], s["samples"][-1]["time_s"]],
             "_peak_note": "峰值取该列像素的最高点(尖峰顶),不平滑:平滑会削掉"
                           "尖峰,而尖峰正是这张图要给的东西",
+            "_peak_one_sided_disclosure": (
+                "峰顶切线水平处,列顶像素读的是描边**上缘** = 中心线 + 半线宽,"
+                f"所以 peak_temperature_C 含约 +{half_line_C:.1f} degC 的**单侧**"
+                "分量:方向固定、不随机,不能当作 +/-sigma_T 的一部分被抵消。"
+                "peak_temperature_centerline_C 是扣掉它之后的中心线估计;两个都"
+                "报,C 包按需取,但必须知道自己取的是哪一个"),
+            "_steep_segment_disclosure": (
+                f"陡段上有效不确定度由时间项主导:sigma_t = {sigma_t*1e3:.2f} ms,"
+                f"最大 |dT/dt| = {max_slope:.3e} degC/s,二者相乘最大 "
+                f"{max_slope*sigma_t:.0f} degC,远大于读数项 +/-{sigma_T:.1f} degC。"
+                f"{steep} / {len(eff)} 列的有效不确定度超过读数项的 2 倍。逐列已给 "
+                "dT_dt_C_per_s / temperature_C_uncertainty_from_time / "
+                "temperature_C_uncertainty_effective。规范 §6.2 在时间域按数字化"
+                "时刻比较、且 Fig 15/16 不设通过线,所以这是**披露**不是缺陷"),
+            "max_effective_temperature_C_uncertainty": round(float(eff.max()), 2),
+            "n_columns_time_dominated": steep,
         }
 
     return {

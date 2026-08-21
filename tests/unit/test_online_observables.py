@@ -19,6 +19,7 @@ from jax_fem_am.verification.online_observables import (
     OnlineObservableRecorder,
     invert_two_colour_ratio,
     recorder_from_args,
+    trilinear_gradient_at_centre,
     uniform_field_self_check,
     _spectral_radiance,
 )
@@ -333,6 +334,86 @@ class RecorderBehaviourTest(unittest.TestCase):
             # of the four tied top-layer cells, the smallest element id wins
             top = [i for i in range(len(cells)) if centers[i][2] > 3.0e-5]
             self.assertEqual(record["cell_index"], min(top))
+
+    def test_probe_gradient_recovers_a_known_linear_field(self):
+        """Spec 6.3.5. A linear field has a constant, exactly known gradient."""
+        with tempfile.TemporaryDirectory() as temporary:
+            problem = _FakeProblem()
+            points = problem.fes[0].points
+            # T = 300 + 1.3e6 x - 0.7e6 y + 0.25e6 z
+            gx, gy, gz = 1.3e6, -0.7e6, 0.25e6
+            temperature = (300.0 + gx * points[:, 0] + gy * points[:, 1]
+                           + gz * points[:, 2]).reshape(-1, 1)
+            recorder = self._recorder(temporary,
+                                      probes_m=[(0.5e-3, 0.5e-3, 6.0e-5)])
+            recorder.observe(problem, temperature, _step(1.0e-3, 0))
+            recorder.finalize()
+            row = json.loads((Path(temporary) / "online_observables.jsonl")
+                             .read_text(encoding="utf-8").splitlines()[0])
+            grad = row["probe_grad_K_per_m"][0]
+            for got, want in zip(grad, (gx, gy, gz)):
+                self.assertAlmostEqual(got / want, 1.0, places=9)
+
+    def test_probe_gradient_matches_the_face_mean_difference_quotient(self):
+        """The meta claims the trilinear form reduces to the face-mean
+        difference quotient on an axis-aligned grid. Check that, don't assert it."""
+        rng = np.random.default_rng(20260821)
+        node_xyz = np.array([[0.0, 0.0, 0.0], [4e-5, 0.0, 0.0],
+                             [4e-5, 4e-5, 0.0], [0.0, 4e-5, 0.0],
+                             [0.0, 0.0, 4e-5], [4e-5, 0.0, 4e-5],
+                             [4e-5, 4e-5, 4e-5], [0.0, 4e-5, 4e-5]])
+        values = rng.uniform(300.0, 3000.0, size=8)
+        grad = trilinear_gradient_at_centre(node_xyz, values)
+        # +x face is nodes 1,2,5,6; -x face is 0,3,4,7
+        dx = (values[[1, 2, 5, 6]].mean() - values[[0, 3, 4, 7]].mean()) / 4e-5
+        dy = (values[[2, 3, 6, 7]].mean() - values[[0, 1, 4, 5]].mean()) / 4e-5
+        dz = (values[[4, 5, 6, 7]].mean() - values[[0, 1, 2, 3]].mean()) / 4e-5
+        for got, want in zip(grad, (dx, dy, dz)):
+            self.assertAlmostEqual(got / want, 1.0, places=9)
+
+    def test_degenerate_element_yields_no_fabricated_gradient(self):
+        flat = np.zeros((8, 3))
+        self.assertIsNone(trilinear_gradient_at_centre(flat, np.arange(8.0)))
+
+    def test_band_accounting_partitions_cells_and_radiance(self):
+        """Spec 3.2: counts and radiance weights across the instrument bands."""
+        with tempfile.TemporaryDirectory() as temporary:
+            problem = _FakeProblem()
+            points = problem.fes[0].points
+            # top layer: two cells cold, one in range, one over range
+            temperature = np.full((len(points), 1), 400.0)
+            recorder = self._recorder(temporary)
+            # Node averaging is what sets cell temperature, so build the field
+            # from the nodes and let the cells fall where they fall: the two
+            # cells spanning x in [1,2] mm come out at 4800 K (over range) and
+            # the two spanning [0,1] mm at 3150 K (in range).
+            temperature = np.where(points[:, 0:1] > 0.5e-3, 4800.0, 1500.0)
+            temperature = np.where(points[:, 2:3] > 3.0e-5, temperature, 400.0)
+            recorder.observe(problem, temperature, _step(1.0e-3, 0))
+            recorder.finalize()
+            row = json.loads((Path(temporary) / "online_observables.jsonl")
+                             .read_text(encoding="utf-8").splitlines()[0])
+            counts = row["band_cells"]
+            self.assertEqual(sum(counts.values()), 4)
+            self.assertEqual(counts["below_range"], 0)
+            self.assertEqual(counts["in_range"], 2)
+            self.assertEqual(counts["above_range"], 2)
+            self.assertEqual(row["n_hot"], counts["in_range"] + counts["above_range"])
+            for key in ("band_radiance_weight_short", "band_radiance_weight_long"):
+                weights = [v for v in row[key].values() if v is not None]
+                self.assertAlmostEqual(sum(weights), 1.0, places=12)
+
+            # The point of shipping radiance weights at all: they are NOT the
+            # cell fractions. Over-range cells are half the cells but carry the
+            # large majority of the signal.
+            short = row["band_radiance_weight_short"]
+            long_ = row["band_radiance_weight_long"]
+            self.assertAlmostEqual(counts["above_range"] / 4.0, 0.5)
+            self.assertGreater(short["above_range"], 0.8)
+            # and the shorter channel is the more hot-biased of the two (Wien),
+            # which is why both channels are reported rather than one
+            self.assertGreater(short["above_range"], long_["above_range"])
+            self.assertFalse(row["two_colour_inversion_failed"])
 
     def test_over_range_is_flagged_but_the_reading_is_not_clamped(self):
         with tempfile.TemporaryDirectory() as temporary:
