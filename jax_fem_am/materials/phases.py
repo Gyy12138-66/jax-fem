@@ -166,6 +166,44 @@ def thermal_material_quads(
         np.where(is_powder, k_powder_quad, np.where(is_liquid, k_liquid_quad, np.where(is_mushy, k_mushy, k_solid_quad))),
     )
 
+    # Substrate/support keep their fixture identity in phase_quad, so they
+    # fall through the branches above to solid properties at any
+    # temperature. follow-temperature routes their rho/cp/k through the
+    # mushy/liquid branches from the local temperature instead; the
+    # mechanical fixture treatment is unaffected.
+    if (
+        getattr(args, "fixture_thermal_phase", "frozen-solid")
+        == "follow-temperature"
+        and args.liquidus_temperature > args.solidus_temperature
+    ):
+        is_fixture = (
+            (phase_quad == STATE_SUBSTRATE)
+            | (phase_quad == STATE_SUPPORT)
+        )
+        fixture_liquid = is_fixture & (
+            T_old_quad >= args.liquidus_temperature
+        )
+        fixture_mushy = (
+            is_fixture
+            & (T_old_quad >= args.solidus_temperature)
+            & (T_old_quad < args.liquidus_temperature)
+        )
+        rho_phase = np.where(
+            fixture_liquid,
+            rho_liquid,
+            np.where(fixture_mushy, rho_mushy, rho_phase),
+        )
+        cp_phase = np.where(
+            fixture_liquid,
+            cp_liquid_quad,
+            np.where(fixture_mushy, cp_mushy, cp_phase),
+        )
+        k_phase = np.where(
+            fixture_liquid,
+            k_liquid_quad,
+            np.where(fixture_mushy, k_mushy, k_phase),
+        )
+
     # Unprinted region: either powder bed or near-void material.
     # In layer_on_scan mode with future_layer_mode=void, future layers are not
     # physically spread yet, so they should not act as a powder heat sink before

@@ -107,6 +107,8 @@ class TransientThermal(Problem):
         solidus_temperature=0.0,
         liquidus_temperature=0.0,
         latent_heat=0.0,
+        source_depth_cutoff=0.0,
+        source_cutoff_renormalize=False,
     ):
         self.convection_h = convection_h
         self.process_ambient = ambient
@@ -131,6 +133,19 @@ class TransientThermal(Problem):
                 f"got {source_model!r}"
             )
         self.source_model = source_model
+        self.source_depth_cutoff = float(source_depth_cutoff)
+        self.source_cutoff_renormalize = bool(source_cutoff_renormalize)
+        if not math.isfinite(self.source_depth_cutoff) or self.source_depth_cutoff < 0.0:
+            raise ValueError("source_depth_cutoff must be finite and nonnegative")
+        if self.source_depth_cutoff > 0.0 and self.source_model != "legacy":
+            raise ValueError(
+                "source_depth_cutoff is only implemented for the legacy "
+                "source model"
+            )
+        if self.source_cutoff_renormalize and self.source_depth_cutoff <= 0.0:
+            raise ValueError(
+                "source_cutoff_renormalize requires source_depth_cutoff > 0"
+            )
         self.solidus_temperature = float(solidus_temperature)
         self.liquidus_temperature = float(liquidus_temperature)
         self.latent_heat = float(latent_heat)
@@ -209,6 +224,12 @@ class TransientThermal(Problem):
                 f"source_model must be one of {sorted(SOURCE_MODELS)}, "
                 f"got {source_model!r}"
             )
+        source_depth_cutoff = float(
+            getattr(self, "source_depth_cutoff", 0.0)
+        )
+        source_cutoff_renormalize = bool(
+            getattr(self, "source_cutoff_renormalize", False)
+        )
         solidus_temperature = float(
             getattr(self, "solidus_temperature", 0.0)
         )
@@ -276,6 +297,26 @@ class TransientThermal(Problem):
                     np.exp(-depth / source_depth[0]),
                     0.0,
                 )
+                if source_depth_cutoff > 0.0:
+                    # Deposition band: the exponential tail below the cutoff
+                    # depth is not absorbed, so a thin powder layer cannot
+                    # leak most of the beam power into the fixture beneath
+                    # it. With renormalization the band re-integrates to the
+                    # full absorbed power (reading where absorption is
+                    # confined to the powder layer); without it the tail
+                    # fraction stays unabsorbed.
+                    q_depth = np.where(
+                        depth <= source_depth_cutoff,
+                        q_depth,
+                        0.0,
+                    )
+                    if source_cutoff_renormalize:
+                        q_depth = q_depth / (
+                            1.0
+                            - np.exp(
+                                -source_depth_cutoff / source_depth[0]
+                            )
+                        )
                 # The in-plane Gaussian integrates to pi*r_b^2/2 and the
                 # one-sided exponential depth decay integrates to source_depth.
                 # The factor 2 makes the integral equal the absorbed power.
