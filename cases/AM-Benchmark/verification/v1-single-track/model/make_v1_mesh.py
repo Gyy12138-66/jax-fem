@@ -48,7 +48,8 @@ def _count(length, name):
 
 
 NX, NY, NZ = _count(args.lx, "lx"), _count(args.ly, "ly"), _count(args.lz, "lz")
-if round(LAYER_THICKNESS / args.cell_size) * args.cell_size != LAYER_THICKNESS:
+n_layer = round(LAYER_THICKNESS / args.cell_size)
+if abs(n_layer * args.cell_size - LAYER_THICKNESS) > 1e-12:
     raise SystemExit(
         f"cell size {args.cell_size} does not tile the 20 um layer"
     )
