@@ -336,6 +336,18 @@ def main():
     args.source_depth = args.source_depth if args.source_depth > 0 else max(0.5 * args.beam_radius, 0.05 * build_span)
     if args.front_surface_loss_h > 0.0 and args.front_surface_loss_thickness <= 0.0:
         args.front_surface_loss_thickness = args.source_depth
+    source_depth_cutoff = getattr(args, "source_depth_cutoff", 0.0) or 0.0
+    if source_depth_cutoff < 0.0:
+        raise ValueError("--source-depth-cutoff must be nonnegative")
+    if source_depth_cutoff > 0.0 and args.source_model != "legacy":
+        raise ValueError(
+            "--source-depth-cutoff is only implemented for "
+            "--source-model legacy"
+        )
+    if getattr(args, "source_cutoff_renormalize", False) and source_depth_cutoff <= 0.0:
+        raise ValueError(
+            "--source-cutoff-renormalize requires --source-depth-cutoff > 0"
+        )
 
     if args.path_file:
         step_states, scan_length, actual_scan_speed = generate_path_file_step_states(args, part_pmin, part_pmax, build_axis_id)
@@ -435,6 +447,8 @@ def main():
             args.solidus_temperature,
             args.liquidus_temperature,
             args.latent_heat,
+            source_depth_cutoff,
+            getattr(args, "source_cutoff_renormalize", False),
         ),
     )
     if args.thermal_mass_lumping:

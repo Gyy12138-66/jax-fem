@@ -192,6 +192,46 @@ def build_parser(config=None):
     )
     parser.add_argument("--beam-radius", type=float, default=cfg(config, "beam_radius", 1.0e-4))
     parser.add_argument("--source-depth", type=float, default=cfg(config, "source_depth", 6.0e-5))
+    parser.add_argument(
+        "--source-depth-cutoff",
+        type=float,
+        default=cfg(config, "source_depth_cutoff", 0.0),
+        help=(
+            "Optional cutoff depth in metres for the legacy exponential "
+            "volumetric source: no energy is deposited deeper than this "
+            "below the current laser surface, so the exponential tail "
+            "cannot reach substrate/support under a thin powder layer. "
+            "0 keeps the historical half-space behaviour. Only valid "
+            "with --source-model legacy."
+        ),
+    )
+    parser.add_argument(
+        "--source-cutoff-renormalize",
+        dest="source_cutoff_renormalize",
+        action="store_true",
+        default=cfg(config, "source_cutoff_renormalize", False),
+        help=(
+            "With --source-depth-cutoff, renormalize the truncated depth "
+            "profile so the band still receives the full absorbed power "
+            "(reading where absorption is confined to the powder layer). "
+            "Off leaves the truncated tail energy unabsorbed."
+        ),
+    )
+    parser.add_argument("--no-source-cutoff-renormalize", dest="source_cutoff_renormalize", action="store_false")
+    parser.add_argument(
+        "--fixture-thermal-phase",
+        choices=("frozen-solid", "follow-temperature"),
+        default=cfg(config, "fixture_thermal_phase", "frozen-solid"),
+        help=(
+            "Thermal property treatment for substrate/support quadrature "
+            "points. frozen-solid keeps the historical behaviour (always "
+            "solid-branch rho/cp/k regardless of temperature); "
+            "follow-temperature lets their rho/cp/k enter the "
+            "mushy/liquid branches once the local temperature crosses "
+            "solidus/liquidus, while the mechanical fixture identity is "
+            "unchanged."
+        ),
+    )
 
     parser.add_argument("--build-axis", choices=("x", "y", "z"), default=cfg(config, "build_axis", "x"))
     parser.add_argument("--base-side", choices=("min", "max"), default=cfg(config, "base_side", "min"))
@@ -366,6 +406,56 @@ def build_parser(config=None):
     parser.add_argument("--thermal-output-every", type=int, default=cfg(config, "thermal_output_every", 0))
     parser.add_argument("--mechanics-output-every", type=int, default=cfg(config, "mechanics_output_every", 1))
     parser.add_argument("--summary-every", type=int, default=cfg(config, "summary_every", 1))
+    # ---- online in-circle pyrometer observables (D-V2-25, IET-20) ----
+    # DEFAULT OFF. With --online-observables absent, recorder_from_args() returns
+    # None and no observation code runs at all: the solve path is untouched.
+    # These exist because VTU-cadence output cannot resolve a 3.077 ms beam
+    # dwell without writing whole-mesh files; the recorder writes a few scalars
+    # per solver step instead, at dt = 76.9 us.
+    parser.add_argument("--online-observables", dest="online_observables",
+                        action="store_true",
+                        default=cfg(config, "online_observables", False),
+                        help="Accumulate in-circle pyrometer observables every "
+                             "solver step into online_observables.jsonl. Writes "
+                             "no VTU and stores no field. Off by default.")
+    parser.add_argument("--no-online-observables", dest="online_observables",
+                        action="store_false")
+    parser.add_argument("--online-observables-run-id",
+                        default=cfg(config, "online_observables_run_id", None),
+                        help="Opaque manifest digest binding JSONL/meta to this run.")
+    parser.add_argument("--online-observables-window",
+                        default=cfg(config, "online_observables_window", "0.45,0.90"),
+                        help="t_lo,t_hi [s] recording window (default 0.45,0.90).")
+    parser.add_argument("--online-observables-every", type=int,
+                        default=cfg(config, "online_observables_every", 1),
+                        help="Record every N-th solver step inside the window "
+                             "(1 = every step, the default).")
+    parser.add_argument("--online-observables-spot-center",
+                        default=cfg(config, "online_observables_spot_center", ""),
+                        help="x,y [m] pyrometer spot centre; empty = mesh xy "
+                             "bounding-box centre, matching analyze_pyrometer.py.")
+    parser.add_argument("--online-observables-spot-diameter", type=float,
+                        default=cfg(config, "online_observables_spot_diameter", 2.0e-3))
+    parser.add_argument("--online-observables-threshold-c", type=float,
+                        default=cfg(config, "online_observables_threshold_c", 1000.0),
+                        help="Pyrometer lower limit [degC] for the adopted "
+                             "conditional average.")
+    parser.add_argument("--online-observables-range-max-c", type=float,
+                        default=cfg(config, "online_observables_range_max_c", 3000.0),
+                        help="Pyrometer upper limit [degC]; used for over-range "
+                             "counting only, never to clamp a reading.")
+    parser.add_argument("--online-observables-wavelengths-um",
+                        default=cfg(config, "online_observables_wavelengths_um", "0.95,1.05"),
+                        help="Two-colour channel wavelengths [um], shorter first.")
+    parser.add_argument("--online-observables-probes",
+                        default=cfg(config, "online_observables_probes", ""),
+                        help="Fixed probe points as 'x,y,z;x,y,z;...' [m] for the "
+                             "Fig 15/16 target (D-V2-27). Empty = no probes.")
+    parser.add_argument("--online-observables-all-depths",
+                        dest="online_observables_all_depths", action="store_true",
+                        default=cfg(config, "online_observables_all_depths", False),
+                        help="Include sub-surface cells; default is top layer only, "
+                             "because a pyrometer is an optical surface instrument.")
     parser.add_argument("--calibration-dir", default=cfg(config, "calibration_dir", None))
     parser.add_argument("--output-dir", default=cfg(config, "output_dir", "/home/user/work/159/output/inp_thermal_stress_oneway_layers"))
     return parser

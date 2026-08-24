@@ -1,7 +1,11 @@
 # V1 single-track deviation registry (Kaess discipline: register, don't silently fill)
 # Scope: reproducing Balbaa2022 (DOI 10.3390/jmmp6010002) single-track model and
 # comparing against NIST AMB2018-02 (Lane2020, DOI 10.1007/s40192-020-00169-1).
-# Status values: open | resolved | accepted-gap
+# Status values: open | resolved | ambiguous | accepted-gap
+#   ambiguous = the paper admits TWO defensible readings and no evidence in it
+#   separates them. Both are recorded, one is adopted and named as adopted, and
+#   the exposure is quantified. Not the same as "open" (which means we still owe
+#   work) and not the same as "resolved" (which claims the question is settled).
 # "adopted" fields state what WE will use when a run cannot proceed otherwise;
 # every adopted value must be visible in RESULTS.md, never tuned to match outputs.
 
@@ -128,9 +132,17 @@
 - id: D-V1-19
   what: radiation emissivity and convection coefficient actually applied
   paper_says: "radiation: Eq 8 with powder-bed emissivity from Eq 9-11 (es = 0.4 -> e_pb = 0.5312 at phi = 0.4); convection: Eq 4-7 flat-plate correlation with N2 at 3 m/s, film-temperature gas properties not tabulated"
-  status: resolved
-  adopted: "emissivity 0.5312 (computed from his Eq 9-11), constant h = 20 W/m2K"
-  justification: "both losses are O(1e-4) of absorbed laser power at melt-pool scale and time; the exact h cannot change the triangle. Derivation of e_pb printed in make_v1_tables.py output"
+  status: ambiguous
+  status_changed: "2026-08-20 (Opus5 line-by-line audit of Eq 1-24, IET-19; closed under IET-20). WAS resolved. Downgraded because the original entry silently picked ONE of two defensible readings of Table 1 and recorded it as settled. The numbers below did not change; the honesty of the registration did."
+  the_ambiguity: "Table 1 prints the row as 'Emissivity (e) 0.4'. But in HIS OWN Eq 8/9 the symbol `e` is the POWDER-BED emissivity and `e_s` is the bulk-solid one. So the printed 0.4 admits two readings that cannot be separated from the text: (A) 0.4 is e_s -> feed Eq 9-11 -> e_pb = 0.5312, which is what we adopted; (B) 0.4 is already e, i.e. he radiated with 0.4 and Eq 9-11 is background derivation he did not re-apply. Under reading (B) we are radiating 33 % more than he did."
+  reading_A_adopted: "e_pb = 0.5312, computed from his Eq 9-11 at es = 0.4, phi = 0.4. Exactly reproduced independently (model/emissivity_bracket.py and V2 make_v1_tables.py); the arithmetic is not in doubt, only which symbol Table 1 names."
+  reading_B_alternative: "e = 0.4 taken literally from the Table 1 row. Consistent with the printed symbol; inconsistent with Table 1 also listing the phi = 0.4 porosity that Eq 9-11 needs."
+  why_it_stays_ambiguous: "no third piece of evidence exists in the paper. He never prints a radiated-power number, never plots a surface-loss term, and the Fig 7 contours are far too coarse to separate a 33 % change in a term this small. Choosing between (A) and (B) would be a preference, not a finding, so both are registered."
+  quantified_both_readings_immaterial: "MEASURED on the V2 thermal-gate as-is production arm (box-159, 2026-08-19, 8866/8866 ledger steps, branch tip 9fecd40), summing the ledger over the WHOLE run: top-surface convection + radiation together remove surface_loss_j = 0.1297 J, against laser_deposited_j = 28.3543 J into the domain and dirichlet_exchange_into_domain_j = -35.8953 J through the fixed 353.15 K baseplate. Surface losses are therefore 0.46 % of deposited energy and the baseplate is the dominant sink by ~277x. Reading (B) scales the radiative part of that 0.1297 J by 0.4/0.5312; the resulting change is far below any observable the V1 triangle or the V2 thermal gate reports. NEITHER READING CAN CHANGE ANY CONCLUSION -- which is exactly why registering the ambiguity costs nothing and hiding it would have been indefensible."
+  convection_leg_unchanged: "constant h = 20 W/m2K instead of the Eq 5-7 film-temperature correlation. Recomputed from his own recipe (Churchill flat plate, N2 at 3 m/s, W = 250 mm, film temperature 400-700 K): h = 12-13 W/m2K, nearly flat in film temperature. Our 20 is ~1.6x high, i.e. biased toward MORE cooling (conservative), and it lives inside the same 0.1297 J. A strict Balbaa-parity arm would swap in Eq 6-7; it is a cheap change with nothing measurable riding on it."
+  two_colour_immunity: "the D-V2-24 two-colour synthetic reading is a RATIO of two radiances, so a grey-body emissivity cancels exactly. That reading is therefore immune to this ambiguity by construction -- worth stating, because it means the code-to-experiment leg cannot be contaminated by whichever reading is right."
+  adopted: "reading (A): emissivity 0.5312, constant h = 20 W/m2K. UNCHANGED -- the downgrade is to the status, not to the model."
+  resolution_path: "none available from the paper. Carry both readings; report reading (A) as adopted with (B) named. If Balbaa's raw model files ever surface, one line of his ABAQUS input settles it."
 
 - id: D-V1-20
   what: printed Sih-Barlow equations do not reproduce the paper's own Fig 1 powder curve

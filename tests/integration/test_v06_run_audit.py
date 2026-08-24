@@ -255,6 +255,31 @@ class RunAuditTest(unittest.TestCase):
         self.assertEqual(result["transient"]["invalid_step_count"], 1)
         self.assertEqual(result["transient"]["minimum_temperature"], -1.0)
 
+    def test_thermal_only_audit_does_not_require_release(self):
+        points = regular_tetrahedron([0.0, 0.0, 0.0])
+        cells = np.asarray([[0, 1, 2, 3]])
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            meshio.write(
+                run_dir / "step_000000_scan.vtu",
+                meshio.Mesh(
+                    points=points,
+                    cells=[("tetra", cells)],
+                    point_data={"T": np.full(4, 300.0), "u": np.zeros((4, 3))},
+                    cell_data={
+                        "vm_quad": [np.full(1, np.nan)],
+                        "eq_plastic_strain": [np.full(1, np.nan)],
+                        "printed": [np.ones(1)],
+                        "mechanics_valid": [np.zeros(1)],
+                    },
+                ),
+            )
+            result = audit_run(run_dir, ambient=300.0, thermal_only=True)
+        self.assertTrue(result["thermal_only"])
+        self.assertIsNone(result["release"])
+        self.assertTrue(result["transient"]["all_steps_valid"])
+        self.assertEqual(result["transient"]["steps"][0]["mechanics_valid_fraction"], 0.0)
+
     def test_hex8_release_audit_excludes_exact_removed_cells(self):
         points = np.asarray(
             [

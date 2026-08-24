@@ -99,6 +99,8 @@ def integrate_volume_terms(
     solidus_temperature=None,
     liquidus_temperature=None,
     latent_heat=0.0,
+    source_depth_cutoff_m=0.0,
+    source_cutoff_renormalize=False,
 ):
     """Integrate the explicit volume terms used by the v03 weak form."""
     jxw = np.asarray(jxw, dtype=np.float64)
@@ -168,6 +170,18 @@ def integrate_volume_terms(
         raise ValueError("beam_radius_m must be positive")
     if source_model == "legacy" and scalars["source_depth_m"] <= 0.0:
         raise ValueError("source_depth_m must be positive for legacy source")
+    source_depth_cutoff_m = float(source_depth_cutoff_m)
+    source_cutoff_renormalize = bool(source_cutoff_renormalize)
+    if not np.isfinite(source_depth_cutoff_m) or source_depth_cutoff_m < 0.0:
+        raise ValueError("source_depth_cutoff_m must be finite and nonnegative")
+    if source_depth_cutoff_m > 0.0 and source_model != "legacy":
+        raise ValueError(
+            "source_depth_cutoff_m is only implemented for the legacy source"
+        )
+    if source_cutoff_renormalize and source_depth_cutoff_m <= 0.0:
+        raise ValueError(
+            "source_cutoff_renormalize requires source_depth_cutoff_m > 0"
+        )
     if scalars["effective_laser_power_w"] < 0.0:
         raise ValueError("effective_laser_power_w must be nonnegative")
     if scalars["latent_heat"] < 0.0:
@@ -246,6 +260,20 @@ def integrate_volume_terms(
             np.exp(-depth / scalars["source_depth_m"]),
             0.0,
         )
+        if source_depth_cutoff_m > 0.0:
+            # Mirror of the solver's deposition band (physics/thermal.py):
+            # keep the reconstruction bit-for-bit aligned with the kernel.
+            q_depth = np.where(
+                depth <= source_depth_cutoff_m,
+                q_depth,
+                0.0,
+            )
+            if source_cutoff_renormalize:
+                # Mirror the kernel's numerically stable captured fraction.
+                captured_fraction = -np.expm1(
+                    -source_depth_cutoff_m / scalars["source_depth_m"]
+                )
+                q_depth = q_depth / captured_fraction
         q_laser = (
             2.0
             * scalars["effective_laser_power_w"]
@@ -521,6 +549,12 @@ def extract_solver_step(
             0.0,
         ),
         latent_heat=getattr(problem, "latent_heat", 0.0),
+        source_depth_cutoff_m=getattr(problem, "source_depth_cutoff", 0.0),
+        source_cutoff_renormalize=getattr(
+            problem,
+            "source_cutoff_renormalize",
+            False,
+        ),
     )
     surface_loss = _surface_exchange_from_problem(
         problem, temperature_new, dt_s
