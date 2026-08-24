@@ -439,16 +439,23 @@ class OnlineObservableRecorder:
 
     # -------------------------------------------------------------- recording
     def observe(self, problem, temperature_new, step_state):
-        """Called once per accepted thermal solve.  Never raises into the run."""
+        """Record one accepted solve, failing closed on any recorder error.
+
+        Once explicitly enabled, these values are part of the preregistered
+        score rather than best-effort telemetry.  Continuing after an error
+        could make a truncated JSONL look like a valid response trace.
+        """
         if self.disabled_reason is not None:
-            return
+            raise RuntimeError(
+                f"online observables previously failed: {self.disabled_reason}")
         try:
             self._observe(problem, temperature_new, step_state)
-        except Exception as error:                       # observability only
+        except Exception as error:
             self.disabled_reason = f"{type(error).__name__}: {error}"
-            print(f"online observables DISABLED after {self.rows_written} rows: "
-                  f"{self.disabled_reason}")
             self._close()
+            raise RuntimeError(
+                f"online observables failed after {self.rows_written} rows: "
+                f"{self.disabled_reason}") from error
 
     def _observe(self, problem, temperature_new, step_state):
         # Absolute time is the running sum of the per-step dt, which is exactly
@@ -572,9 +579,9 @@ class OnlineObservableRecorder:
         """Flush and print a one-line summary.  Safe to call more than once."""
         self._close()
         if self.disabled_reason is not None:
-            print(f"online observables: DISABLED ({self.disabled_reason}); "
-                  f"{self.rows_written} rows survive in {self.path}")
-            return
+            raise RuntimeError(
+                f"online observables incomplete after {self.rows_written} rows: "
+                f"{self.disabled_reason}")
         if self.rows_written == 0:
             print("online observables: enabled but no step fell inside the "
                   f"window {self.window_s} (last time {self.time_s:.6f} s) -- "

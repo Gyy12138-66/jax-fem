@@ -65,12 +65,24 @@ KEFF_JSON=$M/derived/keff_${TAG}.json
 say() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" | tee -a "$LOG"; }
 has()  { [ "${STAGES#*$1}" != "$STAGES" ]; }
 is_complete() {
-  python3 -c "
-import json,sys,os
-p=os.path.join('$1','thermal_energy_ledger_summary.json')
-try: ok=json.load(open(p)).get('complete') is True
-except Exception: ok=False
-sys.exit(0 if ok else 1)" 2>/dev/null
+  python3 - "$1" "$OBS_WINDOW" <<'PY' 2>/dev/null
+import json, os, sys
+out, expected_window = sys.argv[1:]
+try:
+    ledger = json.load(open(os.path.join(out, "thermal_energy_ledger_summary.json"), encoding="utf-8"))
+    meta = json.load(open(os.path.join(out, "online_observables_meta.json"), encoding="utf-8"))
+    summary = json.load(open(os.path.join(out, "online_observables_summary.json"), encoding="utf-8"))
+    rows = os.path.join(out, "online_observables.jsonl")
+    expected = [float(v) for v in expected_window.split(",")]
+    ok = (ledger.get("complete") is True
+          and os.path.getsize(rows) > 0
+          and meta.get("window_s") == expected
+          and summary.get("meta", {}).get("window_s") == expected
+          and summary.get("response_integrated_series"))
+except Exception:
+    ok = False
+sys.exit(0 if ok else 1)
+PY
 }
 
 # ---- 起飞前体检(Fable5 预检清单:材料表逐值溯源 + 配置回显 + 判据先打印)----
@@ -139,6 +151,7 @@ run_arm() {
     --mechanics-every 0 \
     --thermal-mass-lumping --thermal-output-every "$OUT_EVERY" --summary-every 200 \
     --phase-history-model paper_irreversible \
+    --fixture-thermal-phase follow-temperature \
     --online-observables --online-observables-window "$OBS_WINDOW" \
     --online-observables-probes "$OBS_PROBES" \
     > "$OUT/run.log" 2>&1

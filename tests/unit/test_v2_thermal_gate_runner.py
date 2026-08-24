@@ -19,6 +19,9 @@ def test_production_runner_wires_preregistered_observables_and_source_band():
         "online_observables_summary.json",
         "--online-summary",
         "--observation-window",
+        "--fixture-thermal-phase follow-temperature",
+        'online_observables_summary.json',
+        'meta.get("window_s") == expected',
     )
     for token in required:
         assert token in text

@@ -230,17 +230,21 @@ class RecorderBehaviourTest(unittest.TestCase):
             self.assertEqual([round(r["time_s"], 9) for r in rows],
                              [1.0e-3, 4.0e-3, 7.0e-3])
 
-    def test_a_recorder_fault_disables_the_recorder_and_never_raises(self):
-        # An observability feature must not be able to kill a 7.5 h run.
+    def test_a_recorder_fault_fails_closed(self):
+        # Once enabled for a preregistered score, partial telemetry must abort:
+        # otherwise a truncated JSONL can look like a valid response trace.
         with tempfile.TemporaryDirectory() as temporary:
             recorder = self._recorder(temporary, spot_center_m=(9.0, 9.0))
             problem = _FakeProblem()
             temperature = np.full((len(problem.fes[0].points), 1), 2000.0)
-            recorder.observe(problem, temperature, _step(1.0e-3, 0))
+            with self.assertRaisesRegex(RuntimeError, "online observables failed"):
+                recorder.observe(problem, temperature, _step(1.0e-3, 0))
             self.assertIsNotNone(recorder.disabled_reason)
             self.assertIn("gauge cell set is empty", recorder.disabled_reason)
-            recorder.observe(problem, temperature, _step(1.0e-3, 0))
-            recorder.finalize()
+            with self.assertRaisesRegex(RuntimeError, "previously failed"):
+                recorder.observe(problem, temperature, _step(1.0e-3, 0))
+            with self.assertRaisesRegex(RuntimeError, "incomplete"):
+                recorder.finalize()
 
     def test_probe_reads_the_containing_cell_mean_not_a_corner_node(self):
         """Scoring spec 6.1. The discriminating case: a linear gradient, where
