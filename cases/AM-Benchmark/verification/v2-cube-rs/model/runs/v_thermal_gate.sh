@@ -51,7 +51,9 @@ cd /home/user/work/159
 
 if [ "$SMOKE" = "1" ]; then
   TAG=smoke; PATH_ARGS=(--tracks 6); MESH=$M/v2_multitrack_c3d8.inp
-  OUT_EVERY=10; COOL_STEPS=5
+  # Keep the registered 0.45--0.90 s protocol reachable. The short six-track
+  # scan is followed by inexpensive cooling steps through the end of the window.
+  OUT_EVERY=10; COOL_STEPS=90
 else
   TAG=gate; PATH_ARGS=(--exposure-area 10.0e-3); MESH=$M/v2_multitrack_c3d8.inp
   # 细步长 dt = 50 um / 0.65 m/s = 7.69e-5 s -> 每 100 步出一帧 = 7.7 ms <= 10 ms 协议增量
@@ -349,8 +351,12 @@ fi
 # ---- 阶段 4:对比 ----
 if has 4; then
   say "阶段 4:高温计协议提取 + 双臂对比"
-  for pair in "asis:$ASIS" "parity:$PARITY"; do
-    NAME=${pair%%:*}; DIR=${pair#*:}
+  for triple in "asis:$M/v2_material_config_thermal_asis.json:$ASIS" \
+                "parity:$PARITY_CFG:$PARITY"; do
+    NAME=${triple%%:*}; REST=${triple#*:}; CFG=${REST%%:*}; DIR=${REST#*:}
+    [ -s "$CFG" ] || { say "$NAME 缺少运行配置 $CFG，停止比较"; exit 2; }
+    is_complete "$NAME" "$CFG" "$DIR" \
+      || { say "$NAME 当前产物未通过 manifest/观测/audit 完整性检查，停止比较"; exit 2; }
     [ -s "$DIR/online_observables_summary.json" ] \
       || { say "$NAME 缺少在线响应积分摘要，停止比较"; exit 2; }
     python "$M/analyze_pyrometer.py" "$DIR" --arm "$NAME" \

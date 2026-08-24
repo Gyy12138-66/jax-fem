@@ -89,8 +89,10 @@ SOLVER_CMD=(
   --source-model legacy
   --beam-radius 5.0e-5
   --source-depth 1.0e-4
-  --source-depth-cutoff 2.0e-5
-  --source-cutoff-renormalize
+  # Accepted V1 baseline: apply Balbaa Eq. 18 through the full 100 um OPD.
+  # Never compress the source into the 20 um powder layer by renormalization.
+  --source-depth-cutoff 0
+  --no-source-cutoff-renormalize
   --laser-power "${POWER}"
   --dt "${DT}"
   --layer-activation-mode layer_on_scan

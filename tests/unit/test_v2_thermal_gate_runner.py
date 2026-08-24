@@ -43,6 +43,9 @@ def test_production_runner_wires_preregistered_observables_and_source_band():
         'audit = json.load(open(os.path.join(out, "run_audit.json")',
         'audit.get("thermal_only") is True',
         'audit.get("transient", {}).get("all_steps_valid") is True',
+        'OUT_EVERY=10; COOL_STEPS=90',
+        'is_complete "$NAME" "$CFG" "$DIR"',
+        '当前产物未通过 manifest/观测/audit 完整性检查',
     )
     for token in required:
         assert token in text
@@ -56,3 +59,7 @@ def test_production_runner_is_fail_closed():
     assert 'WARNING: run_audit 失败' not in text
     assert '$M/tables/k_liquid_keff.csv' not in text
     assert '$M/derived/keff_' not in text
+    stage4 = text.index('# ---- 阶段 4:对比 ----')
+    compare = text.index('python "$M/compare_thermal_gate.py"', stage4)
+    completeness = text.index('is_complete "$NAME" "$CFG" "$DIR"', stage4)
+    assert stage4 < completeness < compare
