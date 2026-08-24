@@ -36,6 +36,7 @@ def audit_solution_fields(
     source_free_upper_bound=None,
     temperature_atol_k=1.0e-3,
     excluded_cells=None,
+    thermal_only=False,
 ):
     ambient = float(ambient)
     if not np.isfinite(ambient):
@@ -201,16 +202,16 @@ def audit_solution_fields(
         "valid": bool(
             valid_mesh
             and finite_temperature
-            and finite_displacement
-            and finite_stress
-            and finite_eqp
-            and nonnegative_stress
-            and nonnegative_eqp
+            and (thermal_only or finite_displacement)
+            and (thermal_only or finite_stress)
+            and (thermal_only or finite_eqp)
+            and (thermal_only or nonnegative_stress)
+            and (thermal_only or nonnegative_eqp)
             and below_absolute_zero_count == 0
             and below_ambient_count == 0
             and above_upper_bound_count in (None, 0)
-            and mechanics_fraction == 1.0
-            and has_accepted_stress
+            and (thermal_only or mechanics_fraction == 1.0)
+            and (thermal_only or has_accepted_stress)
             and quality_rejected_count == 0
         ),
         "units": {
@@ -250,6 +251,7 @@ def audit_solution_fields(
             "minimum": eqp_min,
             "maximum": eqp_max,
         },
+        "thermal_only": bool(thermal_only),
         "mechanics_valid_fraction": mechanics_fraction,
         "stress": {
             **stress_summary,
@@ -290,6 +292,7 @@ def audit_vtu(
     quality_threshold,
     source_free_upper_bound=None,
     temperature_atol_k=1.0e-3,
+    thermal_only=False,
 ):
     import meshio
 
@@ -320,6 +323,7 @@ def audit_vtu(
         quality_threshold=quality_threshold,
         source_free_upper_bound=source_free_upper_bound,
         temperature_atol_k=temperature_atol_k,
+        thermal_only=thermal_only,
         excluded_cells=cell_data.get(
             "release_removed",
             np.zeros(len(mesh.cells[block_index].data), dtype=np.float64),
@@ -339,12 +343,15 @@ def audit_run(
     quality_threshold=0.05,
     source_free_upper_bound=None,
     temperature_atol_k=1.0e-3,
+    thermal_only=False,
 ):
     run_dir = Path(run_dir)
     steps = sorted(run_dir.glob("step_*.vtu"))
     release = run_dir / "release.vtu"
-    if not steps or not release.is_file():
-        raise ValueError("run must contain step_*.vtu and release.vtu")
+    if not steps:
+        raise ValueError("run must contain step_*.vtu")
+    if not thermal_only and not release.is_file():
+        raise ValueError("mechanical run must contain release.vtu")
     step_audits = [
         audit_vtu(
             path,
@@ -352,6 +359,7 @@ def audit_run(
             quality_threshold=quality_threshold,
             source_free_upper_bound=source_free_upper_bound,
             temperature_atol_k=temperature_atol_k,
+            thermal_only=thermal_only,
         )
         for path in steps
     ]
@@ -422,13 +430,15 @@ def audit_run(
         "units": step_audits[-1]["units"],
         "transient": transient,
         "latest_constrained": step_audits[-1],
-        "release": audit_vtu(
+        "thermal_only": bool(thermal_only),
+        "release": (None if thermal_only else audit_vtu(
             release,
             ambient=ambient,
             quality_threshold=quality_threshold,
             source_free_upper_bound=source_free_upper_bound,
             temperature_atol_k=temperature_atol_k,
-        ),
+            thermal_only=False,
+        )),
     }
 
 
@@ -439,6 +449,8 @@ def main(argv=None):
     parser.add_argument("--quality-threshold", type=float, default=0.05)
     parser.add_argument("--source-free-upper-bound", type=float)
     parser.add_argument("--temperature-atol-k", type=float, default=1.0e-3)
+    parser.add_argument("--thermal-only", action="store_true",
+                        help="Audit transient thermal steps without requiring release.vtu.")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     report = audit_run(
@@ -447,6 +459,7 @@ def main(argv=None):
         quality_threshold=args.quality_threshold,
         source_free_upper_bound=args.source_free_upper_bound,
         temperature_atol_k=args.temperature_atol_k,
+        thermal_only=args.thermal_only,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
@@ -456,14 +469,15 @@ def main(argv=None):
     print(json.dumps({
         "output": str(args.output),
         "constrained_valid": report["transient"]["all_steps_valid"],
-        "release_valid": report["release"]["valid"],
-        "release_quality_filtered_vm_max": report["release"]["stress"][
-            "quality_filtered_max"
-        ],
+        "release_valid": (None if report["release"] is None
+                          else report["release"]["valid"]),
+        "release_quality_filtered_vm_max": (
+            None if report["release"] is None else
+            report["release"]["stress"]["quality_filtered_max"]
+        ),
     }, sort_keys=True))
-    return 0 if (
-        report["transient"]["all_steps_valid"] and report["release"]["valid"]
-    ) else 2
+    release_valid = (report["release"] is None or report["release"]["valid"])
+    return 0 if report["transient"]["all_steps_valid"] and release_valid else 2
 
 
 if __name__ == "__main__":

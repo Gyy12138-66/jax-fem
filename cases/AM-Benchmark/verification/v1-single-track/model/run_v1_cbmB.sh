@@ -28,6 +28,19 @@ RHO_SOLID="${RHO_SOLID:-}"          # optional override for D-V1-18 bounding run
 THERMAL_OUT_EVERY="${THERMAL_OUT_EVERY:-2}"
 OUT_ROOT="${OUT_ROOT:-${WORK_ROOT}/output/v1_${CASE_TAG}_P${POWER}_${RUN_ID}}"
 
+"${PYTHON_BIN}" - "${POWER}" "${SPEED}" "${DT}" "${RHO_SOLID:-}" <<'PY'
+import math, sys
+for name, raw in zip(("POWER", "SPEED", "DT", "RHO_SOLID"), sys.argv[1:]):
+    if not raw and name == "RHO_SOLID":
+        continue
+    try:
+        value = float(raw)
+    except ValueError as error:
+        raise SystemExit(f"v1: {name} must be one finite positive number") from error
+    if not math.isfinite(value) or value <= 0.0:
+        raise SystemExit(f"v1: {name} must be one finite positive number")
+PY
+
 MESH="${MESH:-${SCRIPT_DIR}/v1_single_track_c3d8.inp}"
 CONFIG="${CONFIG:-${SCRIPT_DIR}/v1_material_config.json}"
 PATH_FILE="${OUT_ROOT}/v1_path_${CASE_TAG}.csv"
@@ -110,8 +123,11 @@ if [[ -n "${RHO_SOLID}" ]]; then
 fi
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 if [[ -n "${EXTRA_ARGS}" ]]; then
-  # shellcheck disable=SC2206
-  SOLVER_CMD+=(${EXTRA_ARGS})
+  # Preserve argument boundaries and suppress pathname expansion. Quoted
+  # shell syntax is intentionally unsupported; use EXTRA_ARGS_ARRAY by
+  # sourcing a wrapper when an argument itself must contain whitespace.
+  read -r -a EXTRA_ARGV <<< "${EXTRA_ARGS}"
+  SOLVER_CMD+=("${EXTRA_ARGV[@]}")
 fi
 
 printf '%q ' "${SOLVER_CMD[@]}" > "${OUT_ROOT}/solver_command.txt"
@@ -121,7 +137,9 @@ printf '\n' >> "${OUT_ROOT}/solver_command.txt"
 
 "${PYTHON_BIN}" -m jax_fem_am.verification.run_audit "${OUT_ROOT}" \
   --output "${OUT_ROOT}/v1_run_audit.json" \
+  --thermal-only \
   --ambient "${AMBIENT_K}" \
-  --quality-threshold 0.05 || echo "v1 WARNING: run_audit failed" >&2
+  --quality-threshold 0.05
 
+printf 'complete\n' > "${OUT_ROOT}/DONE"
 echo "v1 ${CASE_TAG} complete: ${OUT_ROOT}"

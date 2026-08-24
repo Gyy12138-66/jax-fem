@@ -39,6 +39,7 @@ def test_production_runner_wires_preregistered_observables_and_source_band():
         'PARITY_CFG=$KEFF_DIR/v2_material_config_thermal_keff.json',
         'config["k_table_liquid"] = keff',
         'run_arm parity "$PARITY_CFG"',
+        '--output "$OUT/run_audit.json" --thermal-only',
     )
     for token in required:
         assert token in text

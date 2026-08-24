@@ -228,7 +228,8 @@ PY
   fi
   [ "$RC" -eq 0 ] || { say "$NAME 求解失败 rc=$RC，停止"; exit "$RC"; }
   python -m jax_fem_am.verification.run_audit "$OUT" \
-    --output "$OUT/run_audit.json" --ambient 313.0 --quality-threshold 0.05 \
+    --output "$OUT/run_audit.json" --thermal-only \
+    --ambient 313.0 --quality-threshold 0.05 \
     >> "$OUT/run.log" 2>&1 \
     || { say "$NAME run_audit 失败，停止"; exit 2; }
   for artifact in online_observables.jsonl online_observables_meta.json; do
