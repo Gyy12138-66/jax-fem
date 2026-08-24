@@ -110,6 +110,7 @@ try:
     ledger = json.load(open(os.path.join(out, "thermal_energy_ledger_summary.json"), encoding="utf-8"))
     meta = json.load(open(os.path.join(out, "online_observables_meta.json"), encoding="utf-8"))
     summary = json.load(open(os.path.join(out, "online_observables_summary.json"), encoding="utf-8"))
+    audit = json.load(open(os.path.join(out, "run_audit.json"), encoding="utf-8"))
     rows = os.path.join(out, "online_observables.jsonl")
     run_id = expected["run_id"]
     ok = (manifest.get("run_id") == run_id
@@ -122,6 +123,8 @@ try:
           and summary.get("n_rows") == sum(1 for line in open(rows, encoding="utf-8") if line.strip())
           and summary.get("coverage_s", [None, None])[0] <= 0.45 + 1.0e-9
           and summary.get("coverage_s", [None, None])[1] >= 0.90 - 1.0e-9
+          and audit.get("thermal_only") is True
+          and audit.get("transient", {}).get("all_steps_valid") is True
           and summary.get("response_integrated_series"))
 except Exception:
     ok = False

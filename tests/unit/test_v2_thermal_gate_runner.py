@@ -40,6 +40,9 @@ def test_production_runner_wires_preregistered_observables_and_source_band():
         'config["k_table_liquid"] = keff',
         'run_arm parity "$PARITY_CFG"',
         '--output "$OUT/run_audit.json" --thermal-only',
+        'audit = json.load(open(os.path.join(out, "run_audit.json")',
+        'audit.get("thermal_only") is True',
+        'audit.get("transient", {}).get("all_steps_valid") is True',
     )
     for token in required:
         assert token in text

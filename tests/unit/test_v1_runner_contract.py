@@ -14,6 +14,9 @@ def test_v1_runner_preserves_extra_argument_boundaries_and_validates_numbers():
     assert 'SOLVER_CMD+=("${EXTRA_ARGV[@]}")' in text
     assert 'SOLVER_CMD+=(${EXTRA_ARGS})' not in text
     assert 'math.isfinite(value)' in text
+    assert '--source-depth-cutoff 2.0e-5' in text
+    assert '--source-cutoff-renormalize' in text
+    assert '--fixture-thermal-phase follow-temperature' in text
 
 
 def test_v1_runner_only_marks_done_after_successful_audit():

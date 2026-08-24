@@ -89,6 +89,8 @@ SOLVER_CMD=(
   --source-model legacy
   --beam-radius 5.0e-5
   --source-depth 1.0e-4
+  --source-depth-cutoff 2.0e-5
+  --source-cutoff-renormalize
   --laser-power "${POWER}"
   --dt "${DT}"
   --layer-activation-mode layer_on_scan
@@ -117,6 +119,7 @@ SOLVER_CMD=(
   --thermal-output-every "${THERMAL_OUT_EVERY}"
   --summary-every 25
   --phase-history-model paper_irreversible
+  --fixture-thermal-phase follow-temperature
 )
 if [[ -n "${RHO_SOLID}" ]]; then
   SOLVER_CMD+=(--rho "${RHO_SOLID}")
