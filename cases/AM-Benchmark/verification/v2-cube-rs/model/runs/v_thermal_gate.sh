@@ -190,7 +190,10 @@ with open(sys.argv[1], newline="", encoding="utf-8") as handle:
     rows = list(csv.DictReader(handle))
 steps = int(sys.argv[2])
 path_end = float(rows[-1]["time"])
-remaining = 0.90 - path_end
+# Stay just inside the inclusive recorder boundary after repeated FP additions;
+# is_complete allows 1e-9 s at the registered 0.90 s endpoint.
+target = 0.90 - 1.0e-12
+remaining = target - path_end
 if steps <= 0 or remaining <= 0.0:
     raise SystemExit("smoke path already reaches/exceeds registered window end")
 print(f"{remaining / steps:.17g}")

@@ -25,9 +25,16 @@ def test_six_track_smoke_cooling_lands_on_registered_window_end(tmp_path):
         final_path_time = float(list(csv.DictReader(handle))[-1]["time"])
 
     cooling_steps = 90
-    cooling_dt = (0.90 - final_path_time) / cooling_steps
-    final_time = final_path_time + cooling_steps * cooling_dt
+    target = 0.90 - 1.0e-12
+    cooling_dt = (target - final_path_time) / cooling_steps
+    # Match the stepper's repeated floating-point time advancement rather than
+    # hiding accumulation error behind one multiplication.
+    final_time = final_path_time
+    for _ in range(cooling_steps):
+        final_time += cooling_dt
 
+    assert final_time - final_path_time > 1.0e-4  # cooling occurred
     assert abs(data["t_end_s"] - final_path_time) <= 1.0e-9
     assert 0.0 < cooling_dt <= 0.01
-    assert abs(final_time - 0.90) <= 1.0e-12
+    assert final_time <= 0.90
+    assert final_time >= 0.90 - 1.0e-9
