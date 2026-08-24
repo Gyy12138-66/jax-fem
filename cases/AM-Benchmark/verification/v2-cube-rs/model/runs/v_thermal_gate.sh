@@ -53,11 +53,11 @@ if [ "$SMOKE" = "1" ]; then
   TAG=smoke; PATH_ARGS=(--tracks 6); MESH=$M/v2_multitrack_c3d8.inp
   # Keep the registered 0.45--0.90 s protocol reachable. The short six-track
   # scan is followed by inexpensive cooling steps through the end of the window.
-  OUT_EVERY=10; COOL_STEPS=90
+  OUT_EVERY=10; COOL_STEPS=90; COOL_DT=dynamic-to-window-end
 else
   TAG=gate; PATH_ARGS=(--exposure-area 10.0e-3); MESH=$M/v2_multitrack_c3d8.inp
   # 细步长 dt = 50 um / 0.65 m/s = 7.69e-5 s -> 每 100 步出一帧 = 7.7 ms <= 10 ms 协议增量
-  OUT_EVERY=100; COOL_STEPS=40
+  OUT_EVERY=100; COOL_STEPS=40; COOL_DT=0.01
 fi
 ASIS=$OUTROOT/v2_thermal_${TAG}_asis
 PARITY=$OUTROOT/v2_thermal_${TAG}_parity
@@ -182,6 +182,21 @@ run_arm() {
     --power 220 --speed 0.650 --hatch 0.12e-3 \
     --output "$OUT/path.csv" --ledger-json "$OUT/path_ledger.json" \
     2>&1 | tee "$OUT/path.log" | sed 's/^/    /'
+  local ARM_COOL_DT="$COOL_DT"
+  if [ "$SMOKE" = "1" ]; then
+    ARM_COOL_DT=$(python3 - "$OUT/path.csv" "$COOL_STEPS" <<'PY'
+import csv, sys
+with open(sys.argv[1], newline="", encoding="utf-8") as handle:
+    rows = list(csv.DictReader(handle))
+steps = int(sys.argv[2])
+path_end = float(rows[-1]["time"])
+remaining = 0.90 - path_end
+if steps <= 0 or remaining <= 0.0:
+    raise SystemExit("smoke path already reaches/exceeds registered window end")
+print(f"{remaining / steps:.17g}")
+PY
+    ) || { say "$NAME 无法把 smoke cooling 精确落在 0.90 s，停止"; exit 2; }
+  fi
   local RUN_ID
   RUN_ID=$(build_manifest "$NAME" "$CFG" "$OUT/path.csv" "$OUT/run_manifest.json")
   set +e
@@ -202,7 +217,7 @@ run_arm() {
     --powder-mode powder --surface-selection exterior --boundary-tol 1.0e-6 \
     --quadrature-order 2 --ambient 313.0 --preheat-temperature 353.15 \
     --bottom-thermal-bc fixed --bottom-temperature 353.15 \
-    --cooling-steps "$COOL_STEPS" --cooling-dt 0.01 \
+    --cooling-steps "$COOL_STEPS" --cooling-dt "$ARM_COOL_DT" \
     --mechanics-every 0 \
     --thermal-mass-lumping --thermal-output-every "$OUT_EVERY" --summary-every 200 \
     --phase-history-model paper_irreversible \

@@ -43,7 +43,11 @@ def test_production_runner_wires_preregistered_observables_and_source_band():
         'audit = json.load(open(os.path.join(out, "run_audit.json")',
         'audit.get("thermal_only") is True',
         'audit.get("transient", {}).get("all_steps_valid") is True',
-        'OUT_EVERY=10; COOL_STEPS=90',
+        'OUT_EVERY=10; COOL_STEPS=90; COOL_DT=dynamic-to-window-end',
+        'path_end = float(rows[-1]["time"])',
+        'remaining = 0.90 - path_end',
+        'print(f"{remaining / steps:.17g}")',
+        '--cooling-steps "$COOL_STEPS" --cooling-dt "$ARM_COOL_DT"',
         'is_complete "$NAME" "$CFG" "$DIR"',
         '当前产物未通过 manifest/观测/audit 完整性检查',
     )
