@@ -32,14 +32,14 @@
 set -euo pipefail
 source /home/user/miniforge3/etc/profile.d/conda.sh
 conda activate jax-fem-env
-export PYTHONPATH=/home/user/work/159/jax-fem JAX_PLATFORM_NAME=cpu
+REPO="${REPO:-/home/user/work/159/jax-fem}"
+export PYTHONPATH="$REPO" JAX_PLATFORM_NAME=cpu
 export XLA_PYTHON_CLIENT_PREALLOCATE=false PYTHONUNBUFFERED=1 MKL_NUM_THREADS=6
 
-REPO=/home/user/work/159/jax-fem
 M=$REPO/cases/AM-Benchmark/verification/v2-cube-rs/model
 V2=$REPO/cases/AM-Benchmark/verification/v2-cube-rs
-OUTROOT=/home/user/work/159/output
-VT=/home/user/work/159/vtmp
+OUTROOT="${OUTROOT:-/home/user/work/159/output}"
+VT="${VT:-/home/user/work/159/vtmp}"
 SMOKE="${SMOKE:-0}"
 STAGES="${STAGES:-1 2 3 4}"
 # Balbaa Sec. 3.3 / scoring spec: response window and three top-layer probes.
@@ -47,7 +47,7 @@ OBS_WINDOW="${OBS_WINDOW:-0.45,0.90}"
 OBS_PROBES="${OBS_PROBES:-0.001,0.002,0.00042;0.002,0.002,0.00042;0.003,0.002,0.00042}"
 LOG=$VT/thermal_gate.log
 mkdir -p "$VT"
-cd /home/user/work/159
+cd "$REPO"
 
 if [ "$SMOKE" = "1" ]; then
   TAG=smoke; PATH_ARGS=(--tracks 6); MESH=$M/v2_multitrack_c3d8.inp
@@ -76,7 +76,7 @@ print(json.dumps({
     "laser_power_W": 220.0, "scan_speed_m_s": 0.650,
     "hatch_m": 0.12e-3, "layer_thickness_m": 4.0e-5,
     "beam_radius_m": 5.0e-5, "source_depth_m": 1.0e-4,
-    "source_depth_cutoff_m": 4.0e-5, "source_cutoff_renormalize": True,
+    "source_depth_cutoff_m": 0.0, "source_cutoff_renormalize": False,
     "fixture_thermal_phase": "follow-temperature", "dt_s": 7.6923e-5,
     "ambient_K": 313.0, "preheat_K": 353.15,
     "bottom_thermal_bc": "fixed", "bottom_temperature_K": 353.15,
@@ -213,7 +213,7 @@ PY
     --build-axis z --base-side min --layer-thickness 4.0e-5 --layers 1 \
     --support-thickness 4.0e-4 --path-file "$OUT/path.csv" --path-length-scale 1.0 \
     --source-model legacy --beam-radius 5.0e-5 --source-depth 1.0e-4 \
-    --source-depth-cutoff 4.0e-5 --source-cutoff-renormalize \
+    --source-depth-cutoff 0 --no-source-cutoff-renormalize \
     --laser-power 220 --dt 7.6923e-5 \
     --layer-activation-mode layer_on_scan --layer-activation-geometry intersection \
     --future-layer-mode void --active-window-below-layers 0 --inactive-mass-factor 1.0 \
