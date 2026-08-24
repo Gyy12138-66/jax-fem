@@ -237,6 +237,17 @@ class TestLedgerMirrorsKernel:
             )
             assert ledger == pytest.approx(kernel, rel=1.0e-12)
 
+    def test_tiny_cutoff_renormalization_stays_finite_and_mirrored(self):
+        cutoff = 1.0e-20
+        point = np.asarray([[0.0, 0.0, 0.0]])
+        weight = np.asarray([1.0e-15])
+        problem = _legacy_problem(cutoff=cutoff, renormalize=True)
+        kernel = weight[0] * _source_density(problem, tuple(point[0]))
+        ledger = self._ledger_laser_j(point, weight, cutoff, True)
+        assert math.isfinite(kernel)
+        assert math.isfinite(ledger)
+        assert ledger == pytest.approx(kernel, rel=1.0e-12)
+
     def test_ledger_cutoff_validation(self):
         with pytest.raises(ValueError, match="nonnegative"):
             self._ledger_laser_j(

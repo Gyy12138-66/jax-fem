@@ -81,6 +81,8 @@ def main():
     ap.add_argument("--arm", default=None, help="臂标签(parity / asis)")
     ap.add_argument("--spot-center", default=None,
                     help="圆心 x,y [m];缺省 = 网格 xy 包围盒中心")
+    ap.add_argument("--observation-window", default="0.45,0.90",
+                    help="在线观测窗 t0,t1 [s]，仅用于协议一致性校验")
     ap.add_argument("--spot-diameter", type=float, default=2.0e-3)
     ap.add_argument("--threshold-C", type=float, default=1000.0,
                     help="高温计量程下限")
@@ -96,6 +98,8 @@ def main():
                     help="双色合成读数的两个波长 [um](短波在前)")
     ap.add_argument("--tc-sensitivity", action="store_true",
                     help="额外输出波长分离的敏感性括号(峰值帧上)")
+    ap.add_argument("--online-summary", type=Path, default=None,
+                    help="求解步级在线观测摘要；给出后作为正式 10 ms series，VTU 仅作诊断")
     ap.add_argument("--output", type=Path, default=None)
     args = ap.parse_args()
 
@@ -236,6 +240,63 @@ def main():
             "full_spot_avg_K": float(np.mean([m["full_spot_avg_K"] for m in members])),
         })
 
+    online_summary = None
+    if args.online_summary is not None:
+        if not args.online_summary.is_file():
+            raise SystemExit(f"在线观测摘要不存在: {args.online_summary}")
+        online_summary = json.loads(args.online_summary.read_text(encoding="utf-8"))
+        online_meta = online_summary.get("meta", {})
+        expected_meta = {
+            "spot_center_m": [float(cx), float(cy)],
+            "spot_diameter_m": float(args.spot_diameter),
+            "threshold_C": float(args.threshold_C),
+            "range_max_C": float(args.range_max_C),
+            "window_s": [float(args.observation_window.split(",")[0]),
+                         float(args.observation_window.split(",")[1])],
+        }
+        for key, expected in expected_meta.items():
+            actual = online_meta.get(key)
+            if actual is None or not np.allclose(actual, expected, rtol=0.0,
+                                                  atol=1.0e-12):
+                raise SystemExit(
+                    f"在线观测摘要协议不匹配 {key}: {actual!r} != {expected!r}")
+        actual_wl = online_meta.get("two_colour", {}).get("wavelengths_m")
+        if actual_wl is None or not np.allclose(actual_wl, wl, rtol=0.0,
+                                                atol=1.0e-12):
+            raise SystemExit(f"在线观测摘要波长不匹配: {actual_wl!r} != {wl!r}")
+        expected_scope = ("all depths" if args.all_depths else
+                          f"top layer (z >= {layer_bottom:.6e} m)")
+        if online_meta.get("depth_scope") != expected_scope:
+            raise SystemExit("在线观测摘要深度口径不匹配: "
+                             f"{online_meta.get('depth_scope')!r} != {expected_scope!r}")
+        if not np.isclose(float(online_summary.get("response_bin_ms", np.nan)),
+                          args.bin_ms, rtol=0.0, atol=1.0e-12):
+            raise SystemExit("在线观测摘要响应箱宽与 --bin-ms 不匹配")
+        online_series = online_summary.get("response_integrated_series")
+        if not isinstance(online_series, list) or not online_series:
+            raise SystemExit("在线观测摘要缺少非空 response_integrated_series")
+        required = {"bin_index", "t_center_s", "avg_K", "two_colour_K",
+                    "full_spot_avg_K", "max_K"}
+        for index, item in enumerate(online_series):
+            missing = required - set(item)
+            if missing:
+                raise SystemExit(f"在线观测摘要第 {index} 箱缺字段: {sorted(missing)}")
+            item.setdefault("n_frames", item.get("n_samples", 0))
+            item.setdefault("any_laser_on", bool(item.get("n_samples_beam_inside", 0)))
+            item.setdefault("avg_range_limited_K", None)
+            item.setdefault("nearest_frame_avg_K", None)
+        if len(online_series) > 2:
+            incomplete = [item["bin_index"] for item in online_series[1:-1]
+                          if not np.isclose(item.get("coverage_fraction", np.nan),
+                                            1.0, rtol=0.0, atol=1.0e-6)]
+            if incomplete:
+                raise SystemExit(
+                    f"在线观测摘要内部响应箱覆盖不完整: {incomplete[:10]}")
+        # The online recorder samples every accepted solver step.  It is the
+        # production reading; sparse VTUs remain below only for diagnostics and
+        # the optional wavelength-sensitivity field reconstruction.
+        series = online_series
+
     dts = np.diff([f["time_s"] for f in frames]) if len(frames) > 1 else np.array([0.0])
     # 判读只依赖"圆内有单元过 1000 degC"的那些帧,帧距警告因此按热帧算:
     # 窗外的粗步长本来就该稀疏,拿全局最大帧距报警只会天天误报。
@@ -258,7 +319,7 @@ def main():
             f"共 {over} 个单元-帧超出高温计量程上限 {args.range_max_C} degC:"
             "采纳口径按 Balbaa 原文只设下限,故它们仍进了平均;"
             "range_limited 一路给出剔除它们后的对照")
-    tc_over = sum(1 for s in series if s["two_colour_over_range"])
+    tc_over = sum(1 for s in series if s.get("two_colour_over_range", False))
     if tc_over:
         warnings.append(
             f"{tc_over} 个 10 ms 箱的双色合成读数超出仪器上限 "
@@ -279,7 +340,10 @@ def main():
             "bin_index_anchor": "t = 0(两臂箱号可直接对齐)",
             "depth_scope": "全深度" if args.all_depths else f"顶层(z >= {layer_bottom:.6e} m)",
             "cell_temperature": "单元 8 节点温度的算术平均",
-            "adopted_bin_reading": "箱内区间平均(nearest_frame_avg_K 为备选读法)",
+            "adopted_bin_reading": ("求解步级 dt 覆盖加权响应积分"
+                                    if online_summary is not None else
+                                    "稀疏 VTU 箱内平均(nearest_frame_avg_K 为备选读法)"),
+            "online_summary": (str(args.online_summary) if args.online_summary else None),
             "registered_as": "D-V2-23(圆心/深度/分箱读法三项均为我们的约定)",
         },
         "three_readings": {
@@ -314,6 +378,8 @@ def main():
         "gauge_cells": int(gauge.sum()),
         "gauge_cells_in_circle": int(in_circle.sum()),
         "n_frames": len(frames),
+        "series_source": ("online_solver_steps" if online_summary is not None
+                          else "sparse_vtu_frames"),
         "frame_dt_s": {"min": float(dts.min()), "max": float(dts.max()),
                        "median": float(np.median(dts)),
                        "max_between_hot_frames": float(hot_dts.max())},

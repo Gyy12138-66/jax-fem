@@ -29,7 +29,7 @@
 # 真正的对流/辐射走 `--surface-selection exterior` 的表面积分路径,未受影响:
 # 同一台账里 surface_loss_j = 0.1297 J,物理照旧。删除**不改变任何数值结果**。
 # ============================================================================
-set -u
+set -euo pipefail
 source /home/user/miniforge3/etc/profile.d/conda.sh
 conda activate jax-fem-env
 export PYTHONPATH=/home/user/work/159/jax-fem JAX_PLATFORM_NAME=cpu
@@ -42,15 +42,18 @@ OUTROOT=/home/user/work/159/output
 VT=/home/user/work/159/vtmp
 SMOKE="${SMOKE:-0}"
 STAGES="${STAGES:-1 2 3 4}"
+# Balbaa Sec. 3.3 / scoring spec: response window and three top-layer probes.
+OBS_WINDOW="${OBS_WINDOW:-0.45,0.90}"
+OBS_PROBES="${OBS_PROBES:-0.001,0.002,0.00042;0.002,0.002,0.00042;0.003,0.002,0.00042}"
 LOG=$VT/thermal_gate.log
 mkdir -p "$VT"
 cd /home/user/work/159
 
 if [ "$SMOKE" = "1" ]; then
-  TAG=smoke; PATH_ARGS="--tracks 6"; MESH=$M/v2_multitrack_c3d8.inp
+  TAG=smoke; PATH_ARGS=(--tracks 6); MESH=$M/v2_multitrack_c3d8.inp
   OUT_EVERY=10; COOL_STEPS=5
 else
-  TAG=gate;  PATH_ARGS="--exposure-area 10.0e-3"; MESH=$M/v2_multitrack_c3d8.inp
+  TAG=gate; PATH_ARGS=(--exposure-area 10.0e-3); MESH=$M/v2_multitrack_c3d8.inp
   # 细步长 dt = 50 um / 0.65 m/s = 7.69e-5 s -> 每 100 步出一帧 = 7.7 ms <= 10 ms 协议增量
   OUT_EVERY=100; COOL_STEPS=40
 fi
@@ -111,7 +114,7 @@ run_arm() {
   preflight "$CFG"
   say "$NAME 开始 -> $OUT"
   rm -rf "$OUT"; mkdir -p "$OUT"
-  python "$M/make_v2_path_multitrack.py" $PATH_ARGS \
+  python "$M/make_v2_path_multitrack.py" "${PATH_ARGS[@]}" \
     --power 220 --speed 0.650 --hatch 0.12e-3 \
     --output "$OUT/path.csv" --ledger-json "$OUT/path_ledger.json" \
     2>&1 | tee "$OUT/path.log" | sed 's/^/    /'
@@ -125,6 +128,7 @@ run_arm() {
     --build-axis z --base-side min --layer-thickness 4.0e-5 --layers 1 \
     --support-thickness 4.0e-4 --path-file "$OUT/path.csv" --path-length-scale 1.0 \
     --source-model legacy --beam-radius 5.0e-5 --source-depth 1.0e-4 \
+    --source-depth-cutoff 4.0e-5 --source-cutoff-renormalize \
     --laser-power 220 --dt 7.6923e-5 \
     --layer-activation-mode layer_on_scan --layer-activation-geometry intersection \
     --future-layer-mode void --active-window-below-layers 0 --inactive-mass-factor 1.0 \
@@ -135,6 +139,8 @@ run_arm() {
     --mechanics-every 0 \
     --thermal-mass-lumping --thermal-output-every "$OUT_EVERY" --summary-every 200 \
     --phase-history-model paper_irreversible \
+    --online-observables --online-observables-window "$OBS_WINDOW" \
+    --online-observables-probes "$OBS_PROBES" \
     > "$OUT/run.log" 2>&1
   local RC=$? N
   N=$(wc -l < "$OUT/thermal_energy_ledger.jsonl" 2>/dev/null || echo 0)
@@ -143,9 +149,21 @@ run_arm() {
   if [ "$N" -le 12 ]; then
     say "$NAME 起步即死(ledger=$N)。停止,等人工判读。"; say "GATE_ABORTED"; exit 2
   fi
+  [ "$RC" -eq 0 ] || { say "$NAME 求解失败 rc=$RC，停止"; exit "$RC"; }
   python -m jax_fem_am.verification.run_audit "$OUT" \
     --output "$OUT/run_audit.json" --ambient 313.0 --quality-threshold 0.05 \
-    >> "$OUT/run.log" 2>&1 || say "$NAME WARNING: run_audit 失败"
+    >> "$OUT/run.log" 2>&1 \
+    || { say "$NAME run_audit 失败，停止"; exit 2; }
+  for artifact in online_observables.jsonl online_observables_meta.json; do
+    [ -s "$OUT/$artifact" ] \
+      || { say "$NAME 缺少在线观测产物 $artifact，停止"; exit 2; }
+  done
+  python "$M/summarize_online_observables.py" \
+    "$OUT/online_observables.jsonl" \
+    --meta "$OUT/online_observables_meta.json" \
+    --output "$OUT/online_observables_summary.json" \
+    >> "$OUT/run.log" 2>&1 \
+    || { say "$NAME 在线观测汇总失败，停止"; exit 2; }
 }
 
 say "======== 热闸门启动 pid=$$ TAG=$TAG STAGES='$STAGES' ========"
@@ -233,7 +251,11 @@ if has 4; then
   say "阶段 4:高温计协议提取 + 双臂对比"
   for pair in "asis:$ASIS" "parity:$PARITY"; do
     NAME=${pair%%:*}; DIR=${pair#*:}
+    [ -s "$DIR/online_observables_summary.json" ] \
+      || { say "$NAME 缺少在线响应积分摘要，停止比较"; exit 2; }
     python "$M/analyze_pyrometer.py" "$DIR" --arm "$NAME" \
+      --online-summary "$DIR/online_observables_summary.json" \
+      --observation-window "$OBS_WINDOW" \
       --output "$VT/pyro_${TAG}_${NAME}.json" 2>&1 | tee -a "$LOG" | sed 's/^/    /'
   done
   python "$M/compare_thermal_gate.py" \

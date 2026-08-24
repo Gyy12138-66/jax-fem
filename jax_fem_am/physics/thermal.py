@@ -311,12 +311,12 @@ class TransientThermal(Problem):
                         0.0,
                     )
                     if source_cutoff_renormalize:
-                        q_depth = q_depth / (
-                            1.0
-                            - np.exp(
-                                -source_depth_cutoff / source_depth[0]
-                            )
+                        # expm1 avoids catastrophic cancellation for a thin
+                        # but valid deposition band (cutoff << source depth).
+                        captured_fraction = -np.expm1(
+                            -source_depth_cutoff / source_depth[0]
                         )
+                        q_depth = q_depth / captured_fraction
                 # The in-plane Gaussian integrates to pi*r_b^2/2 and the
                 # one-sided exponential depth decay integrates to source_depth.
                 # The factor 2 makes the integral equal the absorbed power.

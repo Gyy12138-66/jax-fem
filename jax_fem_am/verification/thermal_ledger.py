@@ -269,12 +269,11 @@ def integrate_volume_terms(
                 0.0,
             )
             if source_cutoff_renormalize:
-                q_depth = q_depth / (
-                    1.0
-                    - np.exp(
-                        -source_depth_cutoff_m / scalars["source_depth_m"]
-                    )
+                # Mirror the kernel's numerically stable captured fraction.
+                captured_fraction = -np.expm1(
+                    -source_depth_cutoff_m / scalars["source_depth_m"]
                 )
+                q_depth = q_depth / captured_fraction
         q_laser = (
             2.0
             * scalars["effective_laser_power_w"]

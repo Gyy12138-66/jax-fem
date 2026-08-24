@@ -25,6 +25,87 @@ import two_colour_pyrometer as tc                       # noqa: E402
 C2K = 273.15
 
 
+def response_integrated_series(rows, bin_s, wavelengths):
+    """Integrate piecewise-constant step observations over fixed time bins.
+
+    A row describes the interval ``(time_s - dt_s, time_s]``.  Splitting that
+    interval at bin boundaries is essential when dt changes or a solver step
+    straddles a 10 ms instrument-response boundary.
+    """
+    if not np.isfinite(bin_s) or bin_s <= 0.0:
+        raise ValueError("bin_s must be finite and positive")
+    bins = {}
+    previous_end = None
+    tolerance = max(1.0e-12, bin_s * 1.0e-9)
+    for row_index, row in enumerate(rows):
+        end = float(row["time_s"])
+        dt_s = float(row["dt_s"])
+        if not np.isfinite(end) or not np.isfinite(dt_s) or dt_s <= 0.0:
+            raise ValueError(f"row {row_index} has invalid time_s/dt_s")
+        start = end - dt_s
+        if previous_end is not None:
+            delta = start - previous_end
+            if abs(delta) > tolerance:
+                kind = "gap" if delta > 0.0 else "overlap"
+                raise ValueError(
+                    f"row {row_index} introduces a {kind} of {abs(delta):.6e} s")
+        previous_end = end
+        first = int(np.floor(start / bin_s))
+        # Treat an endpoint exactly on a boundary as belonging to the preceding
+        # interval; the zero-width overlap with the next bin is then discarded.
+        last = int(np.floor(np.nextafter(end, -np.inf) / bin_s))
+        for idx in range(first, last + 1):
+            lo, hi = idx * bin_s, (idx + 1) * bin_s
+            overlap = min(end, hi) - max(start, lo)
+            if overlap > 0.0:
+                bins.setdefault(idx, []).append((row, overlap))
+
+    series = []
+    for idx in sorted(bins):
+        pieces = bins[idx]
+        total_w = sum(weight for _, weight in pieces)
+
+        def weighted(key, *, present=lambda value: value is not None):
+            selected = [(row[key], weight) for row, weight in pieces
+                        if present(row.get(key))]
+            if not selected:
+                return None
+            denominator = sum(weight for _, weight in selected)
+            return float(sum(float(value) * weight for value, weight in selected)
+                         / denominator)
+
+        s1 = weighted("two_colour_S1")
+        s2 = weighted("two_colour_S2")
+        tc_bin = tc.read_accumulated(s1, s2, wavelengths=wavelengths)
+        members = [row for row, _ in pieces]
+        coverage = total_w / bin_s
+        if coverage > 1.0 + 1.0e-9:
+            raise ValueError(f"bin {idx} coverage exceeds one: {coverage}")
+        entry = {
+            "bin_index": idx,
+            "t_center_s": idx * bin_s + 0.5 * bin_s,
+            "covered_s": float(total_w),
+            "coverage_fraction": float(coverage),
+            "n_samples": len(pieces),
+            "n_samples_beam_inside": int(sum(
+                bool(row["beam_inside_spot"]) for row, _ in pieces)),
+            "avg_K": weighted("avg_K"),
+            "mean_n_hot": weighted("n_hot"),
+            "two_colour_K": tc_bin["T_K"],
+            "two_colour_over_range": tc_bin["over_range"],
+            "full_spot_avg_K": weighted("full_spot_avg_K"),
+            "max_K": float(max(row["max_K"] for row in members)),
+        }
+        if "probe_K" in members[0]:
+            probes = np.asarray([row["probe_K"] for row, _ in pieces], dtype=float)
+            weights = np.asarray([weight for _, weight in pieces], dtype=float)
+            entry["probe_mean_K"] = [float(v) for v in
+                                      np.average(probes, axis=0, weights=weights)]
+            entry["probe_max_K"] = [float(v) for v in probes.max(axis=0)]
+        series.append(entry)
+    return series
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -52,38 +133,14 @@ def main():
 
     # ---- 10 ms 响应积分 ----
     bin_s = args.bin_ms * 1.0e-3
-    bins = {}
-    for r in rows:
-        bins.setdefault(int(r["time_s"] // bin_s), []).append(r)
-    series = []
-    for idx in sorted(bins):
-        members = bins[idx]
-        adopted = [m["avg_K"] for m in members if m["avg_K"] is not None]
-        s1 = float(np.mean([m["two_colour_S1"] for m in members]))
-        s2 = float(np.mean([m["two_colour_S2"] for m in members]))
-        tc_bin = tc.read_accumulated(s1, s2, wavelengths=wl)
-        entry = {
-            "bin_index": idx,
-            "t_center_s": idx * bin_s + 0.5 * bin_s,
-            "n_samples": len(members),
-            "n_samples_beam_inside": int(sum(m["beam_inside_spot"] for m in members)),
-            "avg_K": float(np.mean(adopted)) if adopted else None,
-            "mean_n_hot": float(np.mean([m["n_hot"] for m in members])),
-            "two_colour_K": tc_bin["T_K"],
-            "two_colour_over_range": tc_bin["over_range"],
-            "full_spot_avg_K": float(np.mean([m["full_spot_avg_K"] for m in members])),
-            "max_K": float(max(m["max_K"] for m in members)),
-        }
-        if "probe_K" in members[0]:
-            probes = np.asarray([m["probe_K"] for m in members], dtype=float)
-            entry["probe_mean_K"] = [float(v) for v in probes.mean(axis=0)]
-            entry["probe_max_K"] = [float(v) for v in probes.max(axis=0)]
-        series.append(entry)
+    series = response_integrated_series(rows, bin_s, wl)
+
 
     per_bin = [s["n_samples"] for s in series]
     doc = {
         "source": str(args.jsonl),
         "meta": meta,
+        "response_bin_ms": float(args.bin_ms),
         "n_rows": len(rows),
         "t_range_s": [float(t.min()), float(t.max())],
         "step_dt_s": {"min": float(dt.min()), "max": float(dt.max()),
@@ -99,8 +156,8 @@ def main():
             "应当有上百个样本,10 ms 响应积分才是真的积分"),
         "response_integrated_series": series,
         "reading_definitions": {
-            "avg_K": "采纳口径:窗内各步条件平均温度再平均(Balbaa 分箱口径)",
-            "two_colour_K": "双色:窗内 S1/S2 亮度先平均再反演一次(仪器积分亮度)",
+            "avg_K": "采纳口径:按各步在响应箱内的实际覆盖时长加权平均(Balbaa 分箱口径)",
+            "two_colour_K": "双色:按实际覆盖时长积分 S1/S2 后反演一次(仪器积分亮度)",
             "full_spot_avg_K": "全光斑无阈值,诊断下界",
             "probe_*": "Fig 15/16 定点探针(D-V2-27),无条件平均、无 n_hot",
         },
