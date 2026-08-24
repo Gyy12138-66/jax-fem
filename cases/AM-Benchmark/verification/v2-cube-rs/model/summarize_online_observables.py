@@ -13,6 +13,7 @@
 同时报**每个箱内的样本数**:它就是拍频有没有被消掉的直接证据。
 """
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -106,12 +107,61 @@ def response_integrated_series(rows, bin_s, wavelengths):
     return series
 
 
+def validate_protocol(meta, *, expected_run_id=None):
+    """Fail closed unless metadata exactly describes the registered protocol."""
+    errors = []
+    if meta.get("schema_version") != "v06.online-observables/1":
+        errors.append("schema_version")
+    if expected_run_id is not None and meta.get("run_id") != expected_run_id:
+        errors.append("run_id")
+    expected = {
+        "spot_center_m": [0.002, 0.002],
+        "spot_diameter_m": 2.0e-3,
+        "threshold_C": 1000.0,
+        "range_max_C": 3000.0,
+        "window_s": [0.45, 0.90],
+        "record_every_n_steps": 1,
+    }
+    for key, value in expected.items():
+        actual = meta.get(key)
+        if actual is None or not np.allclose(actual, value, rtol=0.0, atol=1.0e-12):
+            errors.append(key)
+    if meta.get("depth_scope") != "top layer (z >= 4.000000e-04 m)":
+        errors.append("depth_scope")
+    probes = meta.get("probes")
+    expected_probes = [[0.001, 0.002, 0.00042],
+                       [0.002, 0.002, 0.00042],
+                       [0.003, 0.002, 0.00042]]
+    requested = [item.get("requested_m") for item in probes] if isinstance(probes, list) else []
+    if len(requested) != 3 or not np.allclose(requested, expected_probes,
+                                               rtol=0.0, atol=1.0e-12):
+        errors.append("probes")
+    if meta.get("probe_resolution", {}).get("all_probes_contained") is not True:
+        errors.append("all_probes_contained")
+    wl = meta.get("two_colour", {}).get("wavelengths_m")
+    if wl is None or not np.allclose(wl, [0.95e-6, 1.05e-6],
+                                     rtol=0.0, atol=1.0e-15):
+        errors.append("wavelengths_m")
+    if errors:
+        raise ValueError("online observable protocol mismatch: " + ", ".join(errors))
+    return tuple(float(value) for value in wl)
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("jsonl", type=Path)
     ap.add_argument("--meta", type=Path, default=None)
     ap.add_argument("--bin-ms", type=float, default=10.0)
+    ap.add_argument("--expected-run-id", default=None)
     ap.add_argument("--output", type=Path, default=None)
     args = ap.parse_args()
 
@@ -119,10 +169,13 @@ def main():
             args.jsonl.read_text(encoding="utf-8").splitlines() if line.strip()]
     if not rows:
         raise SystemExit(f"{args.jsonl} 是空的")
-    meta = (json.loads(args.meta.read_text(encoding="utf-8"))
-            if args.meta and args.meta.is_file() else {})
-    wl = tuple(meta.get("two_colour", {}).get("wavelengths_m",
-                                              tc.DEFAULT_WAVELENGTHS_M))
+    if not args.meta or not args.meta.is_file():
+        raise SystemExit("正式在线汇总必须提供 --meta")
+    meta = json.loads(args.meta.read_text(encoding="utf-8"))
+    try:
+        wl = validate_protocol(meta, expected_run_id=args.expected_run_id)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
 
     t = np.asarray([r["time_s"] for r in rows])
     dt = np.diff(t) if t.size > 1 else np.asarray([0.0])
@@ -141,7 +194,10 @@ def main():
         "source": str(args.jsonl),
         "meta": meta,
         "response_bin_ms": float(args.bin_ms),
+        "source_jsonl_sha256": file_sha256(args.jsonl),
         "n_rows": len(rows),
+        "coverage_s": [float(min(r["time_s"] - r["dt_s"] for r in rows)),
+                       float(max(r["time_s"] for r in rows))],
         "t_range_s": [float(t.min()), float(t.max())],
         "step_dt_s": {"min": float(dt.min()), "max": float(dt.max()),
                       "median": float(np.median(dt))},

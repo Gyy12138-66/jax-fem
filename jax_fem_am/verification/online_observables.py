@@ -183,7 +183,8 @@ class OnlineObservableRecorder:
 
     def __init__(self, output_dir, *, spot_center_m, spot_diameter_m,
                  threshold_c, range_max_c, wavelengths_m, window_s,
-                 every, probes_m, layer_top_z_m=None, layer_thickness_m=40.0e-6,
+                 every, probes_m, run_id=None, layer_top_z_m=None,
+                 layer_thickness_m=40.0e-6,
                  all_depths=False, filename="online_observables.jsonl",
                  probe_containment_tol_m=1.0e-12, probe_tie_tol_m=1.0e-12):
         self.output_dir = str(output_dir)
@@ -197,6 +198,7 @@ class OnlineObservableRecorder:
         self.wavelengths_m = tuple(float(v) for v in wavelengths_m)
         self.window_s = (float(window_s[0]), float(window_s[1]))
         self.every = max(1, int(every))
+        self.run_id = str(run_id) if run_id else None
         self.probes_m = [tuple(float(c) for c in p) for p in (probes_m or [])]
         self.layer_top_z_m = layer_top_z_m
         self.layer_thickness_m = float(layer_thickness_m)
@@ -334,6 +336,7 @@ class OnlineObservableRecorder:
         meta = {
             "schema_version": self.SCHEMA,
             "claim_level": "solver_step_observable_extraction_only",
+            "run_id": self.run_id,
             "_what": "in-circle pyrometer observables accumulated at solver "
                      "cadence; no field is stored and no VTU is written",
             "_why": "D-V2-25: 7.69 ms frame spacing beats against the 15.10 ms "
@@ -634,6 +637,7 @@ def recorder_from_args(args):
         window_s=window,
         every=getattr(args, "online_observables_every", 1),
         probes_m=probes,
+        run_id=getattr(args, "online_observables_run_id", None),
         layer_thickness_m=getattr(args, "layer_thickness", 40.0e-6),
         all_depths=getattr(args, "online_observables_all_depths", False),
     )

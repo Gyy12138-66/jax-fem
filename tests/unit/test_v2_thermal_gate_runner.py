@@ -21,7 +21,24 @@ def test_production_runner_wires_preregistered_observables_and_source_band():
         "--observation-window",
         "--fixture-thermal-phase follow-temperature",
         'online_observables_summary.json',
-        'meta.get("window_s") == expected',
+        "run_manifest.json",
+        "--online-observables-run-id",
+        "--expected-run-id",
+        'manifest.get("status") == "complete"',
+        'meta.get("run_id") == run_id',
+        'summary.get("meta", {}).get("run_id") == run_id',
+        "build_run_manifest.py",
+        'manifest.get("run_id") == run_id',
+        'summary.get("source_jsonl_sha256") == sha256(rows)',
+        'summary.get("n_rows") == sum(',
+        'summary.get("coverage_s", [None, None])[1] >= 0.90',
+        'KEFF_DIR=$VT/derived',
+        'set +e',
+        'manifest["status"] = "failed"',
+        'manifest["exit_code"] = rc',
+        'PARITY_CFG=$KEFF_DIR/v2_material_config_thermal_keff.json',
+        'config["k_table_liquid"] = keff',
+        'run_arm parity "$PARITY_CFG"',
     )
     for token in required:
         assert token in text
@@ -33,3 +50,5 @@ def test_production_runner_is_fail_closed():
     assert 'run_audit 失败，停止' in text
     assert '缺少在线观测产物' in text
     assert 'WARNING: run_audit 失败' not in text
+    assert '$M/tables/k_liquid_keff.csv' not in text
+    assert '$M/derived/keff_' not in text

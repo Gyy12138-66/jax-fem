@@ -420,6 +420,9 @@ def build_parser(config=None):
                              "no VTU and stores no field. Off by default.")
     parser.add_argument("--no-online-observables", dest="online_observables",
                         action="store_false")
+    parser.add_argument("--online-observables-run-id",
+                        default=cfg(config, "online_observables_run_id", None),
+                        help="Opaque manifest digest binding JSONL/meta to this run.")
     parser.add_argument("--online-observables-window",
                         default=cfg(config, "online_observables_window", "0.45,0.90"),
                         help="t_lo,t_hi [s] recording window (default 0.45,0.90).")

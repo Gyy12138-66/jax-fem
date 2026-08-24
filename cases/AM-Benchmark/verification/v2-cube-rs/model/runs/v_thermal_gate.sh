@@ -59,30 +59,77 @@ else
 fi
 ASIS=$OUTROOT/v2_thermal_${TAG}_asis
 PARITY=$OUTROOT/v2_thermal_${TAG}_parity
-KEFF_CSV=$M/tables/k_liquid_keff.csv
-KEFF_JSON=$M/derived/keff_${TAG}.json
+KEFF_DIR=$VT/derived
+KEFF_CSV=$KEFF_DIR/k_liquid_keff.csv
+KEFF_JSON=$KEFF_DIR/keff_${TAG}.json
+PARITY_CFG=$KEFF_DIR/v2_material_config_thermal_keff.json
+mkdir -p "$KEFF_DIR"
 
 say() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" | tee -a "$LOG"; }
 has()  { [ "${STAGES#*$1}" != "$STAGES" ]; }
+RUN_PARAMETERS=$(python3 - "$OBS_WINDOW" "$OBS_PROBES" <<'PY'
+import json, sys
+window, probes = sys.argv[1:]
+print(json.dumps({
+    "laser_power_W": 220.0, "scan_speed_m_s": 0.650,
+    "hatch_m": 0.12e-3, "layer_thickness_m": 4.0e-5,
+    "beam_radius_m": 5.0e-5, "source_depth_m": 1.0e-4,
+    "source_depth_cutoff_m": 4.0e-5, "source_cutoff_renormalize": True,
+    "fixture_thermal_phase": "follow-temperature", "dt_s": 7.6923e-5,
+    "ambient_K": 313.0, "preheat_K": 353.15,
+    "bottom_thermal_bc": "fixed", "bottom_temperature_K": 353.15,
+    "surface_selection": "exterior", "observation_window": window,
+    "observation_probes": probes, "response_bin_ms": 10.0,
+}, sort_keys=True))
+PY
+)
+
+build_manifest() {
+  python3 "$M/build_run_manifest.py" --repo "$REPO" --arm "$1" \
+    --config "$2" --mesh "$MESH" --path "$3" \
+    --parameters-json "$RUN_PARAMETERS" --output "$4"
+}
+
 is_complete() {
-  python3 - "$1" "$OBS_WINDOW" <<'PY' 2>/dev/null
-import json, os, sys
-out, expected_window = sys.argv[1:]
+  local NAME=$1 CFG=$2 OUT=$3 EXPECTED
+  [ -s "$OUT/path.csv" ] || return 1
+  EXPECTED=$(mktemp)
+  build_manifest "$NAME" "$CFG" "$OUT/path.csv" "$EXPECTED" >/dev/null || { rm -f "$EXPECTED"; return 1; }
+  python3 - "$OUT" "$EXPECTED" <<'PY' 2>/dev/null
+import hashlib, json, os, sys
+out, expected_path = sys.argv[1:]
+def sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 try:
+    manifest = json.load(open(os.path.join(out, "run_manifest.json"), encoding="utf-8"))
+    expected = json.load(open(expected_path, encoding="utf-8"))
     ledger = json.load(open(os.path.join(out, "thermal_energy_ledger_summary.json"), encoding="utf-8"))
     meta = json.load(open(os.path.join(out, "online_observables_meta.json"), encoding="utf-8"))
     summary = json.load(open(os.path.join(out, "online_observables_summary.json"), encoding="utf-8"))
     rows = os.path.join(out, "online_observables.jsonl")
-    expected = [float(v) for v in expected_window.split(",")]
-    ok = (ledger.get("complete") is True
+    run_id = expected["run_id"]
+    ok = (manifest.get("run_id") == run_id
+          and ledger.get("complete") is True
+          and manifest.get("status") == "complete"
           and os.path.getsize(rows) > 0
-          and meta.get("window_s") == expected
-          and summary.get("meta", {}).get("window_s") == expected
+          and meta.get("run_id") == run_id
+          and summary.get("meta", {}).get("run_id") == run_id
+          and summary.get("source_jsonl_sha256") == sha256(rows)
+          and summary.get("n_rows") == sum(1 for line in open(rows, encoding="utf-8") if line.strip())
+          and summary.get("coverage_s", [None, None])[0] <= 0.45 + 1.0e-9
+          and summary.get("coverage_s", [None, None])[1] >= 0.90 - 1.0e-9
           and summary.get("response_integrated_series"))
 except Exception:
     ok = False
 sys.exit(0 if ok else 1)
 PY
+  local RC=$?
+  rm -f "$EXPECTED"
+  return "$RC"
 }
 
 # ---- 起飞前体检(Fable5 预检清单:材料表逐值溯源 + 配置回显 + 判据先打印)----
@@ -122,7 +169,7 @@ PY
 
 run_arm() {
   local NAME=$1 CFG=$2 OUT=$3
-  if is_complete "$OUT"; then say "$NAME 已完成,跳过(幂等)"; return 0; fi
+  if is_complete "$NAME" "$CFG" "$OUT"; then say "$NAME 已完成,跳过(幂等)"; return 0; fi
   preflight "$CFG"
   say "$NAME 开始 -> $OUT"
   rm -rf "$OUT"; mkdir -p "$OUT"
@@ -130,6 +177,9 @@ run_arm() {
     --power 220 --speed 0.650 --hatch 0.12e-3 \
     --output "$OUT/path.csv" --ledger-json "$OUT/path_ledger.json" \
     2>&1 | tee "$OUT/path.log" | sed 's/^/    /'
+  local RUN_ID
+  RUN_ID=$(build_manifest "$NAME" "$CFG" "$OUT/path.csv" "$OUT/run_manifest.json")
+  set +e
   python -m jax_fem_am.simulation.runner \
     --config "$CFG" \
     --inp "$MESH" \
@@ -152,10 +202,24 @@ run_arm() {
     --thermal-mass-lumping --thermal-output-every "$OUT_EVERY" --summary-every 200 \
     --phase-history-model paper_irreversible \
     --fixture-thermal-phase follow-temperature \
-    --online-observables --online-observables-window "$OBS_WINDOW" \
+    --online-observables --online-observables-run-id "$RUN_ID" \
+    --online-observables-window "$OBS_WINDOW" \
     --online-observables-probes "$OBS_PROBES" \
     > "$OUT/run.log" 2>&1
-  local RC=$? N
+  local RC=$?
+  set -e
+  if [ "$RC" -ne 0 ]; then
+    python3 - "$OUT/run_manifest.json" "$RC" <<'PY'
+import json, sys
+path, rc = sys.argv[1], int(sys.argv[2])
+manifest = json.load(open(path, encoding="utf-8"))
+manifest["status"] = "failed"
+manifest["exit_code"] = rc
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(manifest, handle, indent=2, ensure_ascii=False)
+PY
+  fi
+  local N
   N=$(wc -l < "$OUT/thermal_energy_ledger.jsonl" 2>/dev/null || echo 0)
   say "$NAME 结束 rc=$RC ledger=$N"
   # 起步即死护栏:台账没几行就是配置层面的问题,别烧几小时再发现
@@ -174,9 +238,18 @@ run_arm() {
   python "$M/summarize_online_observables.py" \
     "$OUT/online_observables.jsonl" \
     --meta "$OUT/online_observables_meta.json" \
+    --expected-run-id "$RUN_ID" \
     --output "$OUT/online_observables_summary.json" \
     >> "$OUT/run.log" 2>&1 \
     || { say "$NAME 在线观测汇总失败，停止"; exit 2; }
+  python3 - "$OUT/run_manifest.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+manifest = json.load(open(path, encoding="utf-8"))
+manifest["status"] = "complete"
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(manifest, handle, indent=2, ensure_ascii=False)
+PY
 }
 
 say "======== 热闸门启动 pid=$$ TAG=$TAG STAGES='$STAGES' ========"
@@ -190,7 +263,7 @@ fi
 if has 2; then
   # F2(Fable5 2026-08-19)第一处:as-is 臂没跑完就不许推 keff。
   # 原来只有 ledger<=12 的起步即死护栏,半途死掉(rc!=0 但台账很长)会漏过去。
-  if ! is_complete "$ASIS"; then
+  if ! is_complete asis "$M/v2_material_config_thermal_asis.json" "$ASIS"; then
     say "as-is 臂未完成($ASIS),阶段 2 拒绝从半成品推 keff。先把阶段 1 跑完。"
     exit 2
   fi
@@ -242,9 +315,19 @@ fi
 
 # ---- 阶段 3:parity 臂 ----
 if has 3; then
+  [ -s "$KEFF_CSV" ] || { say "缺少阶段 2 的 keff 表:$KEFF_CSV"; exit 2; }
+  python3 - "$M/v2_material_config_thermal_keff.json" "$PARITY_CFG" "$KEFF_CSV" <<'PY'
+import json, sys
+source, output, keff = sys.argv[1:]
+config = json.load(open(source, encoding="utf-8"))
+config["k_table_liquid"] = keff
+config["_k_table_liquid_note"] = "runtime-derived Balbaa Eq 19-24 table; path bound by run manifest"
+with open(output, "w", encoding="utf-8") as handle:
+    json.dump(config, handle, indent=2, ensure_ascii=False)
+PY
   say "两臂配置逐键核对(必须只差 k_table_liquid):"
   python3 - "$M/v2_material_config_thermal_asis.json" \
-             "$M/v2_material_config_thermal_keff.json" <<'PY' | tee -a "$LOG" | sed 's/^/    /'
+             "$PARITY_CFG" <<'PY' | tee -a "$LOG" | sed 's/^/    /'
 import json, sys
 a = json.load(open(sys.argv[1], encoding="utf-8"))
 b = json.load(open(sys.argv[2], encoding="utf-8"))
@@ -256,7 +339,7 @@ print("共有键取值不同:", diff)
 sys.exit(0 if only_b == ["k_table_liquid"] and not diff else 4)
 PY
   [ ${PIPESTATUS[0]} -eq 0 ] || { say "两臂差异不止 keff,停止"; exit 2; }
-  run_arm parity "$M/v2_material_config_thermal_keff.json" "$PARITY"
+  run_arm parity "$PARITY_CFG" "$PARITY"
 fi
 
 # ---- 阶段 4:对比 ----

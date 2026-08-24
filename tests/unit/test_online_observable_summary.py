@@ -29,6 +29,46 @@ def _row(time_s, dt_s, value):
     }
 
 
+def _meta(run_id="run-123"):
+    return {
+        "schema_version": "v06.online-observables/1",
+        "run_id": run_id,
+        "spot_center_m": [0.002, 0.002],
+        "spot_diameter_m": 0.002,
+        "threshold_C": 1000.0,
+        "range_max_C": 3000.0,
+        "window_s": [0.45, 0.90],
+        "record_every_n_steps": 1,
+        "depth_scope": "top layer (z >= 4.000000e-04 m)",
+        "two_colour": {"wavelengths_m": [0.95e-6, 1.05e-6]},
+        "probes": [{"requested_m": probe} for probe in
+                   [[0.001, 0.002, 0.00042], [0.002, 0.002, 0.00042],
+                    [0.003, 0.002, 0.00042]]],
+        "probe_resolution": {"all_probes_contained": True},
+    }
+
+
+def test_protocol_validation_accepts_registered_metadata():
+    assert summary.validate_protocol(_meta(), expected_run_id="run-123") == pytest.approx(
+        (0.95e-6, 1.05e-6))
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda meta: meta.update(run_id="wrong"),
+    lambda meta: meta.update(spot_center_m=[0.001, 0.002]),
+    lambda meta: meta.update(record_every_n_steps=2),
+    lambda meta: meta.update(window_s=[0.40, 0.90]),
+    lambda meta: meta.update(depth_scope="top layer (z >= 3.900000e-04 m)"),
+    lambda meta: meta["two_colour"].update(wavelengths_m=[1.0e-6, 1.1e-6]),
+    lambda meta: meta["probe_resolution"].update(all_probes_contained=False),
+])
+def test_protocol_validation_rejects_mismatch(mutation):
+    meta = _meta()
+    mutation(meta)
+    with pytest.raises(ValueError, match="protocol mismatch"):
+        summary.validate_protocol(meta, expected_run_id="run-123")
+
+
 def test_response_bins_weight_unequal_steps_by_duration(monkeypatch):
     monkeypatch.setattr(summary.tc, "read_accumulated", lambda s1, s2, wavelengths: {
         "T_K": s1, "over_range": False})
