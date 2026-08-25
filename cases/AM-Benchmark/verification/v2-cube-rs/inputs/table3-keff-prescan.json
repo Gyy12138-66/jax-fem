@@ -1,0 +1,35 @@
+{
+  "schema_version": "v2.table3-keff-prescan/1",
+  "provenance": {
+    "source": "Balbaa2022 Sec 2.6.2 Table 3 parameter sets, transcribed in balbaa-v2-model.json",
+    "expansion": "full_factorial",
+    "note": "The paper transcription lists three parameter sets but not an explicit row matrix; this file deliberately expands their Cartesian product into 27 screening conditions."
+  },
+  "axes": {
+    "power_W": [140, 220, 270],
+    "speed_mm_s": [500, 650, 800],
+    "hatch_mm": [0.08, 0.10, 0.12]
+  },
+  "prescan": {
+    "tracks": 4,
+    "measurement_track": 3,
+    "sample_step_m": 5.0e-5,
+    "beam_radius_m": 5.0e-5,
+    "source_depth_m": 1.0e-4,
+    "source_depth_cutoff_m": 0.0,
+    "source_cutoff_renormalize": false,
+    "layer_thickness_m": 4.0e-5,
+    "domain_m": 4.0e-3,
+    "preheat_K": 353.15,
+    "ambient_K": 313.0,
+    "bottom_temperature_K": 353.15,
+    "fixture_thermal_phase": "follow-temperature",
+    "thermal_output_every": 1,
+    "cooling_steps": 0
+  },
+  "material_config": "../model/v2_material_config_thermal_asis.json",
+  "mesh": "../model/v2_multitrack_c3d8.inp",
+  "path_generator": "../model/make_v2_path_multitrack.py",
+  "measurement_picker": "../model/pick_keff_measurement.py",
+  "keff_deriver": "../model/make_keff_table.py"
+}

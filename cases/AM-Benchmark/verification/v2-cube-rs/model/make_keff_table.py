@@ -487,8 +487,9 @@ def main():
             "power_W": args.power, "speed_m_s": args.speed,
             "absorptivity": args.absorptivity, "beam_radius_m": args.beam_radius,
             "opd_m": args.opd,
-            "_provenance": "热闸门工况 220 W / 650 mm/s"
-                           "(balbaa-v2-model.json validation_targets.pyrometer)",
+            "_provenance": (
+                f"显式 runner/CLI 工况 {args.power:g} W / {args.speed*1e3:g} mm/s;"
+                "参数集合来源由调用方台账登记，不向实验数据回调"),
         },
         "qv_mode": "override" if args.qv is not None
                    else "Eq 18 指数源束心峰值 2 Ac P/(pi r^2 d)",
