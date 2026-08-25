@@ -82,12 +82,24 @@ def response_integrated_series(rows, bin_s, wavelengths):
         coverage = total_w / bin_s
         if coverage > 1.0 + 1.0e-9:
             raise ValueError(f"bin {idx} coverage exceeds one: {coverage}")
+        # A2 (a)(规范 v2.1 §3.2,yuyao 2026-08-25):采纳口径的分母只取有效时样
+        # (n_hot > 0),NA 时样不进分母 —— 这是 Balbaa 分箱读法,数值与之前完全
+        # 相同;但删掉了多少**必须逐箱写出来**,不得静默。时长占比 > 50 % 的箱在
+        # 评分矩阵里要加旁注(该读数由少数时样决定)。
+        na_pieces = [(row, weight) for row, weight in pieces if int(row["n_hot"]) == 0]
+        na_covered = float(sum(weight for _, weight in na_pieces))
         entry = {
             "bin_index": idx,
             "t_center_s": idx * bin_s + 0.5 * bin_s,
             "covered_s": float(total_w),
             "coverage_fraction": float(coverage),
             "n_samples": len(pieces),
+            "n_na_samples": len(na_pieces),
+            "na_sample_fraction": len(na_pieces) / len(pieces),
+            "na_covered_s": na_covered,
+            "na_time_fraction": (na_covered / total_w) if total_w > 0.0 else None,
+            "na_over_half": (bool(na_covered / total_w > 0.5)
+                             if total_w > 0.0 else None),
             "n_samples_beam_inside": int(sum(
                 bool(row["beam_inside_spot"]) for row, _ in pieces)),
             "avg_K": weighted("avg_K"),
@@ -250,9 +262,23 @@ def main():
             "这是拍频有没有被消掉的直接证据。VTU 帧距 7.69 ms 时每个 10 ms 箱"
             "只有 0-1 帧,区间平均退化为单点采样(D-V2-25);在线记录之后每个箱"
             "应当有上百个样本,10 ms 响应积分才是真的积分"),
+        "na_disclosure": {
+            "_spec": "scoring-spec-thermal-gate-v2.1.md §3.2 / §4.1(修正案 A2 (a),"
+                     "yuyao 2026-08-25 裁决)",
+            "rule": "采纳口径分母只取有效时样(n_hot > 0);NA 时样(圆内顶层无单元 "
+                    ">= 1000 degC)不进分母但逐箱披露数量/时长/时长占比;目标箱 NA 时长"
+                    "占比 > 50 % 的点加旁注;整箱无有效时样才是 NA / INVALID",
+            "n_bins": len(series),
+            "n_bins_with_na_samples": sum(1 for s in series if s["n_na_samples"]),
+            "n_bins_na_over_half": sum(1 for s in series if s["na_over_half"]),
+            "n_bins_all_na": sum(1 for s in series if s["avg_K"] is None),
+            "bins_na_over_half": [s["bin_index"] for s in series if s["na_over_half"]],
+        },
         "response_integrated_series": series,
         "reading_definitions": {
             "avg_K": "采纳口径:按各步在响应箱内的实际覆盖时长加权平均(Balbaa 分箱口径)",
+            "n_na_samples / na_covered_s / na_time_fraction / na_over_half":
+                "A2 (a) 强制披露:箱内 n_hot == 0 的时样数、时长、时长占比、是否 > 50 %",
             "two_colour_K": "双色:按实际覆盖时长积分 S1/S2 后反演一次(仪器积分亮度)",
             "full_spot_avg_K": "全光斑无阈值,诊断下界",
             "probe_*": "Fig 15/16 定点探针(D-V2-27),无条件平均、无 n_hot",
@@ -274,15 +300,21 @@ def main():
     if valid:
         print(f"  有效箱 {len(valid)} / {len(series)}")
         print(f"  {'t [s]':>8} {'n样本':>6} {'圆内':>5} {'n_hot':>7} "
-              f"{'采纳 K':>9} {'双色 K':>9} {'全斑 K':>9} {'峰值 K':>9}")
+              f"{'采纳 K':>9} {'双色 K':>9} {'全斑 K':>9} {'峰值 K':>9} {'NA时长%':>7}")
         for s in valid[:24]:
             f = lambda v: f"{v:9.1f}" if v is not None else "      n/a"
+            na = (f"{s['na_time_fraction']*100:6.1f}{'*' if s['na_over_half'] else ' '}"
+                  if s["na_time_fraction"] is not None else "    n/a")
             print(f"  {s['t_center_s']:8.4f} {s['n_samples']:6d} "
                   f"{s['n_samples_beam_inside']:5d} {s['mean_n_hot']:7.1f} "
                   f"{f(s['avg_K'])} {f(s['two_colour_K'])} "
-                  f"{f(s['full_spot_avg_K'])} {f(s['max_K'])}")
+                  f"{f(s['full_spot_avg_K'])} {f(s['max_K'])} {na}")
         if len(valid) > 24:
             print(f"  ... 另有 {len(valid)-24} 个有效箱")
+        nd = doc["na_disclosure"]
+        print(f"  [A2 (a) 披露] {nd['n_bins_with_na_samples']}/{nd['n_bins']} 箱含 NA 时样,"
+              f"{nd['n_bins_na_over_half']} 箱 NA 时长占比 > 50 %(上表 *),"
+              f"{nd['n_bins_all_na']} 箱整箱无有效时样(采纳读数 n/a)")
     if "probe_K" in rows[0]:
         # 峰值**和峰时刻**一起报(规范 §6.2 要求"直接受热主峰温度与时刻")。
         # 只报温度会误导:单道等速扫描下三个探针看到的是同一束流经过,峰值

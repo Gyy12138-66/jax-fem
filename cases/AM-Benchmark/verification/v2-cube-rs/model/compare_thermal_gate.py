@@ -301,6 +301,8 @@ def main():
             "1/n_hot 稀释,双色由最热的那一瞬主导),所以两臂差必须三路都给")
 
     # ---------------- 三角形的另外两条腿 ----------------
+    # 箱宽取自臂 JSON 自己的协议记录(两臂必须一致,analyze_pyrometer 已校验)
+    bin_s_doc = float((asis.get("protocol") or {}).get("bin_ms", 10.0)) * 1e-3
     legs = []
     for pair in fig14["pairs"]:
         t = pair["time_s"]
@@ -327,6 +329,17 @@ def main():
                         (val - bal_K) if val is not None else None)
                     row[f"{short}_{tag}_aliasing_envelope"] = aliasing_envelope(
                         doc_, key, t, max_gap)
+        # A2 (a)(规范 v2.1 §3.2):采纳口径每格带**包含 t_i 的箱**的 NA 时样时长
+        # 占比,> 50 % 加旁注。读数数值不变,只是把"分母里删掉了多少"摆出来。
+        for tag, bins_ in (("parity", pbins), ("asis", abins)):
+            containing = bins_.get(int(t // bin_s_doc))
+            frac = containing.get("na_time_fraction") if containing else None
+            row[f"adopted_{tag}_containing_bin_index"] = (
+                containing["bin_index"] if containing else None)
+            row[f"adopted_{tag}_containing_bin_avg_K"] = (
+                containing.get("avg_K") if containing else None)
+            row[f"adopted_{tag}_na_time_fraction"] = frac
+            row[f"adopted_{tag}_na_over_half"] = (frac > 0.5) if frac is not None else None
         legs.append(row)
 
     # 数字化读数不确定度:实测腿的残差要和它比
@@ -365,6 +378,19 @@ def main():
                     tag: stats([r[f"{short}_{tag}_minus_balbaa_K"] for r in legs])
                     for tag in ("parity", "asis")},
             }
+        three["_na_disclosure"] = {
+            "_spec": "scoring-spec-thermal-gate-v2.1.md §3.2(修正案 A2 (a),"
+                     "yuyao 2026-08-25 裁决)",
+            "rule": "采纳口径分母只取有效时样;包含 t_i 的箱内 NA 时样时长占比逐格披露,"
+                    "> 50 % 加旁注(读数由少数时样决定);整箱无有效时样才 INVALID",
+            "per_time": [
+                {"time_s": r["time_s"],
+                 **{f"{a}_na_time_fraction": r.get(f"adopted_{a}_na_time_fraction")
+                    for a in ("asis", "parity")},
+                 **{f"{a}_over_half": r.get(f"adopted_{a}_na_over_half")
+                    for a in ("asis", "parity")}}
+                for r in legs],
+        }
         three["_sampling"] = (
             "三路在 Fig 14 五时刻统一取采纳口径也有效的箱(光束在圆内的箱)。"
             "双色路每个箱都有值,若跨出圆箱插值会得到既非场也非仪器读数的中间量"
@@ -467,6 +493,16 @@ def main():
                   + " ".join(f8(r.get(f"{s}_{a}_K"))
                              for _k, s, _l, _u in READINGS
                              for a in ("asis", "parity")))
+        print("\n[A2 (a) 披露] 采纳口径目标箱内 NA 时样时长占比(> 50 % 标 *,"
+              "该读数由少数时样决定):")
+        print(f"  {'t [s]':>7} {'asis':>8} {'parity':>8}")
+        for r in legs:
+            cells = []
+            for a in ("asis", "parity"):
+                frac = r.get(f"adopted_{a}_na_time_fraction")
+                cells.append(f"{frac*100:6.1f}%{'*' if r.get(f'adopted_{a}_na_over_half') else ' '}"
+                             if frac is not None else "     n/a")
+            print(f"  {r['time_s']:7.4f} {cells[0]:>8} {cells[1]:>8}")
         print("\n[三路并列] 残差 RMS (K) —— 每条腿只该看它自己的那一路:")
         print(f"  {'读数':<14} {'服务于':<34} {'vs实测 as':>10} {'vs实测 par':>11}"
               f" {'vs他数值 as':>12} {'vs他数值 par':>13}")

@@ -125,3 +125,35 @@ def test_response_rejects_gaps_and_overlaps(second, kind):
     with pytest.raises(ValueError, match=kind):
         summary.response_integrated_series([_row(0.010, 0.010, 100.0), second],
                                             0.010, (1.0, 2.0))
+
+
+def test_response_bins_disclose_na_samples_without_changing_the_reading(monkeypatch):
+    """A2 (a): NA samples stay out of the adopted denominator but are disclosed."""
+    monkeypatch.setattr(summary.tc, "read_accumulated", lambda s1, s2, wavelengths: {
+        "T_K": s1, "over_range": False})
+    hot = _row(0.004, 0.004, 200.0)
+    cold = _row(0.010, 0.006, 0.0)
+    cold["n_hot"] = 0
+    cold["avg_K"] = None
+    result = summary.response_integrated_series([hot, cold], 0.010, (1.0, 2.0))
+    assert len(result) == 1
+    entry = result[0]
+    assert entry["avg_K"] == pytest.approx(200.0)      # valid-sample denominator
+    assert entry["n_na_samples"] == 1
+    assert entry["na_sample_fraction"] == pytest.approx(0.5)
+    assert entry["na_covered_s"] == pytest.approx(0.006)
+    assert entry["na_time_fraction"] == pytest.approx(0.6)
+    assert entry["na_over_half"] is True
+
+
+def test_response_bin_with_only_na_samples_is_na_and_flagged(monkeypatch):
+    monkeypatch.setattr(summary.tc, "read_accumulated", lambda s1, s2, wavelengths: {
+        "T_K": s1, "over_range": False})
+    cold = _row(0.010, 0.010, 0.0)
+    cold["n_hot"] = 0
+    cold["avg_K"] = None
+    entry = summary.response_integrated_series([cold], 0.010, (1.0, 2.0))[0]
+    assert entry["avg_K"] is None
+    assert entry["n_na_samples"] == 1
+    assert entry["na_time_fraction"] == pytest.approx(1.0)
+    assert entry["na_over_half"] is True

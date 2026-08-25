@@ -1,6 +1,8 @@
-# 评分规范修订提案 A2 —— §3.2 / §4.1 的"时样级 NA"条款在本工况下结构性不可满足
+# 评分规范修正案 A2 —— §3.2 / §4.1 的"时样级 NA"条款在本工况下结构性不可满足
 
-**状态:提案,待 yuyao 裁决。冻结规范文件本身未被改动。**
+**状态:已采纳方案 (a)(yuyao 2026-08-25 chat 裁决:"保留论文的处理方法和我们自己
+观测的结果说明")。生效文本 = `scoring-spec-thermal-gate-v2.1.md`;v2.0 原文
+`scoring-spec-thermal-gate-v2.md` @ `3b9c220` 一字未改保留。**
 
 - 基线:`scoring-spec-thermal-gate-v2.md` @ `3b9c220`(本分支以 cherry-pick 原样引入)
 - 提出:Fable5,2026-08-25(IET-22)
@@ -56,6 +58,11 @@
 1. `summarize_online_observables.py`:每箱增加 `n_na_samples` / `na_fraction`(时样级 `n_hot == 0` 计数);
 2. `compare_thermal_gate.py`:五点矩阵每格带 NA 占比,> 50 % 加旁注;
 3. 本文件改名为 amendment-A2(生效版),规范另立 `scoring-spec-thermal-gate-v2.1.md`,`3b9c220` 原文保留。
+
+以上三项已随本修正案一并落实(2026-08-25):汇总器每箱新增 `n_na_samples` /
+`na_covered_s` / `na_time_fraction` / `na_over_half` 与顶层 `na_disclosure`;
+对比器五点矩阵每格带 `adopted_<arm>_na_time_fraction`,> 50 % 标 `*`;
+v2.1 就位。读数数值未变。
 
 ## 复审要点
 

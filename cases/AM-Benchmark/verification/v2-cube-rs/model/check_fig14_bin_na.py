@@ -92,7 +92,7 @@ def main():
                                      else "OK"),
         "note": "NA 时样 = 该求解步圆内顶层没有单元 >= 1000 degC(n_hot == 0)。"
                 "summarize_online_observables.py 的区间平均只对有效时样加权,"
-                "与本判据不同;两者差异见 scoring-spec-amendment-A2-PROPOSAL.md",
+                "与本判据不同;两者差异见 scoring-spec-amendment-A2.md",
     }
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
