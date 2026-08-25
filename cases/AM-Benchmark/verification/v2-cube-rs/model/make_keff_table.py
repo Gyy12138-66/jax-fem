@@ -299,18 +299,63 @@ def melt_half_width_from_run(run_dir, solidus, window=None,
     }
 
 
+def load_parameter_config(path):
+    """加载显式配置；论文材料常数必须与权威源逐项一致。"""
+    with open(path, encoding="utf-8") as handle:
+        config = json.load(handle)
+    try:
+        process = config["independent_inputs"]["process"]
+        material = config["independent_inputs"]["material"]
+    except KeyError as exc:
+        raise SystemExit(f"keff 参数配置缺少字段: {exc}") from exc
+    authoritative = load_table1()
+    material_map = {
+        "k_liquid_W_mK": "k_liquid",
+        "cp_liquid_J_kgK": "cp_liquid",
+        "dynamic_viscosity_Pa_s": "mu",
+        "surface_tension_gradient_N_mK": "dsigma_dT",
+        "solidus_K": "solidus_K",
+        "liquidus_K": "liquidus_K",
+        "boiling_K": "boiling_K",
+    }
+    for config_key, source_key in material_map.items():
+        actual = float(material[config_key])
+        expected = authoritative[source_key]
+        if not math.isclose(actual, expected, rel_tol=0.0, abs_tol=1e-12):
+            raise SystemExit(
+                f"keff 参数配置 {config_key}={actual} 与权威材料源 {expected} 不一致")
+    return config, {
+        "power": float(process["power_W"]),
+        "speed": float(process["speed_m_s"]),
+        "absorptivity": float(process["absorptivity"]),
+        "beam_radius": float(process["beam_radius_m"]),
+        "opd": float(process["opd_m"]),
+        "rho_liquid": float(material["rho_liquid_kg_m3"]),
+    }
+
+
 def main():
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--parameter-config", type=Path)
+    known, _ = pre.parse_known_args()
+    parameter_config, defaults = (load_parameter_config(known.parameter_config)
+                                  if known.parameter_config else (None, {}))
+
     ap = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--power", type=float, default=220.0, help="W(热闸门工况)")
-    ap.add_argument("--speed", type=float, default=0.650, help="m/s")
-    ap.add_argument("--absorptivity", type=float, default=0.62,
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[pre])
+    ap.add_argument("--power", type=float, default=defaults.get("power", 220.0), help="W(热闸门工况)")
+    ap.add_argument("--speed", type=float, default=defaults.get("speed", 0.650), help="m/s")
+    ap.add_argument("--absorptivity", type=float,
+                    default=defaults.get("absorptivity", 0.62),
                     help="Balbaa Sec 3.1 DRS 实测")
-    ap.add_argument("--beam-radius", type=float, default=50.0e-6,
+    ap.add_argument("--beam-radius", type=float,
+                    default=defaults.get("beam_radius", 50.0e-6),
                     help="m,与 runner --beam-radius 一致")
-    ap.add_argument("--opd", type=float, default=100.0e-6,
+    ap.add_argument("--opd", type=float, default=defaults.get("opd", 100.0e-6),
                     help="m,Table 2 插值到 -45 um PSD")
-    ap.add_argument("--rho-liquid", type=float, default=7925.0,
+    ap.add_argument("--rho-liquid", type=float,
+                    default=defaults.get("rho_liquid", 7925.0),
                     help="kg/m3,Table 1 密度区间的液相端(config rho_liquid)")
     ap.add_argument("--half-width", type=float, default=None, help="L,熔池半宽 [m]")
     ap.add_argument("--from-run", default=None, help="从 as-is 臂运行目录量 L")
@@ -337,6 +382,7 @@ def main():
     rho_l = args.rho_liquid
 
     measured = None
+    length_source = None
     if args.from_run:
         # F2 的第一道闸:不完整的 as-is 臂不许推 keff。半途死掉的运行也会留下
         # 一堆 VTU,量出来的 L 看不出异常,却会被固化进 parity 臂。
@@ -356,17 +402,27 @@ def main():
             args.from_run, props["solidus_K"], window,
             at_time=args.from_run_time, track_y=args.from_run_track_y)
         L = measured["half_width_m"]
+        length_source = "as-is 臂实测(--from-run)"
         if args.half_width is not None and abs(L - args.half_width) > 1e-12:
             print(f"注意:--from-run 量得 L={L:.4e} m,"
                   f"覆盖 --half-width={args.half_width:.4e} m")
     elif args.half_width is not None:
         L = args.half_width
+        length_source = "显式给定(--half-width)"
+    elif parameter_config is not None:
+        try:
+            L = float(parameter_config["nonkeff_derived_inputs"]
+                      ["characteristic_half_width_L_m"])
+            length_source = "keff 参数配置(nonkeff_derived_inputs)"
+        except KeyError as exc:
+            raise SystemExit(f"keff 参数配置缺少 nonkeff 派生 L: {exc}") from exc
     else:
         raise SystemExit(
             "L(熔池半宽)是模型输出,本脚本不替你猜(D-V1-10 鸡生蛋)。\n"
             "  --from-run <as-is 臂运行目录>  由我们自己的 as-is 结果量出"
             "(推荐,自洽一次 Picard)\n"
-            "  --half-width <m>              显式给定并自行登记来源")
+            "  --half-width <m>              显式给定并自行登记来源\n"
+            "  --parameter-config <json>     使用已测量并冻结的 non-keff L")
 
     qv = args.qv if args.qv is not None else qv_peak_exponential(
         args.power, args.absorptivity, args.beam_radius, args.opd)
@@ -438,8 +494,12 @@ def main():
                    else "Eq 18 指数源束心峰值 2 Ac P/(pi r^2 d)",
         "characteristic_length": {
             "L_m": L,
-            "source": "as-is 臂实测(--from-run)" if measured else "显式给定(--half-width)",
-            "source_run_fingerprint": source_run_fingerprint(args.from_run),
+            "source": length_source,
+            "source_run_fingerprint": (source_run_fingerprint(args.from_run)
+                                       if args.from_run else
+                                       (parameter_config.get("nonkeff_derived_inputs", {})
+                                        .get("measurement_protocol")
+                                        if parameter_config else None)),
             "measurement": measured,
             "chicken_and_egg": "L 是模型输出;这是 D-V1-10/D-V2-21 登记的固有循环,"
                                "本实现用一次 Picard(as-is -> L -> parity)而不是迭代到自洽",
@@ -450,6 +510,7 @@ def main():
         "flags": flags,
         "zero_calibration_note": "没有任何一个量向高温计/XRD/ABAQUS 数值回调;"
                                  "L 来自我们自己的 as-is 臂输出,不是 Balbaa 的实测熔池",
+        "parameter_config": str(args.parameter_config) if args.parameter_config else None,
     }
 
     print(f"=== D-V2-21 parity 臂 keff 预计算 ({args.tag}) ===")
