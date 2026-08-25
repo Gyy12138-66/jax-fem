@@ -358,6 +358,10 @@ def main():
                                     if online_summary is not None else
                                     "稀疏 VTU 箱内平均(nearest_frame_avg_K 为备选读法)"),
             "online_summary": (str(args.online_summary) if args.online_summary else None),
+            "recorded_window_s": (online_summary.get("recorded_window_s")
+                                  if online_summary is not None else None),
+            "summary_window_s": (online_summary.get("summary_window_s")
+                                 if online_summary is not None else None),
             "registered_as": "D-V2-23(圆心/深度/分箱读法三项均为我们的约定)",
         },
         "three_readings": {

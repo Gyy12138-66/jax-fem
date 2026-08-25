@@ -37,13 +37,11 @@ def main():
             "mean_n_hot": row["mean_n_hot"],
         })
 
-    online_summary = pyrometer["protocol"]["online_summary"]
+    protocol = pyrometer["protocol"]
     output = {
         "arm": args.arm,
-        "recording_window_s": online_summary.get(
-            "recorded_window_s", online_summary["meta"]["window_s"]),
-        "summary_window_s": online_summary.get(
-            "summary_window_s", online_summary["meta"]["window_s"]),
+        "recording_window_s": protocol["recorded_window_s"],
+        "summary_window_s": protocol["summary_window_s"],
         "matching": "nearest registered 10 ms response bin center",
         "points": points,
     }
