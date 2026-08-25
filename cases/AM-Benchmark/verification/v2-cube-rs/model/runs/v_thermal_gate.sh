@@ -44,6 +44,7 @@ SMOKE="${SMOKE:-0}"
 STAGES="${STAGES:-1 2 3 4}"
 # Balbaa Sec. 3.3 / scoring spec: response window and three top-layer probes.
 OBS_WINDOW="${OBS_WINDOW:-0.45,0.90}"
+SUMMARY_WINDOW="${SUMMARY_WINDOW:-0.45,0.90}"
 OBS_PROBES="${OBS_PROBES:-0.001,0.002,0.00042;0.002,0.002,0.00042;0.003,0.002,0.00042}"
 LOG=$VT/thermal_gate.log
 mkdir -p "$VT"
@@ -69,9 +70,9 @@ mkdir -p "$KEFF_DIR"
 
 say() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" | tee -a "$LOG"; }
 has()  { [ "${STAGES#*$1}" != "$STAGES" ]; }
-RUN_PARAMETERS=$(python3 - "$OBS_WINDOW" "$OBS_PROBES" <<'PY'
+RUN_PARAMETERS=$(python3 - "$OBS_WINDOW" "$SUMMARY_WINDOW" "$OBS_PROBES" <<'PY'
 import json, sys
-window, probes = sys.argv[1:]
+window, summary_window, probes = sys.argv[1:]
 print(json.dumps({
     "laser_power_W": 220.0, "scan_speed_m_s": 0.650,
     "hatch_m": 0.12e-3, "layer_thickness_m": 4.0e-5,
@@ -81,6 +82,7 @@ print(json.dumps({
     "ambient_K": 313.0, "preheat_K": 353.15,
     "bottom_thermal_bc": "fixed", "bottom_temperature_K": 353.15,
     "surface_selection": "exterior", "observation_window": window,
+    "summary_window": summary_window,
     "observation_probes": probes, "response_bin_ms": 10.0,
 }, sort_keys=True))
 PY
@@ -263,6 +265,7 @@ PY
     "$OUT/online_observables.jsonl" \
     --meta "$OUT/online_observables_meta.json" \
     --expected-run-id "$RUN_ID" \
+    --summary-window "$SUMMARY_WINDOW" \
     --output "$OUT/online_observables_summary.json" \
     >> "$OUT/run.log" 2>&1 \
     || { say "$NAME 在线观测汇总失败，停止"; exit 2; }

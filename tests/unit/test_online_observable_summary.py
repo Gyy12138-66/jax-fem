@@ -53,11 +53,20 @@ def test_protocol_validation_accepts_registered_metadata():
         (0.95e-6, 1.05e-6))
 
 
+def test_protocol_validation_accepts_recording_window_that_contains_summary_window():
+    meta = _meta()
+    meta["window_s"] = [0.40, 1.00]
+    assert summary.validate_protocol(
+        meta, expected_run_id="run-123", summary_window_s=(0.45, 0.90)
+    ) == pytest.approx((0.95e-6, 1.05e-6))
+
+
 @pytest.mark.parametrize("mutation", [
     lambda meta: meta.update(run_id="wrong"),
     lambda meta: meta.update(spot_center_m=[0.001, 0.002]),
     lambda meta: meta.update(record_every_n_steps=2),
-    lambda meta: meta.update(window_s=[0.40, 0.90]),
+    lambda meta: meta.update(window_s=[0.46, 0.90]),
+    lambda meta: meta.update(window_s=[0.45, 0.89]),
     lambda meta: meta.update(depth_scope="top layer (z >= 3.900000e-04 m)"),
     lambda meta: meta["two_colour"].update(wavelengths_m=[1.0e-6, 1.1e-6]),
     lambda meta: meta["probe_resolution"].update(all_probes_contained=False),
@@ -67,6 +76,14 @@ def test_protocol_validation_rejects_mismatch(mutation):
     mutation(meta)
     with pytest.raises(ValueError, match="protocol mismatch"):
         summary.validate_protocol(meta, expected_run_id="run-123")
+
+
+def test_crop_rows_to_window_clips_boundary_steps():
+    rows = [_row(0.44, 0.02, 100.0), _row(0.46, 0.02, 200.0),
+            _row(0.91, 0.45, 300.0)]
+    cropped = summary.crop_rows_to_window(rows, (0.45, 0.90))
+    assert [r["time_s"] for r in cropped] == pytest.approx([0.46, 0.90])
+    assert [r["dt_s"] for r in cropped] == pytest.approx([0.01, 0.44])
 
 
 def test_response_bins_weight_unequal_steps_by_duration(monkeypatch):

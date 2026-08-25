@@ -14,6 +14,8 @@ def test_production_runner_wires_preregistered_observables_and_source_band():
         'REPO="${REPO:-/home/user/work/159/jax-fem}"',
         'OUTROOT="${OUTROOT:-/home/user/work/159/output}"',
         'VT="${VT:-/home/user/work/159/vtmp}"',
+        'SUMMARY_WINDOW="${SUMMARY_WINDOW:-0.45,0.90}"',
+        '--summary-window "$SUMMARY_WINDOW"',
         'cd "$REPO"',
         "--source-depth-cutoff 0",
         "--no-source-cutoff-renormalize",

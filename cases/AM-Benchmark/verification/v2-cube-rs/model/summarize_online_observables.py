@@ -107,8 +107,13 @@ def response_integrated_series(rows, bin_s, wavelengths):
     return series
 
 
-def validate_protocol(meta, *, expected_run_id=None):
-    """Fail closed unless metadata exactly describes the registered protocol."""
+def validate_protocol(meta, *, expected_run_id=None,
+                      summary_window_s=(0.45, 0.90)):
+    """Fail closed unless metadata covers the registered summary protocol.
+
+    The recorder may intentionally use a wider window.  That is valid as long as
+    the requested summary window is wholly contained in the recorded window.
+    """
     errors = []
     if meta.get("schema_version") != "v06.online-observables/1":
         errors.append("schema_version")
@@ -119,13 +124,17 @@ def validate_protocol(meta, *, expected_run_id=None):
         "spot_diameter_m": 2.0e-3,
         "threshold_C": 1000.0,
         "range_max_C": 3000.0,
-        "window_s": [0.45, 0.90],
         "record_every_n_steps": 1,
     }
     for key, value in expected.items():
         actual = meta.get(key)
         if actual is None or not np.allclose(actual, value, rtol=0.0, atol=1.0e-12):
             errors.append(key)
+    recorded_window = meta.get("window_s")
+    if (not isinstance(recorded_window, list) or len(recorded_window) != 2
+            or recorded_window[0] > summary_window_s[0] + 1.0e-12
+            or recorded_window[1] < summary_window_s[1] - 1.0e-12):
+        errors.append("window_s")
     if meta.get("depth_scope") != "top layer (z >= 4.000000e-04 m)":
         errors.append("depth_scope")
     probes = meta.get("probes")
@@ -147,6 +156,26 @@ def validate_protocol(meta, *, expected_run_id=None):
     return tuple(float(value) for value in wl)
 
 
+def crop_rows_to_window(rows, window_s):
+    """Clip step intervals to a summary window without inventing samples."""
+    start, end = (float(value) for value in window_s)
+    if not np.isfinite(start) or not np.isfinite(end) or start >= end:
+        raise ValueError("summary window must be finite and increasing")
+    clipped = []
+    for row in rows:
+        interval_start = float(row["time_s"]) - float(row["dt_s"])
+        interval_end = float(row["time_s"])
+        overlap_start = max(interval_start, start)
+        overlap_end = min(interval_end, end)
+        if overlap_end <= overlap_start:
+            continue
+        item = dict(row)
+        item["time_s"] = overlap_end
+        item["dt_s"] = overlap_end - overlap_start
+        clipped.append(item)
+    return clipped
+
+
 def file_sha256(path):
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
@@ -161,6 +190,8 @@ def main():
     ap.add_argument("jsonl", type=Path)
     ap.add_argument("--meta", type=Path, default=None)
     ap.add_argument("--bin-ms", type=float, default=10.0)
+    ap.add_argument("--summary-window", default="0.45,0.90",
+                    help="汇总窗口 start,end [s]；记录窗口可以更宽，但必须完全覆盖它")
     ap.add_argument("--expected-run-id", default=None)
     ap.add_argument("--output", type=Path, default=None)
     args = ap.parse_args()
@@ -173,7 +204,14 @@ def main():
         raise SystemExit("正式在线汇总必须提供 --meta")
     meta = json.loads(args.meta.read_text(encoding="utf-8"))
     try:
-        wl = validate_protocol(meta, expected_run_id=args.expected_run_id)
+        summary_window = tuple(float(value) for value in args.summary_window.split(","))
+        if len(summary_window) != 2:
+            raise ValueError("summary window needs exactly two values")
+        wl = validate_protocol(meta, expected_run_id=args.expected_run_id,
+                               summary_window_s=summary_window)
+        rows = crop_rows_to_window(rows, summary_window)
+        if not rows:
+            raise ValueError("summary window contains no recorded observations")
     except ValueError as error:
         raise SystemExit(str(error)) from error
 
@@ -193,6 +231,8 @@ def main():
     doc = {
         "source": str(args.jsonl),
         "meta": meta,
+        "recorded_window_s": meta.get("window_s"),
+        "summary_window_s": list(summary_window),
         "response_bin_ms": float(args.bin_ms),
         "source_jsonl_sha256": file_sha256(args.jsonl),
         "n_rows": len(rows),

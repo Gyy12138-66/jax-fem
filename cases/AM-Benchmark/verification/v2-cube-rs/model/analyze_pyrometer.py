@@ -246,13 +246,13 @@ def main():
             raise SystemExit(f"在线观测摘要不存在: {args.online_summary}")
         online_summary = json.loads(args.online_summary.read_text(encoding="utf-8"))
         online_meta = online_summary.get("meta", {})
+        summary_window = [float(args.observation_window.split(",")[0]),
+                          float(args.observation_window.split(",")[1])]
         expected_meta = {
             "spot_center_m": [float(cx), float(cy)],
             "spot_diameter_m": float(args.spot_diameter),
             "threshold_C": float(args.threshold_C),
             "range_max_C": float(args.range_max_C),
-            "window_s": [float(args.observation_window.split(",")[0]),
-                         float(args.observation_window.split(",")[1])],
         }
         for key, expected in expected_meta.items():
             actual = online_meta.get(key)
@@ -260,6 +260,20 @@ def main():
                                                   atol=1.0e-12):
                 raise SystemExit(
                     f"在线观测摘要协议不匹配 {key}: {actual!r} != {expected!r}")
+        recorded_window = online_meta.get("window_s")
+        summary_window_in_file = online_summary.get("summary_window_s")
+        if (not isinstance(recorded_window, list) or len(recorded_window) != 2
+                or recorded_window[0] > summary_window[0] + 1.0e-12
+                or recorded_window[1] < summary_window[1] - 1.0e-12):
+            raise SystemExit(
+                f"在线观测记录窗口未覆盖汇总窗口: {recorded_window!r}"
+                f" does not cover {summary_window!r}")
+        if (summary_window_in_file is not None
+                and not np.allclose(summary_window_in_file, summary_window,
+                                    rtol=0.0, atol=1.0e-12)):
+            raise SystemExit(
+                f"在线观测摘要窗口不匹配: {summary_window_in_file!r}"
+                f" != {summary_window!r}")
         actual_wl = online_meta.get("two_colour", {}).get("wavelengths_m")
         if actual_wl is None or not np.allclose(actual_wl, wl, rtol=0.0,
                                                 atol=1.0e-12):
