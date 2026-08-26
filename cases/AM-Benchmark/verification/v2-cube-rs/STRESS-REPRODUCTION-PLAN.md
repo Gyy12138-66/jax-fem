@@ -95,6 +95,20 @@
 
 阶段门：完成 IET-9 的“首个可验证应力结果”，并如实登记未闭合偏差。
 
+## 进度（2026-08-26，Fable5）
+
+| 阶段 | 状态 | 证据 |
+|---|---|---|
+| 0 规格冻结 | 部分：D-V2-07/11/12/18 有 smoke 采纳值，生产值未冻结 | `inputs/deviations.yaml` D-V2-10/11/12/28 |
+| 1 几何/路径/激活/台账 | **通过**（4 × 4 × 1 mm 缩面缩高 smoke，D-V2-28） | `model/make_v2_cube_preflight.py`，15 单测，`<run>/preflight/*` |
+| 2 runner 合同 + 热源量化 | **通过**：合同 `runner_contract.json`；D-V2-10 单层量化完成（物理光斑 0.24 %，合同 96.2 %） | `model/runs/v_cube_smoke.sh` 阶段 2，`capture_ladder.json` |
+| 2 缩高热-力 smoke | 运行中（`output/v2_cube_smoke_smoke1/smoke`），门槛见 `model/check_cube_smoke.py` | `CUBE-SMOKE.md` |
+| 3-5 | 未开始。**阻塞项**：250 事件读法在 10 × 10 生产几何上约 1e6 热步（D-V2-11 cost_projection），需先决定线源沉积（改共享求解器）或逐道集总 | — |
+
+三条阶段 1/2 抓到并已修的合同缺陷（均由台账/能量闭合暴露，不是靠目测）：
+`intersection` 激活几何把相邻 slab 一起打印（D-V2-11）；路径写成零件局部坐标而网格零件居中（D-V2-28）；
+集总配点把热源搬到顶点采样、指数深度剖面被高估 1.47×（D-V2-10）。
+
 ## 汇报协议
 
 每完成一个阶段门，或出现改变物理口径/阻塞生产运行的发现时：
