@@ -75,6 +75,18 @@ def test_non_integer_and_non_positive_schedule_values_fail_closed(tmp_path):
         MODULE.load_config(bad)
 
 
+@pytest.mark.parametrize("key", [
+    "margin_m", "start_angle_deg", "rotation_per_physical_layer_deg",
+])
+def test_numeric_scan_fields_reject_boolean_values(tmp_path, key):
+    raw = json.loads(CONFIG.read_text(encoding="utf-8"))
+    raw["scan"][key] = False
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(SystemExit, match=f"scan.{key}"):
+        MODULE.load_config(bad)
+
+
 def test_production_schedule_must_match_height_and_slab_count(tmp_path):
     raw = json.loads(CONFIG.read_text(encoding="utf-8"))
     raw["layer_schedule"]["production_physical_layers"] = 249

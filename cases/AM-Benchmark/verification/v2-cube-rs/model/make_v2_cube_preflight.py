@@ -59,12 +59,18 @@ def load_config(path: Path) -> dict:
         _positive_finite(g[key], f"geometry.{key}")
     for key in ("power_W", "speed_m_s", "hatch_m", "sample_step_m", "jump_speed_m_s"):
         _positive_finite(scan[key], f"scan.{key}")
+    for key in ("start_angle_deg", "rotation_per_physical_layer_deg"):
+        if isinstance(scan[key], bool) or not math.isfinite(float(scan[key])):
+            raise SystemExit(f"scan.{key} must be finite")
     _positive_finite(layers["recoat_time_s"], "layer_schedule.recoat_time_s")
     if not isinstance(layers["recoat_after_final_layer"], bool):
         raise SystemExit("layer_schedule.recoat_after_final_layer must be boolean")
     if not isinstance(scan["serpentine"], bool) or scan["serpentine"] is not True:
         raise SystemExit("scan.serpentine must be true for this preflight")
-    if float(scan["margin_m"]) < 0 or 2 * float(scan["margin_m"]) >= float(g["part_xy_m"]):
+    margin = scan["margin_m"]
+    if isinstance(margin, bool) or not math.isfinite(float(margin)) or float(margin) < 0:
+        raise SystemExit("scan.margin_m must be finite and non-negative")
+    if 2 * float(margin) >= float(g["part_xy_m"]):
         raise SystemExit("scan margin leaves no exposure area")
     return cfg
 
