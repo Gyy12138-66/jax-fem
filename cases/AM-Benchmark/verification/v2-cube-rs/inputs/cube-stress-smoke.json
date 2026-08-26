@@ -1,0 +1,45 @@
+{
+  "schema": "v2.cube-stress-smoke/1",
+  "purpose": "阶段1缩高cube前期算例：仅生成25层smoke，用于验证250层方案的真实层到slab映射规则；不可直接交给solver", 
+  "provenance": {
+    "paper": "Balbaa2022 Sec 2.6.3, Fig 4-5",
+    "deviations": ["D-V2-07", "D-V2-11", "D-V2-12"],
+    "zero_calibration": true
+  },
+  "geometry": {
+    "part_xy_m": 0.01,
+    "smoke_part_z_m": 0.001,
+    "production_part_z_m": 0.01,
+    "substrate_xy_m": 0.03,
+    "substrate_z_m": 0.006,
+    "cell_size_m": 0.0002
+  },
+  "layer_schedule": {
+    "physical_layer_thickness_m": 0.00004,
+    "activation_slab_thickness_m": 0.0002,
+    "physical_layers_per_slab": 5,
+    "smoke_physical_layers": 25,
+    "production_physical_layers": 250,
+    "activation_rule": "activate a 200 um slab when its first contained 40 um physical-layer scan starts",
+    "recoat_time_s": 5.0,
+    "recoat_after_final_layer": false
+  },
+  "scan": {
+    "power_W": 140.0,
+    "speed_m_s": 0.65,
+    "hatch_m": 0.00012,
+    "margin_m": 0.0001,
+    "sample_step_m": 0.0002,
+    "jump_speed_m_s": 5.0,
+    "start_angle_deg": 0.0,
+    "rotation_per_physical_layer_deg": 90.0,
+    "serpentine": true
+  },
+  "thermal_mechanical": {
+    "initial_temperature_K": 353.15,
+    "stress_free_reference_K": 1273.15,
+    "final_cooldown_s": 600.0,
+    "bottom_mechanics_bc": "fixed_until_release",
+    "release_after_cooling": true
+  }
+}
