@@ -102,7 +102,7 @@
 | 0 规格冻结 | 部分：D-V2-07/11/12/18 有 smoke 采纳值，生产值未冻结 | `inputs/deviations.yaml` D-V2-10/11/12/28 |
 | 1 几何/路径/激活/台账 | **通过**（4 × 4 × 1 mm 缩面缩高 smoke，D-V2-28） | `model/make_v2_cube_preflight.py`，15 单测，`<run>/preflight/*` |
 | 2 runner 合同 + 热源量化 | **通过**：合同 `runner_contract.json`；D-V2-10 单层量化完成（物理光斑 0.24 %，合同 96.2 %） | `model/runs/v_cube_smoke.sh` 阶段 2，`capture_ladder.json` |
-| 2 缩高热-力 smoke | 运行中（`output/v2_cube_smoke_smoke1/smoke`），门槛见 `model/check_cube_smoke.py` | `CUBE-SMOKE.md` |
+| 2 缩高热-力 smoke | **通过 10/10**（`output/v2_cube_smoke_smoke2/smoke`，16,299 步，9.78 h，事件驱动力学 12,901 次求解）：激活步逐 slab 对合同、能量 390.36 J 对预测、Newton 零失败、释放自平衡 | `CUBE-SMOKE.md` §6，`cube_smoke_gate.json` |
 | 3-5 | 未开始。**阻塞项**：250 事件读法在 10 × 10 生产几何上约 1e6 热步（D-V2-11 cost_projection），需先决定线源沉积（改共享求解器）或逐道集总 | — |
 
 三条阶段 1/2 抓到并已修的合同缺陷（均由台账/能量闭合暴露，不是靠目测）：

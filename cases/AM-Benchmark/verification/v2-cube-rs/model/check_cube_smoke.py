@@ -181,8 +181,10 @@ def main() -> None:
         contract = json.loads((args.preflight / "runner_contract.json").read_text(encoding="utf-8"))
         t_ref = float(contract["temperature_mapping"]["stress_free_reference_K"])
         observed = activation.get("part_stress_free_temperature_unique") or []
+        # VTU cell data is stored in float32: 1273.15 reads back as 1273.1500244,
+        # so the tolerance is a float32 ulp at ~1e3 K (1.2e-4), not 1e-6.
         checks["stress_free_reference_applied"] = (
-            len(observed) == 1 and math.isclose(observed[0], t_ref, rel_tol=0.0, abs_tol=1e-6))
+            len(observed) == 1 and math.isclose(observed[0], t_ref, rel_tol=0.0, abs_tol=1e-3))
         # release effect: last cooling frame vs release.vtu (part cells only)
         release = {"checked": False}
         rel_path = run / "release.vtu"
