@@ -1,0 +1,11 @@
+{
+  "arm": "cpu_pardiso",
+  "role": "baseline (identical to the smoke2 contract)",
+  "conda_env": "jax-fem-env",
+  "platform": "cpu",
+  "linear_solver": "MKL PARDISO via jax_fem_am custom_solver, mode phase23 (symbolic analysis once, then numeric factorization + solve)",
+  "extra_argv": [],
+  "notes": "CPU assembly (JAX, XLA CPU) + CPU direct solve. Bitwise-reproducible; the reference the other arms are diffed against.",
+  "python_bin": "/home/user/miniforge3/envs/jax-fem-env/bin/python",
+  "env_note": "jax-fem-env lives under miniforge3; jax-fem-gpu was cloned under miniconda3 (output/gpu_env_setup.sh) -- `conda activate` from miniforge's conda.sh cannot see it, so arms are launched by absolute python path (the L0/D-11 PYTHON_BIN convention)."
+}
