@@ -28,7 +28,7 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false PYTHONUNBUFFERED=1 MKL_NUM_THREADS="$
 
 V2="$REPO/cases/AM-Benchmark/verification/v2-cube-rs"
 M="$V2/model"
-CFG="$V2/inputs/cube-stress-smoke.json"
+CFG="${CFG:-$V2/inputs/cube-stress-smoke.json}"     # CFG=.../cube-stress-production.json for stage-3 work
 TAG="${TAG:-$(git -C "$REPO" rev-parse --short HEAD)}"
 OUTROOT="${OUTROOT:-/home/user/work/159/output/v2_cube_smoke_${TAG}}"
 PRE="$OUTROOT/preflight"
@@ -90,8 +90,16 @@ run_solver() {  # NAME OUT extra-args...
   if is_complete "$OUT"; then say "$NAME already complete, skip (idempotent)"; return 0; fi
   rm -rf "$OUT"; mkdir -p "$OUT"
   mapfile -t ARGV < <(contract_argv)
-  say "$NAME start -> $OUT (extra: $*)"
-  python -m jax_fem_am.simulation.runner "${ARGV[@]}" \
+  # interpreter and platform follow the contract: the GPU env (jax-fem-gpu) lives
+  # under miniconda3 and cannot be `conda activate`d from miniforge's conda.sh,
+  # so it is addressed by absolute path (L0 / D-11 PYTHON_BIN convention)
+  local PYBIN PLATFORM
+  PYBIN=$(python3 -c "import json;c=json.load(open('$PRE/runner_contract.json'));print(c.get('python_bin') or '')")
+  PLATFORM=$(python3 -c "import json;c=json.load(open('$PRE/runner_contract.json'));print(c.get('platform') or 'cpu')")
+  [ -n "$PYBIN" ] || PYBIN=python
+  export JAX_PLATFORM_NAME="$PLATFORM"
+  say "$NAME start -> $OUT (python=$PYBIN platform=$PLATFORM extra: $*)"
+  "$PYBIN" -m jax_fem_am.simulation.runner "${ARGV[@]}" \
     --output-dir "$OUT" --profile-json "$OUT/profile.json" --profile-label "v2-cube-$NAME" \
     "$@" > "$OUT/run.log" 2>&1
   local RC=$? N
@@ -127,9 +135,11 @@ PY
     run_solver "$name" "$OUTROOT/$name" "${COMMON[@]}" --beam-radius "$r"
     DIRS+=("$name")
   done
-  run_solver capture_r50_halfspace "$OUTROOT/capture_r50_halfspace" "${COMMON[@]}" \
-    --beam-radius 5.0e-5 --source-depth-cutoff 0 --no-source-cutoff-renormalize
-  DIRS+=(capture_r50_halfspace)
+  if [ "${SKIP_R50:-0}" != "1" ]; then   # the physical-spot reference is meaningless for a flash contract
+    run_solver capture_r50_halfspace "$OUTROOT/capture_r50_halfspace" "${COMMON[@]}" \
+      --beam-radius 5.0e-5 --source-depth-cutoff 0 --no-source-cutoff-renormalize
+    DIRS+=(capture_r50_halfspace)
+  fi
   for d in "${DIRS[@]}"; do
     say "capture gate [$d]:"
     python "$M/check_cube_smoke.py" --run "$OUTROOT/$d" --preflight "$PRE" --capture-only 2>&1 | tee -a "$LOG" | sed 's/^/    /'
@@ -159,6 +169,30 @@ for r in rows:
     print(f"  {r['run']:24s} r={r['beam_radius_m']:.1e} capture={r['capture_fraction']:.4f} "
           f"step[min,max,std]=[{r['per_step_capture_min']:.3f},{r['per_step_capture_max']:.3f},{r['per_step_capture_std']:.3f}] "
           f"Tmax={r['T_max_last_K']:.0f}K {r['seconds_per_step']:.3f}s/step")
+PY
+fi
+
+# ---- stage S: shakedown truncated to SHAKEDOWN_SLABS slabs (production mesh cost/behaviour) ----
+if has S; then
+  NS="${SHAKEDOWN_SLABS:-2}"
+  SD="$OUTROOT/shakedown_${NS}slabs"
+  run_solver "shakedown_${NS}slabs" "$SD" --max-print-layers "$NS" \
+    --cooling-steps "${SHAKEDOWN_COOLING_STEPS:-6}" --cooling-dt "${SHAKEDOWN_COOLING_DT:-100}"
+  say "shakedown gate (slabs <= $NS):"
+  python "$M/check_cube_smoke.py" --run "$SD" --preflight "$PRE" --max-slabs "$NS" 2>&1 | tee -a "$LOG" | sed 's/^/    /'
+  say "SHAKEDOWN_GATE_RC=${PIPESTATUS[0]}"
+  python3 - "$SD/profile.json" "$SD/run.log" "$NS" <<'PY' | tee -a "$LOG"
+import json, re, sys
+p = json.load(open(sys.argv[1])); ss = p["stage_seconds"]; sc = p["stage_calls"]
+text = open(sys.argv[2], encoding="utf-8", errors="replace").read()
+mech = len(set(re.findall(r"mechanics_current=1 mechanics_source_step=(\d+)", text)))
+steps = p["steps"]; ns = int(sys.argv[3]); layers = 5 * ns
+print(f"shakedown: {steps} steps, wall {p['wall_seconds']:.0f} s ({p['wall_seconds']/steps:.2f} s/step); "
+      f"assembly {ss.get('assembly',0):.0f} s, solver {ss.get('solver',0):.0f} s, newton {p['meta'].get('newton_wall_seconds',0):.0f} s; "
+      f"nonlinear solves {sc.get('nonlinear_solve')}, mechanics solves seen in summaries >= {mech}")
+per_layer = p["wall_seconds"] / layers
+print(f"per physical layer {per_layer:.0f} s -> 250 layers ~ {250*per_layer/3600:.1f} h (+ cooldown/release); "
+      f"NOTE: early slabs are cheaper than late ones (matrix grows with printed volume)")
 PY
 fi
 

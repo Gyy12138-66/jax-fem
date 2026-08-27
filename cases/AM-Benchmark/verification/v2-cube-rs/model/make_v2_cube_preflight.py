@@ -52,6 +52,26 @@ LEDGER_SCHEMA = "v2.cube-preflight-ledger/2"
 CONTRACT_SCHEMA = "v2.cube-runner-contract/1"
 PATH_FIELDS = ["time", "x", "y", "z", "power", "laser_on", "layer", "hatch",
                "mode", "front_coord", "physical_layer", "scan_id", "physical_z"]
+DEPOSITION_MODES = ("serpentine", "flash")
+
+
+def geom(g: dict, key: str):
+    """Modelled geometry: `model_<key>` wins over the legacy `smoke_<key>` name.
+
+    The smoke config named the modelled (reduced) geometry `smoke_*`; the
+    production config models Balbaa's real geometry and uses `model_*`. Both
+    families are accepted so the two configs share one generator.
+    """
+    if f"model_{key}" in g:
+        return g[f"model_{key}"]
+    return g[f"smoke_{key}"]
+
+
+def flash_capture_fraction(half_side: float, beam_radius: float) -> float:
+    """Fraction of the legacy in-plane Gaussian exp(-2 rho^2 / r^2) (integral
+    pi r^2 / 2) that falls inside a centred square of half side a:
+    erf(sqrt(2) a / r)^2. Closed form, no quadrature."""
+    return math.erf(math.sqrt(2.0) * half_side / beam_radius) ** 2
 
 
 def _positive_integer(value: object, name: str) -> int:
@@ -83,6 +103,28 @@ def load_config(path: Path) -> dict:
     if cfg.get("schema") != SCHEMA:
         raise SystemExit("unsupported cube smoke schema")
     g, layers, scan = cfg["geometry"], cfg["layer_schedule"], cfg["scan"]
+    # normalise the geometry family: expose model_* as smoke_* so the rest of
+    # the validation (written for the smoke keys) applies to both configs
+    for key in ("part_xy_m", "part_z_m", "substrate_xy_m", "substrate_z_m", "substrate_grading"):
+        if f"model_{key}" in g:
+            g[f"smoke_{key}"] = g[f"model_{key}"]
+    if "model_physical_layers" in layers:
+        layers["smoke_physical_layers"] = layers["model_physical_layers"]
+    mode = layers.get("deposition_mode", "serpentine")
+    if mode not in DEPOSITION_MODES:
+        raise SystemExit(f"layer_schedule.deposition_mode must be one of {DEPOSITION_MODES}")
+    layers["deposition_mode"] = mode
+    if mode == "flash":
+        fl = scan.get("flash")
+        if not isinstance(fl, dict):
+            raise SystemExit("flash deposition needs a scan.flash block")
+        _positive_integer(fl["substeps"], "scan.flash.substeps")
+        r = _positive_finite(fl["beam_radius_m"], "scan.flash.beam_radius_m")
+        if r < 5.0 * float(g["smoke_part_xy_m"]):
+            raise SystemExit("scan.flash.beam_radius_m must be >= 5 x the part side for a near-uniform flash "
+                             "(centre-to-corner drop < 4 %)")
+        if fl.get("power_rule") != "commanded = P / capture(footprint)":
+            raise SystemExit("scan.flash.power_rule must be the registered energy-conserving rule")
     physical = _positive_finite(layers["physical_layer_thickness_m"],
                                 "layer_schedule.physical_layer_thickness_m")
     slab = _positive_finite(layers["activation_slab_thickness_m"],
@@ -292,6 +334,28 @@ def generate_schedule(cfg: dict, *, footprint_m: float | None = None,
     exposure_width = side - 2 * margin
     n_tracks = int(math.ceil(exposure_width / hatch_space))
     lo, hi = origin + margin, origin + side - margin
+    mode = layers.get("deposition_mode", "serpentine")
+    flash = None
+    if mode == "flash":
+        # Reading A (D-V2-11): every physical layer's scan is replaced by a
+        # uniform "flash" over the whole layer for the REAL scan duration.
+        # Implemented without solver changes as a legacy Gaussian of a radius
+        # much larger than the part (centre-to-corner drop erf-small) whose
+        # commanded power is scaled by 1/capture so that the energy captured
+        # inside the footprint equals the physical layer energy P * t_scan.
+        fl = scan["flash"]
+        r_flash = float(fl["beam_radius_m"])
+        n_sub = int(fl["substeps"])
+        capture = flash_capture_fraction(0.5 * side, r_flash)
+        t_scan_layer = n_tracks * exposure_width / speed          # real serpentine time, jumps excluded
+        p_flash = power / capture
+        flash = {"beam_radius_m": r_flash, "substeps": n_sub, "capture_fraction_analytic": capture,
+                 "uniformity_min_over_max": math.exp(-2.0 * 2.0 * (0.5 * side) ** 2 / r_flash ** 2),
+                 "layer_scan_time_s": t_scan_layer, "substep_dt_s": t_scan_layer / n_sub,
+                 "physical_power_W": power, "commanded_power_W": p_flash,
+                 "physical_energy_per_layer_J": power * t_scan_layer,
+                 "commanded_energy_per_layer_J": p_flash * t_scan_layer,
+                 "centre_xy_m": [origin + 0.5 * side, origin + 0.5 * side]}
     for physical_layer in range(1, n_physical + 1):
         slab = (physical_layer - 1) // per_slab + 1
         physical_z = sub_z + physical_layer * physical_dz
@@ -303,7 +367,22 @@ def generate_schedule(cfg: dict, *, footprint_m: float | None = None,
         layer_start = state["time"]
         layer_energy = 0.0
         first_scan_row = None
-        for track in range(n_tracks):
+        if flash is not None:
+            scan_id += 1
+            cx, cy = flash["centre_xy_m"]
+            for _ in range(flash["substeps"]):
+                add_row(rows, state, dt=flash["substep_dt_s"], x=cx, y=cy, z=deposition_z,
+                        power=flash["commanded_power_W"], laser_on=1, layer=slab, hatch=1,
+                        mode="scan", physical_layer=physical_layer, scan_id=scan_id,
+                        physical_z=physical_z)
+                if first_scan_row is None:
+                    first_scan_row = len(rows) - 1
+                # PHYSICAL energy: commanded x captured fraction == P x dt
+                energy_J += power * flash["substep_dt_s"]
+                layer_energy += power * flash["substep_dt_s"]
+                scan_time_s += flash["substep_dt_s"]
+            previous = (cx, cy, deposition_z)
+        for track in (range(n_tracks) if flash is None else ()):
             cross = origin + (side - (n_tracks - 1) * hatch_space) / 2 + track * hatch_space
             forward = track % 2 == 0
             a, b = (lo, hi) if forward else (hi, lo)
@@ -393,6 +472,8 @@ def generate_schedule(cfg: dict, *, footprint_m: float | None = None,
         "track_cross_min_m": origin + (side - (n_tracks - 1) * hatch_space) / 2,
         "track_cross_max_m": origin + (side + (n_tracks - 1) * hatch_space) / 2,
         "exposure_bounds_m": [origin + margin, origin + side - margin],
+        "deposition_mode": mode,
+        "flash": flash,
         "deposition_z_rule": z_rule,
         "scan_rows": sum(row["laser_on"] == 1 for row in rows),
         "jump_rows": sum(row["mode"] == "jump" for row in rows),
@@ -507,7 +588,7 @@ def validate_schedule(rows: list[dict], ledger: dict, cfg: dict) -> None:
     if not seen_scan_before:
         raise ValueError("no activation events")
     # scan direction alternates track by track (serpentine) within each layer
-    for layer in ledger["layers"]:
+    for layer in (ledger["layers"] if ledger["deposition_mode"] == "serpentine" else ()):
         scan_rows = [r for r in rows if r["laser_on"] == 1 and r["physical_layer"] == layer["physical_layer"]]
         by_track: dict[int, list[dict]] = {}
         for r in scan_rows:
@@ -520,11 +601,25 @@ def validate_schedule(rows: list[dict], ledger: dict, cfg: dict) -> None:
         if any(directions[i] == directions[i + 1] for i in range(len(directions) - 1)):
             raise ValueError("serpentine direction does not alternate")
     # energy identity: nominal = P * exposed length / v per layer, summed
+    # (flash mode deposits the same physical energy: commanded x capture == P x t_scan)
     scan_cfg = cfg["scan"]
     per_layer = (float(scan_cfg["power_W"]) * (ledger["footprint_m"] - 2 * float(scan_cfg["margin_m"]))
                  / float(scan_cfg["speed_m_s"]) * ledger["tracks_per_physical_layer"])
     if not math.isclose(ledger["nominal_laser_energy_J"], per_layer * n_physical, rel_tol=1e-9):
         raise ValueError("energy identity failed")
+    if ledger["deposition_mode"] == "flash":
+        fl = ledger["flash"]
+        if not math.isclose(fl["commanded_energy_per_layer_J"] * fl["capture_fraction_analytic"],
+                            fl["physical_energy_per_layer_J"], rel_tol=1e-12):
+            raise ValueError("flash power rule broken: commanded x capture != physical")
+        if fl["uniformity_min_over_max"] < 0.96:
+            raise ValueError("flash is not uniform enough over the footprint")
+        on_rows = [r for r in rows if r["laser_on"] == 1]
+        if any(not (math.isclose(r["x"], fl["centre_xy_m"][0]) and math.isclose(r["y"], fl["centre_xy_m"][1]))
+               for r in on_rows):
+            raise ValueError("flash rows must sit at the footprint centre")
+        if len(on_rows) != n_physical * fl["substeps"]:
+            raise ValueError("flash row count mismatch")
     if not math.isclose(sum(float(v) for v in ledger["nominal_energy_per_slab_J"].values()),
                         ledger["nominal_laser_energy_J"], rel_tol=1e-9):
         raise ValueError("per-slab energy does not sum to the total")
@@ -634,6 +729,9 @@ def runner_contract(cfg: dict, *, mesh: Path, path: Path, material: Path, ledger
     cons, mech, out, lin = runner["consolidation"], runner["mechanics"], runner["output"], runner["linear_solver"]
     sub_xy = float(g["smoke_substrate_xy_m"])
     sub_z = float(g["smoke_substrate_z_m"])
+    flash = ledger.get("flash")
+    beam_radius = float(flash["beam_radius_m"]) if flash else float(runner["beam_radius_m"])
+    laser_power = float(flash["commanded_power_W"]) if flash else float(cfg["scan"]["power_W"])
     argv = [
         "--config", str(material), "--inp", str(mesh),
         "--path-file", str(path), "--path-length-scale", "1.0",
@@ -648,11 +746,11 @@ def runner_contract(cfg: dict, *, mesh: Path, path: Path, material: Path, ledger
         "--surface-selection", "exterior", "--boundary-tol", "1.0e-6",
         "--quadrature-order", "2", "--thermal-mass-lumping",
         "--source-model", "legacy",
-        "--beam-radius", f"{float(runner['beam_radius_m']):.12g}",
+        "--beam-radius", f"{beam_radius:.12g}",
         "--source-depth", f"{float(runner['source_depth_m']):.12g}",
         "--source-depth-cutoff", f"{float(runner['source_depth_cutoff_m']):.12g}",
         "--source-cutoff-renormalize" if runner["source_cutoff_renormalize"] else "--no-source-cutoff-renormalize",
-        "--laser-power", f"{float(cfg['scan']['power_W']):.12g}",
+        "--laser-power", f"{laser_power:.12g}",
         "--absorptivity", f"{float(runner['absorptivity']):.12g}",
         "--dt", f"{ledger['first_row_dt_s']:.12g}",
         "--recoat-time", "0",
@@ -684,6 +782,8 @@ def runner_contract(cfg: dict, *, mesh: Path, path: Path, material: Path, ledger
     ]
     if mech["line_search"]:
         argv.append("--mechanics-line-search")
+    if lin.get("cell_target_batch_size"):
+        argv += ["--xla-cell-target-batch-size", str(int(lin["cell_target_batch_size"]))]
     if tm["release_after_cooling"]:
         argv += ["--release-after-cooling", "--release-anchor-mode", "rigid_body",
                  "--release-cut-box", "0", f"{sub_xy:.12g}", "0", f"{sub_xy:.12g}",
@@ -691,7 +791,19 @@ def runner_contract(cfg: dict, *, mesh: Path, path: Path, material: Path, ledger
     return {
         "schema": CONTRACT_SCHEMA,
         "argv": argv,
+        "python_bin": lin.get("python_bin"),
+        "platform": lin["platform"],
         "io_flags_added_by_launcher": ["--output-dir", "--profile-json", "--profile-label"],
+        "deposition": {
+            "mode": ledger["deposition_mode"],
+            "flash": flash,
+            "note": ("reading A (D-V2-11): per-physical-layer uniform flash for the real scan time; "
+                     "--laser-power is the COMMANDED power P/capture, the ledger's laser_absorbed_nominal_j "
+                     "therefore reads Ac x P/capture x dt and its capture fraction must come out ~ "
+                     f"{flash['capture_fraction_analytic']:.5f}; deposited energy per layer is expected to equal "
+                     f"Ac x {flash['physical_energy_per_layer_J']:.3f} J") if flash else
+                    "serpentine per-track scan (one row per cell of travel)",
+        },
         "activation": {
             "mode": f"layer_on_scan/{runner['layer_activation_geometry']}",
             "geometry_note": runner.get("layer_activation_note"),

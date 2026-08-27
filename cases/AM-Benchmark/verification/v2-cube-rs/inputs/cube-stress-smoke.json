@@ -89,9 +89,11 @@
       "summary_every": 50
     },
     "linear_solver": {
-      "platform": "cpu",
+      "platform": "gpu",
+      "python_bin": "/home/user/miniconda3/envs/jax-fem-gpu/bin/python",
       "solver": "pardiso",
-      "pardiso_mode": "phase23"
+      "pardiso_mode": "phase23",
+      "note": "GPU assembly + CPU MKL PARDISO. Adopted 2026-08-27 after solver-compare/: single layer 1364 s (CPU) -> 831 s (GPU), T/u/vm identical to 12 digits (results/RESULTS.md). smoke2 itself ran on CPU (its preflight fingerprint predates this switch); jax-fem-gpu lives under miniconda3, so the runner is launched by absolute interpreter path."
     }
   }
 }

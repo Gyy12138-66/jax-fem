@@ -105,6 +105,9 @@ def main() -> None:
     ap.add_argument("--preflight", type=Path, required=True)
     ap.add_argument("--capture-only", action="store_true",
                     help="thermal-only capture trial: skip mechanics/release/activation checks")
+    ap.add_argument("--max-slabs", type=int, default=None,
+                    help="shakedown run truncated with --max-print-layers N: check activation for slabs <= N only "
+                         "and take the expected step count from the run's own ledger summary")
     ap.add_argument("--output", type=Path, default=None)
     args = ap.parse_args()
     run = args.run
@@ -112,6 +115,23 @@ def main() -> None:
     rows, summary = read_ledger(run)
     log = scan_log(run)
     energy = energy_closure(rows)
+    flash = ledger_pre.get("flash")
+    if flash:
+        # reading A: the commanded power is P/capture, so the ledger's own capture
+        # fraction should read ~capture_analytic; the PHYSICAL closure is
+        # deposited / (Ac x P x t_scan) per layer, which is what matters.
+        absorptivity = float(ledger_pre.get("absorptivity", 0.62))
+        on_steps = energy["laser_on_steps"]
+        layers_in_run = on_steps / float(flash["substeps"]) if flash["substeps"] else None
+        physical_absorbed = absorptivity * flash["physical_energy_per_layer_J"] * (layers_in_run or 0.0)
+        energy["flash"] = {
+            "capture_fraction_analytic": flash["capture_fraction_analytic"],
+            "capture_fraction_ledger_over_analytic": (energy["capture_fraction"] / flash["capture_fraction_analytic"])
+            if energy["capture_fraction"] else None,
+            "layers_in_run": layers_in_run,
+            "physical_absorbed_J": physical_absorbed,
+            "deposited_over_physical_absorbed": (energy["laser_deposited_J"] / physical_absorbed) if physical_absorbed else None,
+        }
     profile = {}
     if (run / "profile.json").is_file():
         prof = json.loads((run / "profile.json").read_text(encoding="utf-8"))
@@ -138,8 +158,12 @@ def main() -> None:
     checks["no_nan_or_inf_in_log"] = log["nan_or_inf_mentions"] == 0
     checks["newton_converged_everywhere"] = log["newton_nonconvergence_count"] == 0
     if not args.capture_only:
-        checks["step_count_matches_preflight"] = (
-            summary.get("recorded_step_count") == ledger_pre["expected_runner_steps"])
+        if args.max_slabs:
+            checks["step_count_matches_run_ledger"] = (
+                summary.get("recorded_step_count") == summary.get("expected_step_count"))
+        else:
+            checks["step_count_matches_preflight"] = (
+                summary.get("recorded_step_count") == ledger_pre["expected_runner_steps"])
         # activation: cell field activation_step vs preflight events (exact)
         vtus = sorted(glob.glob(str(run / "step_*.vtu")))
         activation = {"checked": False}
@@ -155,8 +179,11 @@ def main() -> None:
             slab_dz = ledger_pre["layers"][0]["deposition_z_m"] - sub_z
             events = []
             all_match = True
+            slab_limit = args.max_slabs or len(ledger_pre["activation_events"])
             for event in ledger_pre["activation_events"]:
                 k = event["slab"]
+                if k > slab_limit:
+                    continue
                 in_slab = (z > event["z_bottom_m"]) & (z < event["z_top_m"])
                 steps = np.unique(act[in_slab])
                 ok = steps.size == 1 and int(steps[0]) == int(event["global_step"])
@@ -166,10 +193,11 @@ def main() -> None:
                                "cells": int(in_slab.sum()), "ok": bool(ok),
                                "material_state_values": [float(v) for v in np.unique(state[in_slab])],
                                "stress_free_temperature_values": [float(v) for v in np.unique(tref[in_slab])]})
-            part = z > sub_z
+            part = (z > sub_z) & (z < sub_z + slab_limit * slab_dz + 1e-9)   # printed slabs only
             activation = {
                 "checked": True, "vtu": os.path.basename(vtus[-1]),
                 "events": events, "all_events_match": bool(all_match),
+                "slab_limit": int(slab_limit),
                 "part_cells": int(part.sum()),
                 "part_all_solid_at_end": bool(np.all(state[part] == 2.0)),
                 "part_stress_free_temperature_unique": [float(v) for v in np.unique(tref[part])],
@@ -194,7 +222,9 @@ def main() -> None:
             after = meshio.read(rel_path)
             zb = hex_centroids(before)[:, 2]
             sub_z = ledger_pre["substrate_z_m"]
-            part = zb > sub_z
+            slab_dz_r = ledger_pre["layers"][0]["deposition_z_m"] - sub_z
+            slab_limit_r = args.max_slabs or len(ledger_pre["activation_events"])
+            part = (zb > sub_z) & (zb < sub_z + slab_limit_r * slab_dz_r + 1e-9)
             removed = cell_field(after, "release_removed")
             vm_b = quad_average(before, "vm_quadQ")
             vm_a = quad_average(after, "vm_quadQ")
@@ -204,8 +234,8 @@ def main() -> None:
             release = {
                 "checked": True,
                 "release_removed_cells": int(np.sum(removed > 0.5)) if removed is not None else None,
-                "substrate_cells": int(np.sum(~part)),
-                "removed_equals_substrate": bool(removed is not None and int(np.sum(removed > 0.5)) == int(np.sum(~part))),
+                "substrate_cells": int(np.sum(zb <= sub_z)),
+                "removed_equals_substrate": bool(removed is not None and int(np.sum(removed > 0.5)) == int(np.sum(zb <= sub_z))),
                 "part_vm_MPa_before": {"mean": float(vm_b[part].mean() / 1e6), "max": float(vm_b[part].max() / 1e6)},
                 "part_vm_MPa_after": {"mean": float(vm_a[part].mean() / 1e6), "max": float(vm_a[part].max() / 1e6)},
                 "part_vm_changed_by_release": bool(not np.allclose(vm_b[part], vm_a[part])),

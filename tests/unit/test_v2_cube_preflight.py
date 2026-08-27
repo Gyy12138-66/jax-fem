@@ -105,6 +105,70 @@ def test_slab_top_deposition_and_recoat_substeps():
     assert ledger["first_row_dt_s"] == pytest.approx(0.0002 / 0.65)
 
 
+PRODUCTION = ROOT / "cases/AM-Benchmark/verification/v2-cube-rs/inputs/cube-stress-production.json"
+
+
+def test_production_flash_schedule_reading_a():
+    cfg = MODULE.load_config(PRODUCTION)
+    rows, ledger = MODULE.generate_schedule(cfg)
+    fl = ledger["flash"]
+    assert ledger["deposition_mode"] == "flash"
+    assert ledger["physical_layers"] == 250 and ledger["activation_slabs"] == 50
+    # 10 mm part centred on the MODELLED 20 mm substrate (D-V2-07 production amendment) -> origin 5 mm
+    assert ledger["footprint_m"] == pytest.approx(0.010) and ledger["part_origin_xy_m"] == pytest.approx(0.005)
+    assert ledger["substrate_xy_m"] == pytest.approx(0.020)
+    # 10 flash + 10 recoat rows per layer, no recoat after the last layer, no jumps
+    assert ledger["scan_rows"] == 2500 and ledger["recoat_substep_rows"] == 2490 and ledger["jump_rows"] == 0
+    assert ledger["path_rows"] == 4990 and ledger["expected_runner_steps"] == 5050
+    # real scan time and energy of one layer (82 tracks x 9.8 mm at 650 mm/s)
+    assert ledger["tracks_per_physical_layer"] == 82
+    assert fl["layer_scan_time_s"] == pytest.approx(82 * 9.8e-3 / 0.65)
+    assert fl["physical_energy_per_layer_J"] == pytest.approx(140.0 * 82 * 9.8e-3 / 0.65)
+    assert ledger["nominal_laser_energy_J"] == pytest.approx(250 * fl["physical_energy_per_layer_J"])
+    # energy-conserving power rule and near-uniform flash
+    assert fl["capture_fraction_analytic"] == pytest.approx(MODULE.flash_capture_fraction(0.005, 0.1))
+    assert fl["commanded_power_W"] * fl["capture_fraction_analytic"] == pytest.approx(140.0)
+    assert fl["uniformity_min_over_max"] > 0.98
+    # activation: slab k on the first flash row of physical layer 5(k-1)+1 -> row 100(k-1)
+    events = ledger["activation_events"]
+    assert [e["row_index"] for e in events[:4]] == [0, 100, 200, 300]
+    assert all(rows[e["row_index"]]["laser_on"] == 1 and rows[e["row_index"]]["layer"] == e["slab"] for e in events)
+    on = [r for r in rows if r["laser_on"] == 1]
+    assert all(r["x"] == pytest.approx(0.010) and r["y"] == pytest.approx(0.010) for r in on)
+    assert on[0]["power"] == pytest.approx(140.0 / fl["capture_fraction_analytic"])
+
+
+def test_production_contract_uses_flash_radius_and_gpu(tmp_path):
+    cfg = MODULE.load_config(PRODUCTION)
+    rows, ledger = MODULE.generate_schedule(cfg)
+    contract = MODULE.runner_contract(cfg, mesh=tmp_path / "m.inp", path=tmp_path / "p.csv",
+                                      material=tmp_path / "mat.json", ledger=ledger)
+    argv = contract["argv"]
+    assert argv[argv.index("--beam-radius") + 1] == "0.1"
+    assert float(argv[argv.index("--laser-power") + 1]) == pytest.approx(ledger["flash"]["commanded_power_W"])
+    assert argv[argv.index("--layers") + 1] == "50"
+    assert argv[argv.index("--support-thickness") + 1] == "0.006"
+    assert argv[argv.index("--mechanics-every") + 1] == "20"
+    assert argv[argv.index("--xla-platform") + 1] == "gpu"
+    assert contract["python_bin"].endswith("jax-fem-gpu/bin/python")
+    assert float(argv[argv.index("--dt") + 1]) == pytest.approx(ledger["flash"]["substep_dt_s"])
+    assert argv[argv.index("--xla-cell-target-batch-size") + 1] == "32768"
+
+
+def test_flash_guards_fail_closed(tmp_path):
+    raw = json.loads(PRODUCTION.read_text(encoding="utf-8"))
+    raw["scan"]["flash"]["beam_radius_m"] = 0.02
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(SystemExit, match="near-uniform"):
+        MODULE.load_config(bad)
+    raw = json.loads(PRODUCTION.read_text(encoding="utf-8"))
+    raw["layer_schedule"]["deposition_mode"] = "raster"
+    bad.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(SystemExit, match="deposition_mode"):
+        MODULE.load_config(bad)
+
+
 def test_bad_layer_lumping_fails_closed(tmp_path):
     raw = json.loads(CONFIG.read_text(encoding="utf-8"))
     raw["layer_schedule"]["physical_layers_per_slab"] = 4
