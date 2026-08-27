@@ -348,13 +348,26 @@ def generate_schedule(cfg: dict, *, footprint_m: float | None = None,
         n_sub = int(fl["substeps"])
         capture = flash_capture_fraction(0.5 * side, r_flash)
         t_scan_layer = n_tracks * exposure_width / speed          # real serpentine time, jumps excluded
-        p_flash = power / capture
+        # flash duration: default = the whole real scan time (machine average power);
+        # a shorter duration_s concentrates the SAME layer energy into a shorter
+        # flash (e.g. the spot's dwell over one cell) and the remainder of the
+        # scan time becomes laser-off "hold" rows. Physical energy is unchanged.
+        t_flash = float(fl.get("duration_s") or t_scan_layer)
+        if not (0.0 < t_flash <= t_scan_layer + 1e-12):
+            raise SystemExit("scan.flash.duration_s must lie in (0, layer scan time]")
+        t_hold = max(t_scan_layer - t_flash, 0.0)
+        hold_steps = (recoat_substep_durations(t_hold, int(fl.get("hold_substeps", 10)),
+                                               float(fl.get("hold_substep_ratio", 1.5)))
+                      if t_hold > 1e-12 else [])
+        p_flash = power * (t_scan_layer / t_flash) / capture
         flash = {"beam_radius_m": r_flash, "substeps": n_sub, "capture_fraction_analytic": capture,
                  "uniformity_min_over_max": math.exp(-2.0 * 2.0 * (0.5 * side) ** 2 / r_flash ** 2),
-                 "layer_scan_time_s": t_scan_layer, "substep_dt_s": t_scan_layer / n_sub,
+                 "layer_scan_time_s": t_scan_layer, "flash_duration_s": t_flash,
+                 "hold_time_s": t_hold, "hold_substep_durations_s": hold_steps,
+                 "substep_dt_s": t_flash / n_sub,
                  "physical_power_W": power, "commanded_power_W": p_flash,
                  "physical_energy_per_layer_J": power * t_scan_layer,
-                 "commanded_energy_per_layer_J": p_flash * t_scan_layer,
+                 "commanded_energy_per_layer_J": p_flash * t_flash,
                  "centre_xy_m": [origin + 0.5 * side, origin + 0.5 * side]}
     for physical_layer in range(1, n_physical + 1):
         slab = (physical_layer - 1) // per_slab + 1
@@ -377,10 +390,15 @@ def generate_schedule(cfg: dict, *, footprint_m: float | None = None,
                         physical_z=physical_z)
                 if first_scan_row is None:
                     first_scan_row = len(rows) - 1
-                # PHYSICAL energy: commanded x captured fraction == P x dt
-                energy_J += power * flash["substep_dt_s"]
-                layer_energy += power * flash["substep_dt_s"]
+                # PHYSICAL energy: commanded x captured fraction x dt == P x (t_scan/n_sub)
+                energy_J += power * flash["layer_scan_time_s"] / flash["substeps"]
+                layer_energy += power * flash["layer_scan_time_s"] / flash["substeps"]
                 scan_time_s += flash["substep_dt_s"]
+            for hold_dt in flash["hold_substep_durations_s"]:
+                add_row(rows, state, dt=hold_dt, x=cx, y=cy, z=deposition_z, power=0.0,
+                        laser_on=0, layer=slab, hatch=0, mode="hold",
+                        physical_layer=physical_layer, scan_id=scan_id, physical_z=physical_z)
+                scan_time_s += hold_dt          # the hold is the rest of the real scan time
             previous = (cx, cy, deposition_z)
         for track in (range(n_tracks) if flash is None else ()):
             cross = origin + (side - (n_tracks - 1) * hatch_space) / 2 + track * hatch_space
@@ -477,6 +495,7 @@ def generate_schedule(cfg: dict, *, footprint_m: float | None = None,
         "deposition_z_rule": z_rule,
         "scan_rows": sum(row["laser_on"] == 1 for row in rows),
         "jump_rows": sum(row["mode"] == "jump" for row in rows),
+        "hold_rows": sum(row["mode"] == "hold" for row in rows),
         "recoat_rows": n_recoat_events,
         "recoat_substep_rows": sum(row["mode"] == "recoat" for row in rows),
         "recoat_substeps_per_event": len(recoat_steps),
@@ -517,6 +536,8 @@ def validate_schedule(rows: list[dict], ledger: dict, cfg: dict) -> None:
         raise ValueError("recoat event count mismatch")
     if ledger["recoat_substep_rows"] != expected_recoat * int(layers["recoat_substeps"]):
         raise ValueError("recoat sub-step row count mismatch")
+    if ledger["scan_rows"] + ledger["jump_rows"] + ledger["recoat_substep_rows"] + ledger.get("hold_rows", 0) != ledger["path_rows"]:
+        raise ValueError("row bookkeeping mismatch")
     if not math.isclose(ledger["recoat_time_s"], expected_recoat * float(layers["recoat_time_s"]),
                         rel_tol=0.0, abs_tol=1e-9):
         raise ValueError("recoat duration mismatch")
@@ -544,6 +565,8 @@ def validate_schedule(rows: list[dict], ledger: dict, cfg: dict) -> None:
             jump_time += dt
         elif row["mode"] == "recoat":
             recoat_time += dt
+        elif row["mode"] == "hold":
+            scan_time += dt                    # laser-off remainder of a flashed layer's scan time
         else:
             raise ValueError(f"unexpected row mode {row['mode']!r}")
         if row["front_coord"] != row["z"]:
@@ -612,6 +635,8 @@ def validate_schedule(rows: list[dict], ledger: dict, cfg: dict) -> None:
         if not math.isclose(fl["commanded_energy_per_layer_J"] * fl["capture_fraction_analytic"],
                             fl["physical_energy_per_layer_J"], rel_tol=1e-12):
             raise ValueError("flash power rule broken: commanded x capture != physical")
+        if not math.isclose(fl["flash_duration_s"] + fl["hold_time_s"], fl["layer_scan_time_s"], rel_tol=1e-12):
+            raise ValueError("flash + hold must span the real layer scan time")
         if fl["uniformity_min_over_max"] < 0.96:
             raise ValueError("flash is not uniform enough over the footprint")
         on_rows = [r for r in rows if r["laser_on"] == 1]

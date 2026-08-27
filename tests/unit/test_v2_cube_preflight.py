@@ -155,6 +155,33 @@ def test_production_contract_uses_flash_radius_and_gpu(tmp_path):
     assert argv[argv.index("--xla-cell-target-batch-size") + 1] == "32768"
 
 
+DWELL = ROOT / "cases/AM-Benchmark/verification/v2-cube-rs/inputs/cube-stress-production-dwellflash.json"
+
+
+def test_dwell_flash_variant_keeps_energy_and_adds_hold_rows():
+    cfg = MODULE.load_config(DWELL)
+    rows, ledger = MODULE.generate_schedule(cfg)
+    fl = ledger["flash"]
+    assert fl["flash_duration_s"] == pytest.approx(0.0002 / 0.65)
+    assert fl["flash_duration_s"] + fl["hold_time_s"] == pytest.approx(fl["layer_scan_time_s"])
+    assert len(fl["hold_substep_durations_s"]) == 10
+    assert sum(fl["hold_substep_durations_s"]) == pytest.approx(fl["hold_time_s"])
+    # same physical energy per layer as the base production config, commanded power scaled by t_scan/t_flash
+    base = MODULE.load_config(PRODUCTION); _, lb = MODULE.generate_schedule(base)
+    assert fl["physical_energy_per_layer_J"] == pytest.approx(lb["flash"]["physical_energy_per_layer_J"])
+    assert fl["commanded_power_W"] == pytest.approx(lb["flash"]["commanded_power_W"] * fl["layer_scan_time_s"] / fl["flash_duration_s"])
+    assert fl["commanded_energy_per_layer_J"] * fl["capture_fraction_analytic"] == pytest.approx(fl["physical_energy_per_layer_J"])
+    # 2 flash + 10 hold + 10 recoat rows per layer (no recoat after the last layer)
+    assert ledger["scan_rows"] == 500 and ledger["hold_rows"] == 2500 and ledger["recoat_substep_rows"] == 2490
+    assert ledger["path_rows"] == 5490 and ledger["expected_runner_steps"] == 5550
+    assert ledger["scan_time_s"] == pytest.approx(250 * fl["layer_scan_time_s"])
+    events = ledger["activation_events"]
+    assert [e["row_index"] for e in events[:3]] == [0, 110, 220]
+    assert all(r["mode"] == "hold" and r["laser_on"] == 0 for r in rows[2:12])
+    assert float(MODULE.runner_contract(cfg, mesh=ROOT / "m", path=ROOT / "p", material=ROOT / "mat", ledger=ledger)["argv"][
+        MODULE.runner_contract(cfg, mesh=ROOT / "m", path=ROOT / "p", material=ROOT / "mat", ledger=ledger)["argv"].index("--dt") + 1]) == pytest.approx(fl["substep_dt_s"])
+
+
 def test_flash_guards_fail_closed(tmp_path):
     raw = json.loads(PRODUCTION.read_text(encoding="utf-8"))
     raw["scan"]["flash"]["beam_radius_m"] = 0.02
