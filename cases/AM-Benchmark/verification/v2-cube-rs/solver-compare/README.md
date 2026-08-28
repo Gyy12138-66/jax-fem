@@ -23,6 +23,18 @@
 
 求解器产物（VTU 等）留在 `OUT`（默认 `/home/user/work/159/output/v2_cube_smoke_smoke2/solver_compare/<arm>/`）。
 
+## 修改牛顿／分解复用研究通道
+
+冻结的三臂结果回答“平台与线性后端谁更快”，不包含 lagged Jacobian。新的独立通道用 full/modified Newton × CPU/GPU 装配四臂，检验力学切线复用能否把 PARDISO 数值分解转换成 phase-33 回代，同时逐次用真实残量守住收敛。默认入口只打印计划，不会启动算例或覆盖 `results/`：
+
+```bash
+bash run_decomposition_compare.sh
+```
+
+测试公式、快速 16 步通道、完整 639 步通道、计数器和判读门槛见 [`DECOMPOSITION-TESTS.md`](DECOMPOSITION-TESTS.md)。
+
+审查后的公平 8 步四臂记录见 [`decomposition-results/QUICK8-FAIR-20260828.md`](decomposition-results/QUICK8-FAIR-20260828.md)：四臂共享 residual-only，4 次 AB/BA 配对结果为 CPU 1.054x、GPU 1.020x，全部健康并真实触发 mechanics phase-33。原 [`QUICK8-20260828.md`](decomposition-results/QUICK8-20260828.md) 已撤回为混杂试跑。
+
 ## 用法
 
 ```bash
