@@ -100,7 +100,7 @@ def main() -> None:
         ax.plot(d_ours, sxx, "D-", color="tab:green", label=f"{args.label}: sigma_xx")
         ax.plot(d_ours, syy, "v--", color="tab:olive", label=f"{args.label}: sigma_yy")
         ax.set_xlabel("depth below top face (um)"); ax.set_ylabel("residual stress (MPa)")
-        ax.set_title(f"IN625 cube, {fig['condition']}: in-depth residual stress at the centre (2 mm spot)")
+        ax.set_title(f"IN625 cube, {fig['condition']}\nin-depth residual stress at the centre (2 mm spot)", fontsize=10)
         ax.set_xlim(0, 1100); ax.grid(alpha=0.3); ax.legend(fontsize=8)
         fig_.tight_layout(); fig_.savefig(out_dir / f"in_depth_rs_compare_{args.figure}.png", dpi=160)
         print("plot", out_dir / f"in_depth_rs_compare_{args.figure}.png")

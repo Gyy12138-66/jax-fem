@@ -104,8 +104,8 @@
 | 2 runner 合同 + 热源量化 | **通过**：合同 `runner_contract.json`；D-V2-10 单层量化完成（物理光斑 0.24 %，合同 96.2 %） | `model/runs/v_cube_smoke.sh` 阶段 2，`capture_ladder.json` |
 | 2 缩高热-力 smoke | **通过 10/10**（`output/v2_cube_smoke_smoke2/smoke`，16,299 步，9.78 h，事件驱动力学 12,901 次求解）：激活步逐 slab 对合同、能量 390.36 J 对预测、Newton 零失败、释放自平衡 | `CUBE-SMOKE.md` §6，`cube_smoke_gate.json` |
 | 3 材料与数值敏感性 | 部分：基板足印 30 → 20 mm 由内存探针决定（D-V2-07 生产修正），敏感性待补；α 平滑拟合（D-V2-18）未做 | `CUBE-PRODUCTION.md` §2 |
-| 4 生产运行 | **运行中**（2026-08-27 07:38 UTC 起，读法 A'：驻留时间闪热，yuyao 拍板读法 A、暂不做事件延迟；140 W；预计 24–30 h）。A 在 shakedown 上全程弹性、A' 屈服并给出与冒烟同量级的残余应力，故采用 A' | `CUBE-PRODUCTION.md` §4–5，`output/v2_cube_smoke_prodB/smoke` |
-| 5 三方对比 | 未开始：XRD 曲线数字化 + 2 mm 光斑/0.1 mm 去层提取算子待做 | — |
+| 4 生产运行 | **完成**（2026-08-27 07:38 → 08-28 02:41 UTC，19.0 h，门槛 10/10；读法 A'：驻留时间闪热；140 W；20 mm 基板）。A 在 shakedown 上全程弹性、A' 屈服并给出与冒烟同量级的残余应力，故采用 A' | `CUBE-PRODUCTION.md` §4–5，`production/results/` |
+| 5 三方对比 | **首个可验证应力结果**：140 W 深度剖面对 XRD RMSE 49 MPa（Balbaa 自己的 ABAQUS 173 / 232 MPa）；保留意见见 `CUBE-PRODUCTION.md` §5.2 | `production/results/smoke/in_depth_rs_compare_fig44.*`，D-V2-29 |
 
 三条阶段 1/2 抓到并已修的合同缺陷（均由台账/能量闭合暴露，不是靠目测）：
 `intersection` 激活几何把相邻 slab 一起打印（D-V2-11）；路径写成零件局部坐标而网格零件居中（D-V2-28）；

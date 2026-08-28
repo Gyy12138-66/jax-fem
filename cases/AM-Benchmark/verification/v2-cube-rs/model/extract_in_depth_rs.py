@@ -85,7 +85,8 @@ def main() -> None:
     # one bin per cell row below the top face
     rows = []
     d_sel = depth[sel]
-    levels = np.unique(np.round(d_sel / cell)) * cell   # cell-centre depths: 0.5*cell, 1.5*cell, ...
+    # cell-centre depths are odd multiples of half a cell: 0.5*cell, 1.5*cell, ...
+    levels = (np.unique(np.round(d_sel / cell - 0.5)) + 0.5) * cell
     for lv in sorted(levels):
         m = sel & (np.abs(depth - lv) < 0.25 * cell)
         rows.append({

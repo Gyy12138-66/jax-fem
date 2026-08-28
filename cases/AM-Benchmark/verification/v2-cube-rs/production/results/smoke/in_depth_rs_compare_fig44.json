@@ -1,0 +1,105 @@
+{
+  "schema": "v2.cube-in-depth-rs-compare/1",
+  "figure": "fig44",
+  "condition": "140 W / 650 mm/s / hatch 0.12 mm",
+  "ours": "/home/user/work/159/output/v2_cube_smoke_prodB/smoke/in_depth_rs.json",
+  "ours_frame": "release.vtu",
+  "table": [
+    {
+      "depth_um": 100.0,
+      "xrd_MPa": 759.0474070776762,
+      "xrd_err_plus": 17.864826767564356,
+      "xrd_err_minus": 17.864826767564356,
+      "ours_sxx_MPa": 769.9833984374999,
+      "ours_syy_MPa": 769.9833984374999,
+      "balbaa_jc_literature_MPa": 519.7418206098374,
+      "balbaa_modified_jc_MPa": 985.6814303731728
+    },
+    {
+      "depth_um": 200.0,
+      "xrd_MPa": 729.5496698568141,
+      "xrd_err_plus": 23.26582090659544,
+      "xrd_err_minus": 23.26582090659544,
+      "ours_sxx_MPa": 697.5644531249998,
+      "ours_syy_MPa": 697.5644531249998,
+      "balbaa_jc_literature_MPa": 470.0942206395132,
+      "balbaa_modified_jc_MPa": 948.7746370897937
+    },
+    {
+      "depth_um": 300.0,
+      "xrd_MPa": 701.7137769864231,
+      "xrd_err_plus": 17.864826767564356,
+      "xrd_err_minus": 17.864826767564356,
+      "ours_sxx_MPa": 625.1455078124998,
+      "ours_syy_MPa": 625.1455078124998,
+      "balbaa_jc_literature_MPa": 420.446620669189,
+      "balbaa_modified_jc_MPa": 909.9982689121348
+    },
+    {
+      "depth_um": 450.0,
+      "xrd_MPa": 634.6168113361524,
+      "xrd_err_plus": 11.840640997106608,
+      "xrd_err_minus": 23.05809036278655,
+      "ours_sxx_MPa": 549.9292144775387,
+      "ours_syy_MPa": 549.9292602539059,
+      "balbaa_jc_literature_MPa": 383.5744491431115,
+      "balbaa_modified_jc_MPa": 820.8818656181218
+    },
+    {
+      "depth_um": 600.0,
+      "xrd_MPa": 550.9014021811706,
+      "xrd_err_plus": 17.449365679946578,
+      "xrd_err_minus": 17.449365679946578,
+      "ours_sxx_MPa": 500.3508148193357,
+      "ours_syy_MPa": 500.3508453369138,
+      "balbaa_jc_literature_MPa": 334.44617553230955,
+      "balbaa_modified_jc_MPa": 693.9585033508913
+    },
+    {
+      "depth_um": 800.0,
+      "xrd_MPa": 448.28251353957995,
+      "xrd_err_plus": 18.695748942799906,
+      "xrd_err_minus": 18.695748942799906,
+      "ours_sxx_MPa": 435.25051879882756,
+      "ours_syy_MPa": 435.2505493164057,
+      "balbaa_jc_literature_MPa": 257.3089002646091,
+      "balbaa_modified_jc_MPa": 532.3441402675766
+    },
+    {
+      "depth_um": 1000.0,
+      "xrd_MPa": 335.277097707545,
+      "xrd_err_plus": 12.048371540915495,
+      "xrd_err_minus": 23.681281994213215,
+      "ours_sxx_MPa": 333.2533569335927,
+      "ours_syy_MPa": 333.25338745117085,
+      "balbaa_jc_literature_MPa": 176.77869278136353,
+      "balbaa_modified_jc_MPa": 402.37406335781577
+    }
+  ],
+  "metrics": {
+    "ours_sxx_vs_xrd": {
+      "rmse_MPa": 49.145017475470915,
+      "mean_signed_MPa": -35.41591632586676,
+      "max_abs_MPa": 84.68759685861369
+    },
+    "ours_syy_vs_xrd": {
+      "rmse_MPa": 49.14500038658497,
+      "mean_signed_MPa": -35.41589670742369,
+      "max_abs_MPa": 84.6875510822465
+    },
+    "balbaa_jc_literature_vs_xrd": {
+      "rmse_MPa": 231.5054165230465,
+      "mean_signed_MPa": -228.14254272077545
+    },
+    "balbaa_modified_jc_vs_xrd": {
+      "rmse_MPa": 173.01253500398496,
+      "mean_signed_MPa": 162.08917575487789
+    },
+    "ours_sxx_vs_balbaa_modified_jc": {
+      "rmse_MPa": 212.42726910631814
+    },
+    "xrd_read_off_MPa": 2.4927665257066542,
+    "yardstick": "Balbaa's own ABAQUS-vs-XRD RMSE (both J-C sets); the paper calls this 'same trend'"
+  },
+  "component_note": "flash reading has no scan direction; sxx vs syy difference is model anisotropy only"
+}
