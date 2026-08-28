@@ -12,6 +12,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from jax_fem.generate_mesh import Mesh
+
 
 jax.config.update("jax_enable_x64", True)
 
@@ -144,6 +146,145 @@ class V06AdapterTest(unittest.TestCase):
             atol=1.0e-3,
         )
         self.assertGreater(float(delta_eqp), 0.0)
+
+    def test_trial_residual_failure_and_cutback_do_not_commit_tensor_history(self):
+        """Only an accepted mechanics solution may commit J2 history."""
+        base = load_fresh_v03("v03_v06_trial_state_test")
+        trial = {"calls": 0}
+
+        def solver_boundary(mechanics, _u_guess, params, _overrides=None):
+            trial["calls"] += 1
+            mechanics.set_params(params)
+
+            # These residual evaluations model line-search trial points.  A
+            # failed first solve then drives the real v03 cutback wrapper
+            # through two accepted half increments.
+            self.assert_state_uncommitted(mechanics, trial)
+            for scale in (1.0, 0.5, 0.25):
+                mechanics.compute_residual([scale * trial["accepted"]])
+                self.assert_state_uncommitted(mechanics, trial)
+
+            if trial["calls"] == 1:
+                raise RuntimeError("Newton solver did not converge")
+            return [trial["accepted"]]
+
+        # install_v06_adapter captures this lightweight solve boundary and
+        # installs the production state-safe wrapper around it.
+        base.run_mechanics = solver_boundary
+        driver.install_v06_adapter(base)
+
+        length = 1.0e-3
+        points = np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [length, 0.0, 0.0],
+                [length, length, 0.0],
+                [0.0, length, 0.0],
+                [0.0, 0.0, length],
+                [length, 0.0, length],
+                [length, length, length],
+                [0.0, length, length],
+            ]
+        )
+        cells = np.asarray([[0, 1, 2, 3, 4, 5, 6, 7]], dtype=np.int64)
+        mechanics = base.ThermoMechanical(
+            mesh=Mesh(points, cells, ele_type="HEX8"),
+            vec=3,
+            dim=3,
+            ele_type="HEX8",
+            quadrature_order=2,
+            dirichlet_bc_info=None,
+            additional_info=("j2_plastic", None, 0.0, 0.0, (), True, None),
+        )
+        num_quads = mechanics.fes[0].num_quads
+        full = lambda value: jnp.full((1, num_quads, 1), value)
+        params = [
+            full(500.0),
+            full(0.0),
+            full(1.0),
+            full(190.0e9),
+            full(0.0),
+            full(0.3),
+            full(60.0e6),
+            full(1.0e8),
+            full(0.0),
+        ]
+        strain = np.diag([0.02, -0.01, -0.01])
+        trial.update(
+            accepted=jnp.asarray(points @ strain.T),
+            eps_p=np.asarray(mechanics._eps_p_state).copy(),
+            eps_ref=np.asarray(mechanics._eps_ref_state).copy(),
+            eqp=np.asarray(params[-1]).copy(),
+        )
+        driver.REGISTRY.build_problem = mechanics
+        driver.REGISTRY.eps_p = mechanics._eps_p_state
+        driver.REGISTRY.eps_ref = mechanics._eps_ref_state
+
+        # Keep the cutback interpolation real while supplying constant test
+        # material tables; no nonlinear or linear solve is performed here.
+        base.mechanics_material_quads = (
+            lambda _temperature, active, _phase, _args, _tables: (
+                active,
+                params[3],
+                params[4],
+                params[5],
+                params[6],
+                params[7],
+            )
+        )
+        solution = base.run_mechanics_with_cutback(
+            mechanics,
+            [jnp.zeros_like(trial["accepted"])],
+            params,
+            None,
+            SimpleNamespace(mechanics_max_cuts=1),
+            params[0],
+            params[2],
+            params[0],
+            params[2],
+            jnp.ones_like(params[0]),
+            {},
+        )
+
+        self.assertEqual(trial["calls"], 3)
+        self.assert_state_uncommitted(mechanics, trial)
+        np.testing.assert_allclose(np.asarray(solution[0]), np.asarray(trial["accepted"]))
+
+        eqp_new = mechanics.compute_eqp_update(solution[0], params)
+        self.assertGreater(float(np.max(np.asarray(eqp_new))), 0.0)
+        self.assertGreater(
+            float(
+                np.max(
+                    np.abs(
+                        np.asarray(mechanics._eps_p_state) - trial["eps_p"]
+                    )
+                )
+            ),
+            0.0,
+        )
+        np.testing.assert_array_equal(
+            np.asarray(mechanics._eps_ref_state), trial["eps_ref"]
+        )
+        np.testing.assert_array_equal(
+            np.asarray(driver.REGISTRY.eps_p),
+            np.asarray(mechanics._eps_p_state),
+        )
+        np.testing.assert_array_equal(
+            np.asarray(driver.REGISTRY.eqp), np.asarray(eqp_new)
+        )
+
+    def assert_state_uncommitted(self, mechanics, trial):
+        np.testing.assert_array_equal(
+            np.asarray(mechanics._eps_p_state), trial["eps_p"]
+        )
+        np.testing.assert_array_equal(
+            np.asarray(mechanics._eps_ref_state), trial["eps_ref"]
+        )
+        np.testing.assert_array_equal(
+            np.asarray(driver.REGISTRY.eps_p), trial["eps_p"]
+        )
+        self.assertIsNone(driver.REGISTRY.eqp)
+        np.testing.assert_array_equal(np.asarray(trial["eqp"]), 0.0)
 
     def test_flow_curve_return_map_requires_temperature(self):
         base = load_fresh_v03("v03_v06_flow_curve_temperature_test")

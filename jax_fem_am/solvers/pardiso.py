@@ -28,6 +28,7 @@ from __future__ import annotations
 import atexit
 import ctypes
 import sys
+import time
 
 import numpy as np
 import scipy.sparse
@@ -167,10 +168,41 @@ class VariantSolver:
             "ir_steps_total": 0,
             "ir_steps_max": 0,
         }
+        for phase in (12, 13, 22, 23, 33):
+            self._stats[f"phase{phase}_calls"] = 0
+            self._stats[f"phase{phase}_seconds"] = 0.0
         atexit.register(self._report)
 
     def _report(self):
         print(f"[v07-pardiso {self.mode}] {self._stats}", file=sys.stderr)
+
+    def stats_snapshot(self):
+        """Return phase counters/timings without waiting for the atexit log."""
+        out = dict(self._stats)
+        out["numeric_factorizations"] = sum(
+            int(out[f"phase{phase}_calls"])
+            for phase in (12, 13, 22, 23)
+        )
+        # These phases include a factorization, but phase 13 also includes
+        # analysis+solve and phase 23 includes solve. Do not label their wall
+        # sum as pure numeric-factorization time.
+        out["factorization_phase_seconds"] = sum(
+            float(out[f"phase{phase}_seconds"])
+            for phase in (12, 13, 22, 23)
+        )
+        out["phase33_backsolve_seconds"] = float(out["phase33_seconds"])
+        return out
+
+    def _call(self, raw, n, data, ia, ja, rhs, *, phase,
+              transpose=False):
+        t0 = time.perf_counter()
+        try:
+            return raw.call(
+                n, data, ia, ja, rhs, phase=phase, transpose=transpose
+            )
+        finally:
+            self._stats[f"phase{phase}_calls"] += 1
+            self._stats[f"phase{phase}_seconds"] += time.perf_counter() - t0
 
     def _get_state(self, n, indptr, indices):
         key = (n, indices.shape[0])
@@ -204,18 +236,22 @@ class VariantSolver:
             ja += 1
             raw = self._raw_singleton()
             self._stats["analyze_calls"] += 1
-            return raw.call(n, data, ia, ja, rhs, phase=13)
+            return self._call(raw, n, data, ia, ja, rhs, phase=13)
 
         st = self._get_state(n, indptr, indices)
 
         if self.mode == "cache-idx":
             self._stats["analyze_calls"] += 1
-            return st.raw.call(n, data, st.ia, st.ja, rhs, phase=13)
+            return self._call(
+                st.raw, n, data, st.ia, st.ja, rhs, phase=13
+            )
 
         if self.mode == "phase23":
             if not st.analyzed:
                 self._stats["analyze_calls"] += 1
-                x = st.raw.call(n, data, st.ia, st.ja, rhs, phase=13)
+                x = self._call(
+                    st.raw, n, data, st.ia, st.ja, rhs, phase=13
+                )
                 st.analyzed = True
                 st.data = data.copy()
                 return x
@@ -223,8 +259,12 @@ class VariantSolver:
             # existing factorization is still valid, backsolve only.
             if st.data is not None and np.array_equal(st.data, data):
                 self._stats["backsolve_hits"] += 1
-                return st.raw.call(n, data, st.ia, st.ja, rhs, phase=33)
-            x = st.raw.call(n, data, st.ia, st.ja, rhs, phase=23)
+                return self._call(
+                    st.raw, n, data, st.ia, st.ja, rhs, phase=33
+                )
+            x = self._call(
+                st.raw, n, data, st.ia, st.ja, rhs, phase=23
+            )
             st.data = data.copy()
             return x
 
@@ -233,10 +273,14 @@ class VariantSolver:
         rhs32 = rhs.astype(np.float32)
         if not st.analyzed:
             self._stats["analyze_calls"] += 1
-            x32 = st.raw.call(n, data32, st.ia, st.ja, rhs32, phase=13)
+            x32 = self._call(
+                st.raw, n, data32, st.ia, st.ja, rhs32, phase=13
+            )
             st.analyzed = True
         else:
-            x32 = st.raw.call(n, data32, st.ia, st.ja, rhs32, phase=23)
+            x32 = self._call(
+                st.raw, n, data32, st.ia, st.ja, rhs32, phase=23
+            )
 
         A64 = scipy.sparse.csr_matrix(
             (data, indices, indptr), shape=(n, n), copy=False
@@ -249,8 +293,9 @@ class VariantSolver:
             r = rhs - A64 @ x
             if np.linalg.norm(r) <= tol:
                 break
-            dx32 = st.raw.call(
-                n, data32, st.ia, st.ja, r.astype(np.float32), phase=33
+            dx32 = self._call(
+                st.raw, n, data32, st.ia, st.ja,
+                r.astype(np.float32), phase=33
             )
             x += dx32.astype(np.float64)
             steps += 1
@@ -277,16 +322,22 @@ class VariantSolver:
                 or not np.array_equal(st.data, data)):
             if not st.analyzed:
                 self._stats["analyze_calls"] += 1
-                st.raw.call(n, data, st.ia, st.ja,
-                            np.zeros_like(rhs), phase=12)
+                self._call(
+                    st.raw, n, data, st.ia, st.ja,
+                    np.zeros_like(rhs), phase=12
+                )
                 st.analyzed = True
             else:
-                st.raw.call(n, data, st.ia, st.ja,
-                            np.zeros_like(rhs), phase=22)
+                self._call(
+                    st.raw, n, data, st.ia, st.ja,
+                    np.zeros_like(rhs), phase=22
+                )
             st.data = data.copy()
         self._stats["transpose_backsolves"] += 1
-        return st.raw.call(n, data, st.ia, st.ja, rhs, phase=33,
-                           transpose=True)
+        return self._call(
+            st.raw, n, data, st.ia, st.ja, rhs,
+            phase=33, transpose=True
+        )
 
     def _raw_singleton(self):
         st = self._states.get("nocmp")

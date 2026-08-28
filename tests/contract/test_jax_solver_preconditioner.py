@@ -675,11 +675,50 @@ class ResidualOnlyConvergenceCheckTest(unittest.TestCase):
         problem.compute_residual = compute_residual
         return problem
 
+    def make_stateful_problem(self, residual_norms):
+        """Fake problem whose residual is a function of Newton-step count.
+
+        A full ``newton_update`` and a residual-only probe at the same state
+        therefore return the same scripted residual.  This lets the tests
+        compare full Newton and modified Newton assembly schedules without
+        coupling the script to one implementation path.
+        """
+        problem = SimpleNamespace(
+            num_vars=1,
+            num_total_dofs_all_vars=6,
+            fes=[SimpleNamespace(vec=1)],
+            newton_update_calls=0,
+            compute_residual_calls=0,
+            newton_tangents=[],
+            solve_steps=0,
+        )
+        problem.unflatten_fn_sol_list = lambda dofs: [dofs]
+
+        def current_residual():
+            return residual_norms[problem.solve_steps]
+
+        def newton_update(_sol_list):
+            problem.newton_update_calls += 1
+            tangent = f"A{problem.newton_update_calls}"
+            problem.newton_tangents.append(tangent)
+            problem._latest_tangent = tangent
+            return [jnp.full((6, 1), current_residual())]
+
+        def compute_residual(_sol_list):
+            problem.compute_residual_calls += 1
+            return [jnp.full((6, 1), current_residual())]
+
+        problem.newton_update = newton_update
+        problem.compute_residual = compute_residual
+        return problem
+
     def run_solver(self, problem, solver_options):
         stepped_tangents = []
 
         def fake_newton_step(_problem, _res_vec, A, dofs, _cfg, _timing):
             stepped_tangents.append(A)
+            if hasattr(_problem, "solve_steps"):
+                _problem.solve_steps += 1
             return dofs, 0.0
 
         with mock.patch.object(
@@ -700,9 +739,10 @@ class ResidualOnlyConvergenceCheckTest(unittest.TestCase):
         problem = self.make_counting_problem(
             newton_norms=[1.0, 0.0], residual_norms=[]
         )
-        self.run_solver(problem, {"newton": {}})
+        stepped = self.run_solver(problem, {"newton": {}})
         self.assertEqual(problem.newton_update_calls, 2)
         self.assertEqual(problem.compute_residual_calls, 0)
+        self.assertEqual(stepped, ["A1"])
 
     def test_residual_only_check_skips_jacobian_on_converged_step(self):
         problem = self.make_counting_problem(
@@ -733,6 +773,99 @@ class ResidualOnlyConvergenceCheckTest(unittest.TestCase):
             {"residual_only_check": True}
         )
         self.assertTrue(cfg.get("residual_only_check"))
+
+    def test_jacobian_reuse_keeps_cached_tangent_until_age_limit(self):
+        problem = self.make_stateful_problem(
+            residual_norms=[1.0, 0.5, 0.25, 0.125, 0.0]
+        )
+
+        stepped = self.run_solver(
+            problem,
+            {
+                "newton": {
+                    "jacobian_reuse": {
+                        "max_reuse": 2,
+                        "refresh_residual_ratio": 0.9,
+                    }
+                }
+            },
+        )
+
+        # A fresh A1 is used once, then reused for at most two additional
+        # corrections.  The next non-converged state refreshes to A2.
+        self.assertEqual(stepped, ["A1", "A1", "A1", "A2"])
+        self.assertEqual(problem.newton_update_calls, 2)
+        self.assertEqual(problem.compute_residual_calls, 4)
+
+    def test_jacobian_reuse_uses_cached_tangent_while_reduction_is_healthy(self):
+        problem = self.make_stateful_problem(
+            residual_norms=[1.0, 0.5, 0.0]
+        )
+
+        stepped = self.run_solver(
+            problem,
+            {
+                "newton": {
+                    "jacobian_reuse": {
+                        "max_reuse": 10,
+                        "refresh_residual_ratio": 0.9,
+                    }
+                }
+            },
+        )
+
+        self.assertEqual(stepped, ["A1", "A1"])
+        self.assertEqual(problem.newton_update_calls, 1)
+        self.assertEqual(problem.compute_residual_calls, 2)
+
+    def test_jacobian_reuse_refreshes_when_residual_reduction_stalls(self):
+        problem = self.make_stateful_problem(
+            residual_norms=[1.0, 0.5, 0.48, 0.1, 0.0]
+        )
+
+        stepped = self.run_solver(
+            problem,
+            {
+                "newton": {
+                    "jacobian_reuse": {
+                        "max_reuse": 10,
+                        "refresh_residual_ratio": 0.9,
+                    }
+                }
+            },
+        )
+
+        # 0.48 / 0.50 >= 0.9 refreshes before the following correction;
+        # after the refresh, A2 can be reused while reduction remains healthy.
+        self.assertEqual(stepped, ["A1", "A1", "A2", "A2"])
+        self.assertEqual(problem.newton_update_calls, 2)
+        self.assertEqual(problem.compute_residual_calls, 4)
+
+    def test_jacobian_reuse_rejects_invalid_configuration_before_assembly(self):
+        invalid_cases = [
+            (True, "jacobian_reuse"),
+            ({"max_reuse": -1}, "max_reuse"),
+            ({"max_reuse": 1.5}, "max_reuse"),
+            (
+                {"max_reuse": 1, "refresh_residual_ratio": 0.0},
+                "refresh_residual_ratio",
+            ),
+            (
+                {"max_reuse": 1, "refresh_residual_ratio": 1.1},
+                "refresh_residual_ratio",
+            ),
+        ]
+
+        for reuse_cfg, message in invalid_cases:
+            with self.subTest(reuse_cfg=reuse_cfg):
+                problem = self.make_stateful_problem([0.0])
+                with self.assertRaisesRegex(ValueError, message):
+                    self.run_solver(
+                        problem,
+                        {"newton": {"jacobian_reuse": reuse_cfg}},
+                    )
+                self.assertEqual(problem.newton_update_calls, 0)
+                self.assertEqual(problem.compute_residual_calls, 0)
 
 
 if __name__ == "__main__":

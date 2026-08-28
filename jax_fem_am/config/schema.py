@@ -331,6 +331,19 @@ def build_parser(config=None):
                              "assembly is skipped. Opt-in to preserve legacy mechanics behavior by default.")
     parser.add_argument("--no-mechanics-residual-only-check",
                         dest="mechanics_residual_only_check", action="store_false")
+    parser.add_argument("--mechanics-jacobian-reuse", type=int,
+                        default=cfg(config, "mechanics_jacobian_reuse", 0),
+                        metavar="N",
+                        help="Experimental modified-Newton policy for mechanics. Reuse one "
+                             "factorized tangent for at most N additional corrections while "
+                             "recomputing the true residual every correction. N=0 (default) "
+                             "keeps full Newton unchanged.")
+    parser.add_argument("--mechanics-jacobian-refresh-ratio", type=float,
+                        default=cfg(config, "mechanics_jacobian_refresh_ratio", 0.9),
+                        metavar="R",
+                        help="With --mechanics-jacobian-reuse N>0, rebuild the tangent when "
+                             "new_residual/old_residual >= R. Must satisfy 0 < R <= 1; "
+                             "default 0.9.")
     parser.add_argument("--mechanics-acceptance", choices=("legacy", "abaqus"),
                         default=cfg(config, "mechanics_acceptance", "legacy"),
                         help="Newton acceptance criteria for mechanics solves. 'legacy' = "

@@ -210,6 +210,10 @@ class V06RunnerContractTest(unittest.TestCase):
                     "--xla-pardiso-mode",
                     "phase23",
                     "--mechanics-residual-only-check",
+                    "--mechanics-jacobian-reuse",
+                    "2",
+                    "--mechanics-jacobian-refresh-ratio",
+                    "0.9",
                     "--profile-json",
                     str(profile),
                 ],
@@ -233,6 +237,10 @@ class V06RunnerContractTest(unittest.TestCase):
         self.assertIs(
             profile_data["meta"]["mechanics_residual_only_check_enabled"],
             True,
+        )
+        self.assertEqual(
+            profile_data["meta"]["mechanics_jacobian_reuse"],
+            {"max_reuse": 2, "refresh_residual_ratio": 0.9},
         )
 
 
