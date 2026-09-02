@@ -1082,6 +1082,17 @@ def install_solver_patch(
 ) -> None:
     original_solver = base_module.solver
     fallback_options = {"spsolve_solver": {}}
+    # Problems marked prefer_direct_linear_solver (the stepper's release
+    # solve: the raft cut plus rigid-body anchors give the worst-conditioned
+    # matrix of the run, and Krylov solvers stall on it) are routed to the
+    # multithreaded PARDISO direct path up front, instead of burning a failed
+    # iterative attempt plus the single-threaded spsolve fallback on every
+    # Newton iteration. Only applies when the configured solver is iterative.
+    direct_preference_options = {"custom_solver": _PardisoCustomSolver("phase23")}
+    iterative_solver_keys = frozenset(
+        {"jax_solver", "petsc_solver", "amgx_solver",
+         "cg_solver", "bicgstab_solver", "gmres_solver"}
+    )
     solve_internal_stages = (
         STAGE_LOCAL_ASSEMBLY,
         STAGE_GLOBAL_MATRIX,
@@ -1179,6 +1190,14 @@ def install_solver_patch(
             if linear_options is not None
             else solver_options
         )
+        if (
+            getattr(problem, "prefer_direct_linear_solver", False)
+            and linear_options is not None
+            and iterative_solver_keys.intersection(linear_options)
+        ):
+            patched_options = rewrite_solver_options(
+                solver_options or {}, direct_preference_options
+            )
         profile_scope = _newton_profile_scope(problem)
         if profile_scope is not None:
             patched_options = inject_newton_option(
