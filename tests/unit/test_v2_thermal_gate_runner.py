@@ -11,8 +11,14 @@ RUNNER = (Path(__file__).resolve().parents[2]
 def test_production_runner_wires_preregistered_observables_and_source_band():
     text = RUNNER.read_text(encoding="utf-8")
     required = (
-        "--source-depth-cutoff 4.0e-5",
-        "--source-cutoff-renormalize",
+        'REPO="${REPO:-/home/user/work/159/jax-fem}"',
+        'OUTROOT="${OUTROOT:-/home/user/work/159/output}"',
+        'VT="${VT:-/home/user/work/159/vtmp}"',
+        'SUMMARY_WINDOW="${SUMMARY_WINDOW:-0.45,0.90}"',
+        '--summary-window "$SUMMARY_WINDOW"',
+        'cd "$REPO"',
+        "--source-depth-cutoff 0",
+        "--no-source-cutoff-renormalize",
         "--online-observables",
         "--online-observables-window",
         "--online-observables-probes",
@@ -54,6 +60,9 @@ def test_production_runner_wires_preregistered_observables_and_source_band():
     )
     for token in required:
         assert token in text
+    assert '"source_depth_cutoff_m": 0.0' in text
+    assert '"source_cutoff_renormalize": False' in text
+    assert "--source-depth-cutoff 4.0e-5" not in text
 
 
 def test_production_runner_is_fail_closed():

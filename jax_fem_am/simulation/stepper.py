@@ -764,6 +764,7 @@ def main():
 
     quad_stress = None
     last_mechanics_step = -1
+    last_output_bucket = -1
     last_active_cell = previous_active.copy()
     last_printed_cell = previous_active.copy()
     last_cooling_only_cell = onp.zeros_like(previous_active, dtype=bool)
@@ -1032,7 +1033,18 @@ def main():
 
         material_state_cell = material_cell_state(active_cell, substrate_cell, support_cell, args, cell_T, phase_cell=phase_cell_from_quad(phase_quad))
         mechanics_is_current = last_mechanics_step == state.global_step
-        if should_save_step(state.global_step, did_mechanics, is_last, args):
+        if args.thermal_output_every == 0 and args.mechanics_output_every > 0:
+            # Mechanics-aligned outputs: event-forced mechanics solves drift the
+            # cadence off any fixed modulus, so save on the first mechanics solve
+            # of each mechanics_output_every-step bucket. Every VTU then carries
+            # a current stress state (mechanics_valid == 1).
+            save_now = is_last
+            if did_mechanics and state.global_step // args.mechanics_output_every > last_output_bucket:
+                save_now = True
+                last_output_bucket = state.global_step // args.mechanics_output_every
+        else:
+            save_now = should_save_step(state.global_step, did_mechanics, is_last, args)
+        if save_now:
             vtk_path = os.path.join(args.output_dir, f"step_{state.global_step:06d}_{state.mode}.vtu")
             save_step(
                 thermal.fes[0],
@@ -1268,6 +1280,10 @@ def main():
         release_mechanics.set_flow_curve_active_mask(
             last_flow_curve_active_quad
         )
+        # The raft cut plus rigid-body anchors make this the worst-conditioned
+        # solve of the run; iterative linear solvers stall here, so the
+        # acceleration solver patch routes this solve to a direct factorization.
+        release_mechanics.prefer_direct_linear_solver = True
         u_release = run_mechanics(release_mechanics, u_guess, mechanics_params, mechanics_newton_overrides)
         quad_stress = release_mechanics.compute_cell_stress(u_release[0], mechanics_params)
         vtk_path = os.path.join(args.output_dir, "release.vtu")

@@ -129,6 +129,53 @@ class AcceptanceCriteriaTest(BBarTestBase):
             True,
         )
 
+    def test_jacobian_reuse_is_explicit_and_validated_for_mechanics(self):
+        base = dict(
+            mechanics_tol=None,
+            mechanics_rel_tol=5e-5,
+            mechanics_max_iter=50,
+            mechanics_line_search=True,
+            mechanics_residual_only_check=False,
+            mechanics_acceptance="legacy",
+        )
+        disabled = SimpleNamespace(
+            mechanics_jacobian_reuse=0,
+            mechanics_jacobian_refresh_ratio=0.9,
+            **base,
+        )
+        self.assertNotIn(
+            "jacobian_reuse",
+            mechanics_newton_overrides_from_args(disabled),
+        )
+
+        enabled = SimpleNamespace(
+            mechanics_jacobian_reuse=2,
+            mechanics_jacobian_refresh_ratio=0.85,
+            **base,
+        )
+        self.assertEqual(
+            mechanics_newton_overrides_from_args(enabled)["jacobian_reuse"],
+            {"max_reuse": 2, "refresh_residual_ratio": 0.85},
+        )
+
+        for invalid in (
+            {"mechanics_jacobian_reuse": -1,
+             "mechanics_jacobian_refresh_ratio": 0.9},
+            {"mechanics_jacobian_reuse": 1.5,
+             "mechanics_jacobian_refresh_ratio": 0.9},
+            {"mechanics_jacobian_reuse": True,
+             "mechanics_jacobian_refresh_ratio": 0.9},
+            {"mechanics_jacobian_reuse": 1,
+             "mechanics_jacobian_refresh_ratio": 0.0},
+            {"mechanics_jacobian_reuse": 1,
+             "mechanics_jacobian_refresh_ratio": 1.1},
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    mechanics_newton_overrides_from_args(
+                        SimpleNamespace(**invalid, **base)
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

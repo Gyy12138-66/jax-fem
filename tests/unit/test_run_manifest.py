@@ -23,6 +23,18 @@ def test_referenced_material_tables_are_hashed(tmp_path):
     assert refs["k_table_solid"]["sha256"] == manifest.sha256_file(table)
 
 
+def test_private_table_note_is_not_treated_as_a_file_reference(tmp_path):
+    table = tmp_path / "k.csv"
+    table.write_text("temperature,value\n300,10\n", encoding="utf-8")
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "k_table_liquid": str(table),
+        "_k_table_liquid_note": "runtime-derived table; path bound by manifest",
+    }), encoding="utf-8")
+    refs = manifest.referenced_inputs(config)
+    assert set(refs) == {"k_table_liquid"}
+
+
 def test_run_id_changes_with_dirty_content_and_referenced_table(tmp_path, monkeypatch):
     config = tmp_path / "config.json"
     mesh = tmp_path / "mesh.inp"

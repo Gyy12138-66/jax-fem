@@ -7,6 +7,8 @@ cutback's bare-name call must keep resolving through the v03 module globals
 to hit that patch.
 """
 
+import numbers
+
 
 def mechanics_newton_overrides_from_args(args):
     """Newton overrides for the mechanics solves, built from CLI options.
@@ -27,6 +29,28 @@ def mechanics_newton_overrides_from_args(args):
         overrides["line_search_flag"] = True
     if getattr(args, "mechanics_residual_only_check", False):
         overrides["residual_only_check"] = True
+    jacobian_reuse_raw = getattr(args, "mechanics_jacobian_reuse", 0)
+    if jacobian_reuse_raw is None:
+        jacobian_reuse_raw = 0
+    if isinstance(jacobian_reuse_raw, bool) or not isinstance(
+        jacobian_reuse_raw, numbers.Integral
+    ):
+        raise ValueError("mechanics_jacobian_reuse must be an integer")
+    jacobian_reuse = int(jacobian_reuse_raw)
+    refresh_ratio = float(
+        getattr(args, "mechanics_jacobian_refresh_ratio", 0.9)
+    )
+    if jacobian_reuse < 0:
+        raise ValueError("mechanics_jacobian_reuse must be >= 0")
+    if not 0.0 < refresh_ratio <= 1.0:
+        raise ValueError(
+            "mechanics_jacobian_refresh_ratio must satisfy 0 < ratio <= 1"
+        )
+    if jacobian_reuse:
+        overrides["jacobian_reuse"] = {
+            "max_reuse": jacobian_reuse,
+            "refresh_residual_ratio": refresh_ratio,
+        }
     if getattr(args, "mechanics_acceptance", "legacy") == "abaqus":
         # Hybrid strict-residual OR Abaqus/Standard-style dual criteria
         # (usb 7.2.3): configured tol/rel_tol remain a conservative exit;

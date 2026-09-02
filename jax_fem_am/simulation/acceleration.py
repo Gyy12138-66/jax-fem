@@ -989,6 +989,26 @@ def _solver_label(linear_options: Mapping[str, Any] | None) -> str:
     return str(linear_options)
 
 
+def _pardiso_stats_snapshot(
+    linear_options: Mapping[str, Any] | None,
+) -> Optional[Dict[str, Any]]:
+    """Return JSON-safe phase statistics from the active v07 solver."""
+    if not linear_options or "custom_solver" not in linear_options:
+        return None
+    custom = linear_options["custom_solver"]
+    variant = getattr(custom, "_v07_variant", None)
+    if variant is None:
+        initialize = getattr(custom, "_maybe_v07_variant", None)
+        if initialize is not None:
+            variant = initialize()
+    if variant in (None, False):
+        return None
+    snapshot = getattr(variant, "stats_snapshot", None)
+    if snapshot is None:
+        return None
+    return dict(snapshot())
+
+
 def print_acceleration_summary(
     args: argparse.Namespace,
     linear_options: Mapping[str, Any] | None,
@@ -1062,6 +1082,17 @@ def install_solver_patch(
 ) -> None:
     original_solver = base_module.solver
     fallback_options = {"spsolve_solver": {}}
+    # Problems marked prefer_direct_linear_solver (the stepper's release
+    # solve: the raft cut plus rigid-body anchors give the worst-conditioned
+    # matrix of the run, and Krylov solvers stall on it) are routed to the
+    # multithreaded PARDISO direct path up front, instead of burning a failed
+    # iterative attempt plus the single-threaded spsolve fallback on every
+    # Newton iteration. Only applies when the configured solver is iterative.
+    direct_preference_options = {"custom_solver": _PardisoCustomSolver("phase23")}
+    iterative_solver_keys = frozenset(
+        {"jax_solver", "petsc_solver", "amgx_solver",
+         "cg_solver", "bicgstab_solver", "gmres_solver"}
+    )
     solve_internal_stages = (
         STAGE_LOCAL_ASSEMBLY,
         STAGE_GLOBAL_MATRIX,
@@ -1071,6 +1102,14 @@ def install_solver_patch(
         STAGE_CONVERSION,
         STAGE_TRANSFER,
     )
+
+    def _newton_profile_scope(problem):
+        class_names = {klass.__name__ for klass in type(problem).__mro__}
+        if "ThermoMechanical" in class_names:
+            return "mechanics"
+        if "TransientThermal" in class_names:
+            return "thermal"
+        return None
 
     def run_original_solver(problem, patched_options):
         if profiler is None:
@@ -1083,6 +1122,8 @@ def install_solver_patch(
             stage: float(profiler.stage_seconds.get(stage, 0.0))
             for stage in solve_internal_stages
         }
+        profile_scope = _newton_profile_scope(problem)
+        pardiso_before = _pardiso_stats_snapshot(linear_options)
         t0 = time.perf_counter()
         try:
             if profile_solver_call:
@@ -1100,6 +1141,27 @@ def install_solver_patch(
                 STAGE_NONLINEAR_SOLVE_OVERHEAD,
                 max(0.0, elapsed - internal_seconds),
             )
+            pardiso_after = _pardiso_stats_snapshot(linear_options)
+            if (
+                profile_scope is not None
+                and pardiso_before is not None
+                and pardiso_after is not None
+            ):
+                by_scope = profiler.meta.setdefault(
+                    "pardiso_stats_by_scope", {}
+                )
+                scoped = by_scope.setdefault(profile_scope, {})
+                for key, after_value in pardiso_after.items():
+                    before_value = pardiso_before.get(key)
+                    if (
+                        isinstance(after_value, (int, float))
+                        and not isinstance(after_value, bool)
+                        and isinstance(before_value, (int, float))
+                        and not isinstance(before_value, bool)
+                    ):
+                        scoped[key] = scoped.get(key, 0) + (
+                            after_value - before_value
+                        )
 
     def _wants_residual_only_check(problem):
         # Scope to the thermal problem: its convergence decisions are far from
@@ -1128,6 +1190,19 @@ def install_solver_patch(
             if linear_options is not None
             else solver_options
         )
+        if (
+            getattr(problem, "prefer_direct_linear_solver", False)
+            and linear_options is not None
+            and iterative_solver_keys.intersection(linear_options)
+        ):
+            patched_options = rewrite_solver_options(
+                solver_options or {}, direct_preference_options
+            )
+        profile_scope = _newton_profile_scope(problem)
+        if profile_scope is not None:
+            patched_options = inject_newton_option(
+                patched_options, "_profile_scope", profile_scope
+            )
         if _wants_residual_only_check(problem):
             patched_options = inject_newton_option(
                 patched_options, "residual_only_check", True
@@ -1177,6 +1252,10 @@ def install_solver_patch(
             retry_options = rewrite_solver_options(
                 solver_options or {}, fallback_options
             )
+            if profile_scope is not None:
+                retry_options = inject_newton_option(
+                    retry_options, "_profile_scope", profile_scope
+                )
             if _wants_residual_only_check(problem):
                 retry_options = inject_newton_option(
                     retry_options, "residual_only_check", True
@@ -1363,11 +1442,39 @@ def install_jax_fem_timing_patch(profiler: Optional[ProfilingReport]) -> None:
         "bcoo_cache_hits": "jax_bcoo_cache_hits",
         "bcoo_cache_misses": "jax_bcoo_cache_misses",
         "jax_spsolve_calls": "jax_spsolve_calls",
+        "jacobian_builds": "jacobian_builds",
+        "residual_only_evaluations": "residual_only_evaluations",
+        "jacobian_reuse_enabled_solves": "jacobian_reuse_enabled_solves",
+        "jacobian_reuse_hits": "jacobian_reuse_hits",
+        "jacobian_refreshes": "jacobian_refreshes",
+        "jacobian_refresh_stagnation": "jacobian_refresh_stagnation",
+        "jacobian_refresh_age": "jacobian_refresh_age",
     }
+    scoped_counter_suffixes = frozenset(
+        {
+            "jacobian_builds",
+            "residual_only_evaluations",
+            "jacobian_reuse_enabled_solves",
+            "jacobian_reuse_hits",
+            "jacobian_refreshes",
+            "jacobian_refresh_stagnation",
+            "jacobian_refresh_age",
+        }
+    )
 
     def counter_record(timing, name, count=1):
         original_counter_record(timing, name, count)
         meta_name = meta_by_counter_name.get(name)
+        if meta_name is None:
+            for scope in ("thermal", "mechanics"):
+                prefix = f"{scope}_"
+                suffix = name[len(prefix):]
+                if (
+                    name.startswith(prefix)
+                    and suffix in scoped_counter_suffixes
+                ):
+                    meta_name = name
+                    break
         if meta_name is not None:
             profiler.meta[meta_name] = (
                 int(profiler.meta.get(meta_name, 0) or 0) + int(count)
@@ -3196,6 +3303,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     report.meta["mechanics_residual_only_check_enabled"] = bool(
         getattr(args, "mechanics_residual_only_check", False)
     )
+    mechanics_jacobian_reuse = int(
+        getattr(args, "mechanics_jacobian_reuse", 0) or 0
+    )
+    report.meta["mechanics_jacobian_reuse"] = (
+        {
+            "max_reuse": mechanics_jacobian_reuse,
+            "refresh_residual_ratio": float(
+                getattr(args, "mechanics_jacobian_refresh_ratio", 0.9)
+            ),
+        }
+        if mechanics_jacobian_reuse
+        else None
+    )
     report.meta["step_predicate_cache_enabled"] = bool(
         args.xla_step_predicate_cache
     )
@@ -3290,6 +3410,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         rc = base.main()
         return int(rc or 0)
     finally:
+        pardiso_stats = _pardiso_stats_snapshot(replacement)
+        if pardiso_stats is not None:
+            report.meta["pardiso_stats"] = pardiso_stats
         report.finish()
         print(report.summary(), file=sys.stderr)
         if args.profile_json:

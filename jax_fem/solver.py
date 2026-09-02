@@ -41,6 +41,14 @@ def _linear_solver_info_value(info):
     return int(onp.asarray(info).item())
 
 
+def _block_until_ready_tree(value):
+    """Synchronize JAX leaves so stage timers include device execution."""
+    for leaf in jax.tree_util.tree_leaves(value):
+        if hasattr(leaf, 'block_until_ready'):
+            leaf.block_until_ready()
+    return value
+
+
 def _log_newton_iter_start(iter_num):
     if logger.isEnabledFor(logging.INFO):
         print()
@@ -1511,9 +1519,48 @@ _LINEAR_OPTION_KEYS = frozenset({
     'jax_solver', 'amgx_solver', 'spsolve_solver', 'petsc_solver', 'custom_solver',
 })
 _NEWTON_OPTION_KEYS = frozenset({'tol', 'rel_tol', 'line_search_flag', 'initial_guess',
-                                 'residual_only_check', 'max_iter', 'acceptance'})
+                                 'residual_only_check', 'jacobian_reuse',
+                                 'max_iter', 'acceptance', '_profile_scope'})
 
 _LAMBDA_TARGET = 1.
+
+
+def _normalize_jacobian_reuse(value):
+    """Validate the opt-in modified-Newton tangent reuse policy.
+
+    ``max_reuse`` is the number of *additional* corrections allowed after
+    the first solve with a newly assembled tangent. The true residual is
+    always recomputed. A tangent is refreshed early when the residual
+    reduction ratio reaches ``refresh_residual_ratio``.
+    """
+    if value is None or value is False:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("newton 'jacobian_reuse' must be a dict")
+    unknown = set(value) - {'max_reuse', 'refresh_residual_ratio'}
+    if unknown:
+        raise ValueError(
+            "unknown newton 'jacobian_reuse' options: "
+            f"{sorted(unknown)}"
+        )
+    max_reuse = value.get('max_reuse', 0)
+    if isinstance(max_reuse, bool) or not isinstance(
+        max_reuse, (int, onp.integer)
+    ):
+        raise ValueError("jacobian_reuse 'max_reuse' must be an integer")
+    max_reuse = int(max_reuse)
+    if max_reuse < 1:
+        raise ValueError("jacobian_reuse 'max_reuse' must be >= 1")
+    refresh_ratio = float(value.get('refresh_residual_ratio', 0.9))
+    if not onp.isfinite(refresh_ratio) or not 0.0 < refresh_ratio <= 1.0:
+        raise ValueError(
+            "jacobian_reuse 'refresh_residual_ratio' must satisfy "
+            "0 < ratio <= 1"
+        )
+    return {
+        'max_reuse': max_reuse,
+        'refresh_residual_ratio': refresh_ratio,
+    }
 
 
 def _resolve_solver_options(solver_options):
@@ -1647,6 +1694,10 @@ def solver(problem, solver_options={}):
         - ``tol`` → ``1e-6`` (absolute residual :math:`\ell_2` norm)
         - ``rel_tol`` → ``1e-8`` (relative to the initial residual)
         - ``line_search_flag`` → ``False``
+        - ``jacobian_reuse`` → disabled. The experimental opt-in form is
+          ``{'max_reuse': N, 'refresh_residual_ratio': R}``; it recomputes
+          the true residual after every correction but can reuse a lagged
+          tangent factorization for at most ``N`` additional corrections.
         - ``initial_guess`` → zero displacement vector
         - ``linear``: The following are all equivalent for the linear solve::
 
@@ -1713,6 +1764,16 @@ def solver(problem, solver_options={}):
     logger.info("Solving the nonlinear problem...")
     timing = {'local_assembly': 0., 'global_matrix': 0., 'linear': 0.}
     wall_start = time.perf_counter()
+    profile_scope = cfg.get('_profile_scope', None)
+    if profile_scope not in (None, 'thermal', 'mechanics'):
+        raise ValueError(
+            "newton '_profile_scope' must be 'thermal' or 'mechanics'"
+        )
+
+    def _record_newton_counter(name, count=1):
+        _counter_record(timing, name, count)
+        if profile_scope is not None:
+            _counter_record(timing, f'{profile_scope}_{name}', count)
 
     if 'initial_guess' in cfg:
         # We don't want inititual guess to play a role in the differentiation chain.
@@ -1727,7 +1788,12 @@ def solver(problem, solver_options={}):
     rel_tol = cfg.get('rel_tol', 1e-8)
     tol = cfg.get('tol', 1e-6)
     residual_only_check = bool(cfg.get('residual_only_check', False))
+    jacobian_reuse = _normalize_jacobian_reuse(
+        cfg.get('jacobian_reuse', None)
+    )
     max_iter = int(cfg.get('max_iter', 100))
+    if jacobian_reuse is not None:
+        _record_newton_counter('jacobian_reuse_enabled_solves')
     # Hybrid Abaqus-style acceptance (opt-in; None keeps the legacy
     # single-residual criteria bit-for-bit). Configured residual tolerances
     # remain a strict acceptance exit, augmented by Abaqus/Standard usb 7.2.3:
@@ -1745,12 +1811,14 @@ def solver(problem, solver_options={}):
         acc_fb_after = int(acceptance.get('fallback_after', 9))
 
     def newton_update_helper(dofs):
+        _record_newton_counter('jacobian_builds')
         if hasattr(problem, 'P_mat'):
             dofs = problem.P_mat @ dofs
 
         sol_list = problem.unflatten_fn_sol_list(dofs)
         t0 = time.perf_counter()
         res_list = problem.newton_update(sol_list)
+        _block_until_ready_tree(res_list)
         local_s = time.perf_counter() - t0
         _timing_record(timing, 'local_assembly', local_s)
         residual_t0 = time.perf_counter()
@@ -1778,12 +1846,14 @@ def solver(problem, solver_options={}):
         # Convergence probe: assemble the residual without the tangent. The
         # element Jacobian and its device->host transfer are skipped entirely;
         # the tangent is rebuilt only when another Newton step will run.
+        _record_newton_counter('residual_only_evaluations')
         if hasattr(problem, 'P_mat'):
             dofs = problem.P_mat @ dofs
 
         sol_list = problem.unflatten_fn_sol_list(dofs)
         t0 = time.perf_counter()
         res_list = problem.compute_residual(sol_list)
+        _block_until_ready_tree(res_list)
         local_s = time.perf_counter() - t0
         _timing_record(timing, 'local_assembly', local_s)
         residual_t0 = time.perf_counter()
@@ -1809,6 +1879,9 @@ def solver(problem, solver_options={}):
     rel_res_val = res_val/res_val_initial
     _log_newton_iter_summary(0, local_s, global_s, res_val, rel_res_val)
     n_iters = 0
+    # Number of corrections already solved with the current tangent. A newly
+    # assembled tangent starts at zero and its first solve increments to one.
+    jacobian_corrections = 0
 
     if acceptance is not None:
         # Out-of-balance force scale of THIS increment (mean |component| of
@@ -1881,11 +1954,48 @@ def solver(problem, solver_options={}):
                 "Increase solver_options newton 'max_iter', enable "
                 "'line_search_flag', or check the tangent/material model.")
         _log_newton_iter_start(n_iters)
+        res_val_before_step = res_val
         dofs_before_step = dofs
         dofs, linear_s = newton_step(problem, res_vec, A, dofs, cfg, timing)
+        jacobian_corrections += 1
         if acceptance is not None:
             acc_last_du_max = float(np.max(np.abs(dofs - dofs_before_step)))
-        if residual_only_check:
+        if jacobian_reuse is not None:
+            # Modified Newton: evaluate the true residual at every accepted
+            # trial point while retaining A. If another correction is needed,
+            # refresh on stagnation or after the configured factorization age;
+            # otherwise the unchanged A naturally takes the direct solver's
+            # phase-33 backsolve path.
+            res_vec, local_s = residual_only_helper(dofs)
+            global_s = 0.
+            res_val = np.linalg.norm(res_vec)
+            rel_res_val = res_val/res_val_initial
+            if not _accepted(n_iters, res_vec, res_val, rel_res_val, dofs,
+                             acc_last_du_max if acceptance is not None else None):
+                old_value = max(float(res_val_before_step), onp.finfo(float).tiny)
+                reduction_ratio = float(res_val) / old_value
+                stale = (
+                    not onp.isfinite(reduction_ratio)
+                    or reduction_ratio
+                    >= jacobian_reuse['refresh_residual_ratio']
+                )
+                age_exhausted = (
+                    jacobian_corrections
+                    >= 1 + jacobian_reuse['max_reuse']
+                )
+                if stale or age_exhausted:
+                    _record_newton_counter('jacobian_refreshes')
+                    _record_newton_counter(
+                        'jacobian_refresh_stagnation'
+                        if stale else 'jacobian_refresh_age',
+                    )
+                    res_vec, A, local_s, global_s = newton_update_helper(dofs)
+                    res_val = np.linalg.norm(res_vec)
+                    rel_res_val = res_val/res_val_initial
+                    jacobian_corrections = 0
+                else:
+                    _record_newton_counter('jacobian_reuse_hits')
+        elif residual_only_check:
             res_vec, local_s = residual_only_helper(dofs)
             global_s = 0.
             res_val = np.linalg.norm(res_vec)

@@ -46,8 +46,11 @@ def referenced_inputs(config_path):
     config = json.loads(Path(config_path).read_text(encoding="utf-8"))
     result = {}
     for key, value in sorted(config.items()):
-        is_file_reference = (key.endswith(("_table", "_csv"))
-                             or "_table_" in key)
+        # Metadata keys such as ``_k_table_liquid_note`` describe a table but
+        # are not themselves paths. Only non-private config keys participate.
+        is_file_reference = (not key.startswith("_")
+                             and (key.endswith(("_table", "_csv"))
+                                  or "_table_" in key))
         if not isinstance(value, str) or not is_file_reference:
             continue
         path = Path(value)

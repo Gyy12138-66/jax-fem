@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "id": "D-V2-21-keff-220W-650mms",
+  "description": "V2 多道 220 W / 650 mm/s 的 Balbaa Eq.19-24 keff 参数配置。区分独立输入、由 non-keff 热场测得的参数和公式派生量；不得用 Fig.14 温度回调任何参数。",
+  "equations": {
+    "19": "keff = kl + h L",
+    "20": "Nu = h L / kl",
+    "21": "Nu = 1.6129 ln(Ma) - 10.183",
+    "22": "Ma = -(dsigma/dT) L dT rho Cpl / (mu kl)",
+    "23": "dT = [-Cpl + sqrt(Cpl^2 + 2 a^2 dt Qv / rho)] / a^2, a = (dsigma/dT)/mu",
+    "24": "dt = L / v"
+  },
+  "independent_inputs": {
+    "process": {
+      "power_W": 220.0,
+      "speed_m_s": 0.65,
+      "absorptivity": 0.62,
+      "beam_radius_m": 0.00005,
+      "opd_m": 0.0001,
+      "qv_mode": "Eq.18 exponential-source surface/beam-centre peak: 2*Ac*P/(pi*r^2*opd)",
+      "provenance": {
+        "power_speed": "balbaa-v2-model.json validation_targets.pyrometer",
+        "absorptivity": "Balbaa Sec.3.1 DRS",
+        "beam_radius": "V2 runner --beam-radius",
+        "opd": "Balbaa Table 2 interpolated at PSD=-45 um"
+      }
+    },
+    "material": {
+      "rho_liquid_kg_m3": 7925.0,
+      "k_liquid_W_mK": 30.078,
+      "cp_liquid_J_kgK": 709.25,
+      "dynamic_viscosity_Pa_s": 0.007,
+      "surface_tension_gradient_N_mK": -0.00011,
+      "solidus_K": 1563.0,
+      "liquidus_K": 1623.0,
+      "boiling_K": 3000.0,
+      "provenance": "Balbaa Table 1; repository transcription: cases/AM-Benchmark/verification/v1-single-track/inputs/balbaa-model.json"
+    }
+  },
+  "nonkeff_derived_inputs": {
+    "characteristic_half_width_L_m": 0.00008,
+    "definition": "L = single-track once-molten transverse half-width measured at the solidus isotherm; one-sided upper-half measurement from track centreline",
+    "measurement_protocol": {
+      "source_arm": "V2 no-keff/as-is",
+      "source_run_complete_required": true,
+      "source_run_summary_sha256": "8050c01a62a7d24b10ca0f4b5765fe0f41e5c43a694e64ed5d405e3ac8a357f0",
+      "source_run_ledger_lines": 8866,
+      "source_dependency_manifest": {
+        "git_commit": "5db24b6f90b57365787a677595a17e65c7153b71",
+        "material_config": "cases/AM-Benchmark/verification/v2-cube-rs/model/v2_material_config_thermal_asis.json",
+        "source_depth_m": 0.0001,
+        "source_depth_cutoff_m": 0.0,
+        "source_cutoff_renormalize": false,
+        "fixture_thermal_phase": "follow-temperature",
+        "initial_temperature_K": 353.15,
+        "bottom_temperature_K": 353.15,
+        "mesh_cell_pitch_y_m": 0.00004
+      },
+      "selection_script": "cases/AM-Benchmark/verification/v2-cube-rs/model/pick_keff_measurement.py",
+      "selection_nth_crossing_track": 3,
+      "track_y_m": 0.00032,
+      "requested_time_s": 0.422801846,
+      "selected_frame": "step_001700_scan.vtu",
+      "selected_frame_time_s": 0.418275692,
+      "measurement_window_m": [0.0005, 0.0035, 0.00026, 0.0005],
+      "measured_y_extent_m": [0.00024, 0.0004],
+      "cell_pitch_y_m": 0.00004,
+      "L_resolution_m": 0.00002,
+      "molten_cells": 760,
+      "y_rows": 4
+    },
+    "reuse_policy": {
+      "may_reuse_without_new_nonkeff_run": "Only when process, material, mesh, source model, initial/boundary conditions and source-run fingerprint remain unchanged.",
+      "must_recompute_from_nonkeff": "Recompute L and keff when any dependency changes or the source-run fingerprint no longer matches.",
+      "note": "L is a non-keff field measurement, not an analytic input derived from laser parameters alone."
+    }
+  },
+  "derived_outputs": {
+    "interaction_time_s": 0.00012307692307692308,
+    "Qv_W_m3": 347339747803752.44,
+    "delta_T_K": 7595.539497350218,
+    "peak_T_estimate_K": 9158.539497350219,
+    "Marangoni": 1784.4028940644114,
+    "Nusselt": 1.8925228249101789,
+    "h_W_m2K": 711541.2690956055,
+    "keff_W_mK": 87.00130152764835,
+    "keff_over_k_liquid": 2.8925228249101784,
+    "liquid_table_mode": "constant over temperature; applied only in the fully liquid phase through k_table_liquid"
+  },
+  "sensitivity_and_flags": {
+    "L_discretization_range_m": [0.00006, 0.0001],
+    "keff_at_L_discretization_bounds_W_mK": [59.104774581723916, 108.63595474270562],
+    "Eq23_peak_above_boiling": true,
+    "Eq23_note": "The adiabatic Eq.23 estimate exceeds boiling; record without clipping. It is not a field-temperature cap or calibration target.",
+    "zero_calibration": "No parameter is adjusted against Fig.14, XRD or ABAQUS temperatures."
+  },
+  "outputs": {
+    "derivation_ledger": "derived/keff_v2.json",
+    "liquid_conductivity_table": "model/tables/k_liquid_keff.csv",
+    "material_config_template": "model/v2_material_config_thermal_keff.json"
+  }
+}
