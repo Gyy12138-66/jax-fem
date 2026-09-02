@@ -1,0 +1,723 @@
+{
+  "schema": "v2.balbaa-fig43-44/1",
+  "source": "Balbaa2022_multiscale-RS-LPBF-IN625_JMMP-6-2.pdf page 35, embedded bitmaps at native resolution",
+  "evidence_nature": "experimental_xrd = the paper's only measured residual stresses (XRD + electropolishing, Sec 3.4, 2 mm spot, cube centre, two samples 220 W / 140 W); predicted_* = Balbaa's ABAQUS (literature J-C vs tensile-adjusted J-C, Sec 4.3.2). The plotted component (scan, hatch or average) is NOT stated in the paper.",
+  "figures": {
+    "fig43": {
+      "condition": "220 W / 650 mm/s / hatch 0.12 mm",
+      "image": "/tmp/dig43/balbaa_p35_img0.jpeg",
+      "image_shape": [
+        1787,
+        2723
+      ],
+      "calibration": {
+        "x": {
+          "px_per_unit": 2.0488286713286716,
+          "px_origin": 390.26923076923083,
+          "max_residual_px": 1.5821678321677837,
+          "n_ticks": 12,
+          "k": [
+            0.0,
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            5.0,
+            6.0,
+            7.0,
+            8.0,
+            9.0,
+            10.0,
+            11.0
+          ]
+        },
+        "y": {
+          "px_per_unit": 1.3469090909090906,
+          "px_origin": 101.18181818181827,
+          "max_residual_px": 1.5909090909087809,
+          "n_ticks": 11,
+          "k": [
+            0.0,
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            5.0,
+            6.0,
+            7.0,
+            8.0,
+            9.0,
+            10.0
+          ]
+        },
+        "x_origin_px": 389.5,
+        "y_origin_px": 1446.5,
+        "frame": {
+          "top": [
+            98.5,
+            2.0
+          ],
+          "bottom": [
+            1448.5,
+            4.0
+          ],
+          "left": [
+            388.0,
+            3.5
+          ],
+          "right": [
+            2646.0,
+            1.5
+          ]
+        },
+        "legend_bbox": [
+          118,
+          604,
+          1664,
+          2641
+        ]
+      },
+      "read_off_uncertainty": {
+        "depth_um": 1.952335037075593,
+        "stress_MPa": 2.96976241900648,
+        "note": "worst of frame-line half thickness and tick-grid residual, mapped through the calibration; per point, marker_half_height_MPa bounds the centre-finding ambiguity of the column read (the column through a marker sees its outline top/bottom and the centre line; their mean is the anchor). The XRD error bars are read as the full dark extent of the column."
+      },
+      "series": {
+        "predicted_jc_literature": [
+          {
+            "depth_um": 100.0,
+            "stress_MPa": 522.0594852411808,
+            "column_runs": 3,
+            "marker_half_height_MPa": 8.909287257019441
+          },
+          {
+            "depth_um": 200.0,
+            "stress_MPa": 443.9794816414688,
+            "column_runs": 4,
+            "marker_half_height_MPa": 15.220032397408211
+          },
+          {
+            "depth_um": 300.0,
+            "stress_MPa": 384.95545356371497,
+            "column_runs": 2,
+            "marker_half_height_MPa": 10.39416846652268
+          },
+          {
+            "depth_um": 400.0,
+            "stress_MPa": 326.02423056155516,
+            "column_runs": 4,
+            "marker_half_height_MPa": 15.96247300215983
+          },
+          {
+            "depth_um": 500.0,
+            "stress_MPa": 270.7433405327573,
+            "column_runs": 3,
+            "marker_half_height_MPa": 14.8488120950324
+          },
+          {
+            "depth_um": 600.0,
+            "stress_MPa": 270.34118520518365,
+            "column_runs": 4,
+            "marker_half_height_MPa": 15.220032397408211
+          },
+          {
+            "depth_um": 700.0,
+            "stress_MPa": 278.7864470842333,
+            "column_runs": 2,
+            "marker_half_height_MPa": 7.4244060475162
+          },
+          {
+            "depth_um": 800.0,
+            "stress_MPa": 220.31924946004324,
+            "column_runs": 4,
+            "marker_half_height_MPa": 10.02294816414687
+          },
+          {
+            "depth_um": 900.0,
+            "stress_MPa": 165.00742440604756,
+            "column_runs": 2,
+            "marker_half_height_MPa": 8.909287257019441
+          },
+          {
+            "depth_um": 1000.0,
+            "stress_MPa": 102.17838822894171,
+            "column_runs": 4,
+            "marker_half_height_MPa": 15.96247300215983
+          }
+        ],
+        "predicted_modified_jc": [
+          {
+            "depth_um": 100.0,
+            "stress_MPa": 935.1039416846654,
+            "column_runs": 1,
+            "marker_half_height_MPa": 2.2273218142548603
+          },
+          {
+            "depth_um": 200.0,
+            "stress_MPa": 880.5345572354214,
+            "column_runs": 1,
+            "marker_half_height_MPa": 2.59854211663067
+          },
+          {
+            "depth_um": 300.0,
+            "stress_MPa": 824.8515118790499,
+            "column_runs": 1,
+            "marker_half_height_MPa": 4.08342332613391
+          },
+          {
+            "depth_um": 400.0,
+            "stress_MPa": 729.0766738660909,
+            "column_runs": 1,
+            "marker_half_height_MPa": 2.59854211663067
+          },
+          {
+            "depth_um": 500.0,
+            "stress_MPa": 629.8680480561557,
+            "column_runs": 4,
+            "marker_half_height_MPa": 7.05318574514039
+          },
+          {
+            "depth_um": 600.0,
+            "stress_MPa": 524.0393268538519,
+            "column_runs": 3,
+            "marker_half_height_MPa": 7.79562634989201
+          },
+          {
+            "depth_um": 700.0,
+            "stress_MPa": 419.1077213822895,
+            "column_runs": 2,
+            "marker_half_height_MPa": 3.7122030237581
+          },
+          {
+            "depth_um": 800.0,
+            "stress_MPa": 401.66036717062644,
+            "column_runs": 1,
+            "marker_half_height_MPa": 2.59854211663067
+          },
+          {
+            "depth_um": 900.0,
+            "stress_MPa": 383.47057235421175,
+            "column_runs": 1,
+            "marker_half_height_MPa": 2.96976241900648
+          },
+          {
+            "depth_um": 1000.0,
+            "stress_MPa": 320.17751079913614,
+            "column_runs": 2,
+            "marker_half_height_MPa": 2.2273218142548603
+          }
+        ],
+        "experimental_xrd": [
+          {
+            "depth_um": 100.0,
+            "stress_MPa": 606.2027537796978,
+            "column_runs": 1,
+            "marker_half_height_MPa": 19.303455723542122,
+            "err_plus_MPa": 19.303455723542122,
+            "err_minus_MPa": 19.303455723542122
+          },
+          {
+            "depth_um": 200.0,
+            "stress_MPa": 735.0161987041039,
+            "column_runs": 1,
+            "marker_half_height_MPa": 33.03860691144709,
+            "err_plus_MPa": 33.03860691144709,
+            "err_minus_MPa": 33.03860691144709
+          },
+          {
+            "depth_um": 300.0,
+            "stress_MPa": 704.9473542116632,
+            "column_runs": 1,
+            "marker_half_height_MPa": 39.349352051835865,
+            "err_plus_MPa": 39.349352051835865,
+            "err_minus_MPa": 39.349352051835865
+          },
+          {
+            "depth_um": 450.0,
+            "stress_MPa": 604.7178725701946,
+            "column_runs": 1,
+            "marker_half_height_MPa": 54.198164146868265,
+            "err_plus_MPa": 54.198164146868265,
+            "err_minus_MPa": 54.198164146868265
+          },
+          {
+            "depth_um": 600.0,
+            "stress_MPa": 524.5342872570195,
+            "column_runs": 7,
+            "marker_half_height_MPa": 22.2732181425486,
+            "err_plus_MPa": 25.242980561555083,
+            "err_minus_MPa": 19.303455723542122
+          },
+          {
+            "depth_um": 800.0,
+            "stress_MPa": 478.8741900647949,
+            "column_runs": 1,
+            "marker_half_height_MPa": 31.55372570194385,
+            "err_plus_MPa": 31.55372570194385,
+            "err_minus_MPa": 31.55372570194385
+          },
+          {
+            "depth_um": 1000.0,
+            "stress_MPa": 335.58315334773226,
+            "column_runs": 3,
+            "marker_half_height_MPa": 31.18250539956804,
+            "err_plus_MPa": 47.14497840172787,
+            "err_minus_MPa": 15.220032397408211
+          }
+        ]
+      },
+      "blob_cross_check": {
+        "predicted_jc_literature": [
+          {
+            "depth_um": 100.0,
+            "blob_stress_MPa": 512.2840172786179,
+            "delta_MPa": -9.77546796256297
+          },
+          {
+            "depth_um": 200.0,
+            "blob_stress_MPa": 438.78239740820743,
+            "delta_MPa": -5.197084233261364
+          },
+          {
+            "depth_um": 300.0,
+            "blob_stress_MPa": 372.70518358531325,
+            "delta_MPa": -12.250269978401718
+          },
+          {
+            "depth_um": 400.0,
+            "blob_stress_MPa": 312.1962742980562,
+            "delta_MPa": -13.827956263498947
+          },
+          {
+            "depth_um": 800.0,
+            "blob_stress_MPa": 219.39119870410372,
+            "delta_MPa": -0.9280507559395232
+          },
+          {
+            "depth_um": 900.0,
+            "blob_stress_MPa": 169.64767818574518,
+            "delta_MPa": 4.640253779697616
+          }
+        ],
+        "predicted_modified_jc": [
+          {
+            "depth_um": 300.0,
+            "blob_stress_MPa": 812.6012419006481,
+            "delta_MPa": -12.250269978401775
+          },
+          {
+            "depth_um": 400.0,
+            "blob_stress_MPa": 721.6522678185747,
+            "delta_MPa": -7.424406047516186
+          },
+          {
+            "depth_um": 500.0,
+            "blob_stress_MPa": 642.953563714903,
+            "delta_MPa": 13.08551565874734
+          },
+          {
+            "depth_um": 600.0,
+            "blob_stress_MPa": 523.0494060475163,
+            "delta_MPa": -0.98992080633559
+          },
+          {
+            "depth_um": 700.0,
+            "blob_stress_MPa": 418.36528077753786,
+            "delta_MPa": -0.7424406047516641
+          },
+          {
+            "depth_um": 1000.0,
+            "blob_stress_MPa": 319.9919006479482,
+            "delta_MPa": -0.18561015118791602
+          }
+        ],
+        "experimental_xrd": [
+          {
+            "depth_um": 100.0,
+            "blob_stress_MPa": 609.1725161987042,
+            "delta_MPa": 2.969762419006429
+          },
+          {
+            "depth_um": 200.0,
+            "blob_stress_MPa": 735.3874190064796,
+            "delta_MPa": 0.37122030237571835
+          },
+          {
+            "depth_um": 300.0,
+            "blob_stress_MPa": 704.9473542116632,
+            "delta_MPa": 0.0
+          },
+          {
+            "depth_um": 450.0,
+            "blob_stress_MPa": 607.687634989201,
+            "delta_MPa": 2.969762419006429
+          },
+          {
+            "depth_um": 800.0,
+            "blob_stress_MPa": 480.73029157667395,
+            "delta_MPa": 1.8561015118790465
+          },
+          {
+            "depth_um": 1000.0,
+            "blob_stress_MPa": 350.06074514038886,
+            "delta_MPa": 14.477591792656597
+          }
+        ]
+      }
+    },
+    "fig44": {
+      "condition": "140 W / 650 mm/s / hatch 0.12 mm",
+      "image": "/tmp/dig43/balbaa_p35_img1.jpeg",
+      "image_shape": [
+        1843,
+        2888
+      ],
+      "calibration": {
+        "x": {
+          "px_per_unit": 1.894196428571429,
+          "px_origin": 451.05357142857144,
+          "max_residual_px": 0.4464285714285552,
+          "n_ticks": 7,
+          "k": [
+            0.0,
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            5.0,
+            6.0
+          ]
+        },
+        "y": {
+          "px_per_unit": 1.2034821428571432,
+          "px_origin": 92.91071428571426,
+          "max_residual_px": 2.0892857142860066,
+          "n_ticks": 7,
+          "k": [
+            0.0,
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            5.0,
+            6.0
+          ]
+        },
+        "x_origin_px": 451.5,
+        "y_origin_px": 1535.0,
+        "frame": {
+          "top": [
+            91.5,
+            3.0
+          ],
+          "bottom": [
+            1536.5,
+            3.0
+          ],
+          "left": [
+            450.5,
+            3.0
+          ],
+          "right": [
+            2725.0,
+            2.5
+          ]
+        },
+        "legend_bbox": [
+          105,
+          625,
+          1604,
+          2710
+        ]
+      },
+      "read_off_uncertainty": {
+        "depth_um": 1.5837850577421633,
+        "stress_MPa": 2.4927665257066542,
+        "note": "worst of frame-line half thickness and tick-grid residual, mapped through the calibration; per point, marker_half_height_MPa bounds the centre-finding ambiguity of the column read (the column through a marker sees its outline top/bottom and the centre line; their mean is the anchor). The XRD error bars are read as the full dark extent of the column."
+      },
+      "series": {
+        "predicted_jc_literature": [
+          {
+            "depth_um": 100.0,
+            "stress_MPa": 519.7418206098374,
+            "column_runs": 3,
+            "marker_half_height_MPa": 19.942132205653234
+          },
+          {
+            "depth_um": 300.0,
+            "stress_MPa": 420.446620669189,
+            "column_runs": 3,
+            "marker_half_height_MPa": 19.52667111803546
+          },
+          {
+            "depth_um": 500.0,
+            "stress_MPa": 371.28372530108567,
+            "column_runs": 3,
+            "marker_half_height_MPa": 19.942132205653234
+          },
+          {
+            "depth_um": 700.0,
+            "stress_MPa": 297.6086257635334,
+            "column_runs": 3,
+            "marker_half_height_MPa": 19.942132205653234
+          },
+          {
+            "depth_um": 900.0,
+            "stress_MPa": 217.0091747656849,
+            "column_runs": 3,
+            "marker_half_height_MPa": 19.52667111803546
+          },
+          {
+            "depth_um": 1100.0,
+            "stress_MPa": 136.5482107970422,
+            "column_runs": 3,
+            "marker_half_height_MPa": 19.52667111803546
+          }
+        ],
+        "predicted_modified_jc": [
+          {
+            "depth_um": 100.0,
+            "stress_MPa": 985.6814303731728,
+            "column_runs": 2,
+            "marker_half_height_MPa": 17.864826767564356
+          },
+          {
+            "depth_um": 200.0,
+            "stress_MPa": 948.7746370897937,
+            "column_runs": 3,
+            "marker_half_height_MPa": 17.864826767564356
+          },
+          {
+            "depth_um": 300.0,
+            "stress_MPa": 909.9982689121348,
+            "column_runs": 3,
+            "marker_half_height_MPa": 17.864826767564356
+          },
+          {
+            "depth_um": 400.0,
+            "stress_MPa": 849.6179241783512,
+            "column_runs": 3,
+            "marker_half_height_MPa": 17.864826767564356
+          },
+          {
+            "depth_um": 500.0,
+            "stress_MPa": 792.1458070578923,
+            "column_runs": 3,
+            "marker_half_height_MPa": 17.864826767564356
+          },
+          {
+            "depth_um": 600.0,
+            "stress_MPa": 693.9585033508913,
+            "column_runs": 3,
+            "marker_half_height_MPa": 17.864826767564356
+          },
+          {
+            "depth_um": 700.0,
+            "stress_MPa": 603.0417686772014,
+            "column_runs": 2,
+            "marker_half_height_MPa": 17.864826767564356
+          },
+          {
+            "depth_um": 800.0,
+            "stress_MPa": 532.3441402675766,
+            "column_runs": 3,
+            "marker_half_height_MPa": 18.28028785518213
+          },
+          {
+            "depth_um": 900.0,
+            "stress_MPa": 467.6706976284095,
+            "column_runs": 3,
+            "marker_half_height_MPa": 18.28028785518213
+          },
+          {
+            "depth_um": 1000.0,
+            "stress_MPa": 402.37406335781577,
+            "column_runs": 2,
+            "marker_half_height_MPa": 17.864826767564356
+          }
+        ],
+        "experimental_xrd": [
+          {
+            "depth_um": 100.0,
+            "stress_MPa": 759.0474070776762,
+            "column_runs": 1,
+            "marker_half_height_MPa": 17.864826767564356,
+            "err_plus_MPa": 17.864826767564356,
+            "err_minus_MPa": 17.864826767564356
+          },
+          {
+            "depth_um": 200.0,
+            "stress_MPa": 729.5496698568141,
+            "column_runs": 1,
+            "marker_half_height_MPa": 23.26582090659544,
+            "err_plus_MPa": 23.26582090659544,
+            "err_minus_MPa": 23.26582090659544
+          },
+          {
+            "depth_um": 300.0,
+            "stress_MPa": 701.7137769864231,
+            "column_runs": 1,
+            "marker_half_height_MPa": 17.864826767564356,
+            "err_plus_MPa": 17.864826767564356,
+            "err_minus_MPa": 17.864826767564356
+          },
+          {
+            "depth_um": 450.0,
+            "stress_MPa": 634.6168113361524,
+            "column_runs": 2,
+            "marker_half_height_MPa": 17.449365679946578,
+            "err_plus_MPa": 11.840640997106608,
+            "err_minus_MPa": 23.05809036278655
+          },
+          {
+            "depth_um": 600.0,
+            "stress_MPa": 550.9014021811706,
+            "column_runs": 1,
+            "marker_half_height_MPa": 17.449365679946578,
+            "err_plus_MPa": 17.449365679946578,
+            "err_minus_MPa": 17.449365679946578
+          },
+          {
+            "depth_um": 800.0,
+            "stress_MPa": 448.28251353957995,
+            "column_runs": 1,
+            "marker_half_height_MPa": 18.695748942799906,
+            "err_plus_MPa": 18.695748942799906,
+            "err_minus_MPa": 18.695748942799906
+          },
+          {
+            "depth_um": 1000.0,
+            "stress_MPa": 335.277097707545,
+            "column_runs": 2,
+            "marker_half_height_MPa": 17.864826767564356,
+            "err_plus_MPa": 12.048371540915495,
+            "err_minus_MPa": 23.681281994213215
+          }
+        ]
+      },
+      "blob_cross_check": {
+        "predicted_jc_literature": [
+          {
+            "depth_um": 100.0,
+            "blob_stress_MPa": 517.2490540841308,
+            "delta_MPa": -2.4927665257066565
+          },
+          {
+            "depth_um": 300.0,
+            "blob_stress_MPa": 418.36931523110013,
+            "delta_MPa": -2.0773054380888425
+          },
+          {
+            "depth_um": 500.0,
+            "blob_stress_MPa": 368.51398471696706,
+            "delta_MPa": -2.7697405841186082
+          },
+          {
+            "depth_um": 700.0,
+            "blob_stress_MPa": 295.8082943838563,
+            "delta_MPa": -1.8003313796770612
+          },
+          {
+            "depth_um": 900.0,
+            "blob_stress_MPa": 215.62430447362559,
+            "delta_MPa": -1.3848702920593041
+          },
+          {
+            "depth_um": 1100.0,
+            "blob_stress_MPa": 134.60939238815934,
+            "delta_MPa": -1.9388184088828666
+          }
+        ],
+        "predicted_modified_jc": [
+          {
+            "depth_um": 100.0,
+            "blob_stress_MPa": 985.8891609169817,
+            "delta_MPa": 0.207730543808907
+          },
+          {
+            "depth_um": 200.0,
+            "blob_stress_MPa": 949.3285852066175,
+            "delta_MPa": 0.5539481168237899
+          },
+          {
+            "depth_um": 300.0,
+            "blob_stress_MPa": 910.2752429705465,
+            "delta_MPa": 0.2769740584117244
+          },
+          {
+            "depth_um": 400.0,
+            "blob_stress_MPa": 850.4488463535869,
+            "delta_MPa": 0.830922175235628
+          },
+          {
+            "depth_um": 500.0,
+            "blob_stress_MPa": 793.1152162623338,
+            "delta_MPa": 0.9694092044414901
+          },
+          {
+            "depth_um": 600.0,
+            "blob_stress_MPa": 694.2354774093031,
+            "delta_MPa": 0.2769740584118381
+          },
+          {
+            "depth_um": 700.0,
+            "blob_stress_MPa": 602.8340381333925,
+            "delta_MPa": -0.207730543808907
+          },
+          {
+            "depth_um": 800.0,
+            "blob_stress_MPa": 532.6211143259884,
+            "delta_MPa": 0.2769740584118381
+          },
+          {
+            "depth_um": 900.0,
+            "blob_stress_MPa": 467.80918465761545,
+            "delta_MPa": 0.13848702920591904
+          },
+          {
+            "depth_um": 1000.0,
+            "blob_stress_MPa": 402.5817939016246,
+            "delta_MPa": 0.20773054380885014
+          }
+        ],
+        "experimental_xrd": [
+          {
+            "depth_um": 100.0,
+            "blob_stress_MPa": 759.4628681652939,
+            "delta_MPa": 0.4154610876177003
+          },
+          {
+            "depth_um": 200.0,
+            "blob_stress_MPa": 732.8733585577563,
+            "delta_MPa": 3.3236887009421707
+          },
+          {
+            "depth_um": 300.0,
+            "blob_stress_MPa": 702.1292380740409,
+            "delta_MPa": 0.415461087617814
+          },
+          {
+            "depth_um": 450.0,
+            "blob_stress_MPa": 629.0080866533124,
+            "delta_MPa": -5.608724682840034
+          },
+          {
+            "depth_um": 600.0,
+            "blob_stress_MPa": 550.9014021811706,
+            "delta_MPa": 0.0
+          },
+          {
+            "depth_um": 800.0,
+            "blob_stress_MPa": 448.28251353957995,
+            "delta_MPa": 0.0
+          },
+          {
+            "depth_um": 1000.0,
+            "blob_stress_MPa": 329.8761035685139,
+            "delta_MPa": -5.400994139031127
+          }
+        ]
+      }
+    }
+  }
+}

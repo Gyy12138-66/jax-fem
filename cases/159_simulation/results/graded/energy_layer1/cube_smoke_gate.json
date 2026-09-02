@@ -1,0 +1,67 @@
+{
+  "schema": "v159.gate/1",
+  "run_dir": "/home/user/work/159/output/v159_graded/energy_layer1",
+  "ledger_complete": true,
+  "solver_completed": true,
+  "recorded_step_count": 12,
+  "expected_step_count": 12,
+  "max_relative_balance_error": 3.2109885363876994e-06,
+  "all_balance_steps_within_tolerance": true,
+  "energy": {
+    "laser_commanded_J": 2826616.232612077,
+    "laser_absorbed_nominal_J": 1752502.0642194876,
+    "laser_deposited_J": 958.4246018078242,
+    "capture_fraction": 0.0005468892855396881,
+    "per_step_capture_min": 0.0005468892855396881,
+    "per_step_capture_max": 0.0005468892855396881,
+    "per_step_capture_std": 0.0,
+    "laser_on_steps": 2,
+    "max_relative_balance_error": 3.2109885363876994e-06,
+    "flash": {
+      "capture_fraction_analytic": 0.0005470664453939923,
+      "capture_fraction_ledger_over_analytic": 0.9996761639179376,
+      "layers_in_run": 1,
+      "physical_absorbed_J": 958.7350748186685,
+      "deposited_over_physical_absorbed": 0.9996761639174377
+    }
+  },
+  "log": {
+    "summary_lines": 7,
+    "newton_nonconvergence_count": 0,
+    "cutback_mentions": 0,
+    "nan_or_inf_mentions": 0,
+    "last_summary": [
+      "11",
+      "hold",
+      "1",
+      "455",
+      "1",
+      "6282",
+      "223400",
+      "0",
+      "-1",
+      "352.981576841",
+      "353.15",
+      "0",
+      "0"
+    ],
+    "mechanics_steps_seen": [],
+    "highest_printed_layer_first_step": {
+      "1": 0
+    },
+    "release_u_max": null,
+    "release_cut_cells": null
+  },
+  "profile": {
+    "wall_seconds": 44.444149196962826,
+    "steps": 12,
+    "newton_wall_seconds": 27.364384792977944,
+    "seconds_per_step": 3.703679099746902
+  },
+  "checks": {
+    "ledger_complete": true,
+    "no_nan_or_inf_in_log": true,
+    "newton_converged_everywhere": true
+  },
+  "all_checks_passed": true
+}

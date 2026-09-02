@@ -1,0 +1,823 @@
+# AM-Benchmark AMB2018-01 — prerequisite ledger
+
+Single entry point for everything that must be settled before case design starts.
+Status as of 2026-07-28.
+
+Evidence classes follow the project constitution: `paper_text`, `paper_table`,
+`figure_digitized`, `author_artifact`, `inferred`, `assumption`.
+
+Governing paper (the benchmark's own reference):
+Phan, Strantza, Hill, Gnaupel-Herold, Heigel, D'Elia, DeWald, Clausen, Pagan, Ko,
+Brown, Levine (2019), "Elastic Residual Strain and Stress Measurements and
+Corresponding Part Deflections of 3D Additive Manufacturing Builds of IN625
+AM-Bench Artifacts Using Neutron Diffraction, Synchrotron X-Ray Diffraction, and
+Contour Method", *Integrating Materials and Manufacturing Innovation* 8(3):318-334,
+doi 10.1007/s40192-019-00149-0. Archived at
+`references/docs/Phan2019_AMB2018-01_residual-strain-and-part-deflection_IMMI.pdf`
+(sha256 5f8bc3132d06fda72015df5bbce7e62feca2f47f642851e5dcc2abf608a47562).
+
+---
+
+## 0. Decision log
+
+| # | Decision | Status | Date |
+|---|---|---|---|
+| D-01 | **Material data source scope = Option A** — extend within the AM-Bench series: AMB2022-04 mechanical + Zhang 2019 powder conductivity + Keller 2017 CALPHAD recipe for cp / latent heat / solidus | **APPROVED** | 2026-07-28 |
+| D-02 | **Scale reduction = layer lumping with per-layer instantaneous deposition.** Starting ratio **N = 10** (200 um computational layers), registered as a parameter to be **frozen by a convergence study on a reduced sub-domain**, never by matching the measured deflection | **APPROVED (N provisional)** | 2026-07-28 |
+| D-03 | **Density-jump convention = compaction convention** (section D.2). Element represents the final consolidated solid volume and its mass: in-part powder `rho_solid`, lateral powder `phi*rho_solid`, future layers strictly void. Powder -> solid is a **conductivity switch only**; mass is exactly conserved and no source term is required | **APPROVED** | 2026-07-28 |
+| D-04 | **Activation follows recoat, not scanning** (section D.3), so the inter-layer insulating powder blanket is present | **APPROVED** | 2026-07-28 |
+| ~~D-05~~ | ~~Single part + substrate patch, outer boundary pinned at 73.5 C at 15 mm~~ | **SUPERSEDED by D-07** — the 15 mm figure was unsound, see the retraction below | 2026-07-28 |
+| ~~D-06~~ | ~~Lateral powder margin coincides with the substrate patch (15-20 mm)~~ | **SUPERSEDED by D-07** — ceases to be an independent parameter | 2026-07-28 |
+| D-07 | **Computational domain = one 20 mm periodic cell in y (the actual part pitch), substrate to its real x extent, Dirichlet 73.9 C on the substrate underside** | **APPROVED** | 2026-07-28 |
+| D-08 | **CALPHAD source = pycalphad 0.11.2 + MatCalc open Ni database mc_ni_v2.036 (ODbL 1.0)**, replacing the Thermo-Calc-TCNI candidate (educational Thermo-Calc has no TCNI, 3-element cap, no TC-Python). Trial at mill-cert composition passed the gates: melting range 1279-1357 C vs Special Metals 1288-1349 C; latent heat 259 kJ/kg; gamma-frozen cp inside Gen3 CSP 95 % CI at 6/9 points; Ghosh delta 35 K registered in B3. Files, adaptation script and caveats in `references/calphad/` | **APPROVED** | 2026-07-29 |
+| D-09 | **Verification track added (section V): Balbaa & Elbestawi 2022 (JMMP 6:2, CC BY) as code-to-code comparison source.** V1 = single-track melt-pool triangle (our solver vs NIST bare-plate measurement vs Balbaa ABAQUS), runs ahead of the L-ladder in a separate session; V2 = cube-RS code-to-code, deferred to the mechanics stage. Balbaa inputs are quarantined from main-case inputs. Side registrations: stress-free-T 1000 C precedent into the T_cut sweep design; DRS-measured A = 0.62 into the C.2 absorptivity genealogy; Sih-Barlow model as the powder-emissivity bracket generator | **APPROVED (V1 first)** | 2026-07-29 |
+| D-10 | **Layer-clock reconstruction + scan-schedule generator, CASE-LOCAL sample tooling** (`tools/`, outputs in `derived/`; explicitly NOT part of the jax_fem_am package). Per-layer laser active time computed bottom-up from the JRES tables (scan-timing.json) + verified geometry; the ONLY inferred elements: (a) machine dead time (dwell+recoat+overhead) = 52 s − computed legs-band active time, assumed layer-invariant; (b) ridge band 601-624 follows the same infill/contour rules (its timing was never published). Closed loop: computed legs-band plate scan time reported against the published ~26 s; residual is REPORTED, never scaled away. Line counts derived as ceil(width/hatch) per the Table-5 misprint verdict | **APPROVED (sample scope)** | 2026-07-30 |
+| D-11 | **sigma_y high-T closure + T_cut x N joint sweep (section D.7)**: MaCTO-anchored J-C softening above 773 K; T_cut with complete history-variable reset; two-cycle gate test before the matrix; full 15-run sweep (5 T_cut x 3 N) on a one-leg-period sub-domain; dual computable convergence metrics (M1 field L2 + M2 root bending moment, both < 5 %); freeze-or-publish-band exit; merged with the D.5 lump-ratio study; zero contact with measured deflection | **APPROVED (with user additions)** | 2026-07-30 |
+| D-12 | **Emissivity bracket (section D.8)**: Sih-Barlow 1995 formula route verified against the archived original (Balbaa's Eq-11 sign error corrected); phi confirmed as porosity (notation split phi_void/phi_pack registered); eps_solid [0.12, 0.50] x phi_void [0.403, 0.557] -> generated eps_powder **[0.24, 0.68]** (draft [0.4, 0.8] withdrawn on user review); two L1 extreme runs, 2 K interpass criterion, freeze-or-band exit | **APPROVED (ranges revised)** | 2026-07-30 |
+
+All design decisions are settled. Remaining open items are data gaps (section E)
+and the registered conflicts (section B), not design choices.
+
+### RETRACTION — why D-05 / D-06 were withdrawn
+
+The 15 mm margin in D-05/D-06 was **not taken from any reference.** It was derived
+in-session as the per-layer thermal diffusion length
+
+`alpha = k/(rho*cp) = 20/(8440*550) = 4.31e-6 m2/s`,
+`sqrt(alpha * 52 s) = 15.0 mm`
+
+The arithmetic is correct and the property values are self-consistent at 500-600 C,
+but the figure was used as a *boundary-placement* criterion, which it is not. For a
+semi-infinite solid under a surface step, the residual disturbance at depth x is
+`erfc(x / 2*sqrt(alpha*t))`:
+
+| Distance | Argument | erfc | Residual disturbance |
+|---|---|---|---|
+| **1x sqrt(alpha t) = 15 mm** | 0.5 | 0.480 | **48 %** <- the withdrawn choice |
+| 2x = 30 mm | 1.0 | 0.157 | 16 % |
+| 3x = 45 mm | 1.5 | 0.034 | 3.4 % |
+| 4x = 60 mm | 2.0 | 0.005 | 0.5 % |
+
+Pinning a Dirichlet condition where roughly half the disturbance survives flattens a
+genuinely non-zero gradient. A quiet boundary needs 3-4x, i.e. 45-60 mm — which does
+not fit inside a 100 mm substrate that the 75 mm part already occupies.
+
+The framing was also wrong. Over the 9.4 h build the diffusion length is 380 mm,
+far exceeding the substrate, so the substrate problem is **quasi-steady** — set by
+the balance between deposited power and the platform sink — not transient on a
+52 s scale. A single-layer transient length scale is the wrong instrument for
+truncating it.
+
+Recorded here rather than overwritten, per the constitution: withdrawn decisions and
+their reasons are evidence.
+
+### Rationale for D-07
+
+The replacement uses measured boundaries and real geometry instead of a derived
+distance.
+
+| Direction | Boundary | Basis |
+|---|---|---|
+| **z, underside** | **Dirichlet 73.9 C** | A physically real boundary: the IN625 substrate is bolted to a temperature-controlled steel platform, measured at 73.9 C by four thermocouples at build start. Measurement, not approximation. |
+| **y** | **20 mm periodic / symmetry cell** | The actual part pitch — centres at y = 19.8 / 39.8 / 59.8 / 79.8 mm in `AMB2018_01_Build.STL`. A structural truncation, not a chosen distance. |
+| **x** | The substrate's real extent | Measured from the STL: 20.3 mm of substrate beyond the part's left end, **only 4.66 mm beyond the right end**. There is no freedom here. |
+
+Three independent facts support the y periodic cell:
+
+1. All four parts are scanned within the same layer, 0.307-0.363 s apart, against a
+   52 s layer time — effectively **in phase** at layer scale.
+2. The measured specimens are `AMB2018-01-625-CBM-B1-P3` and
+   `AMB2018-01-15.5-CBM-B3-P3` — **P3, an interior part**, with neighbours on both
+   sides.
+3. The x-stagger between parts is 0.5 mm out of 75 mm (0.7 %), which does not break
+   the mirror approximation.
+
+Consequence: the lateral powder margin is no longer an independent parameter. It
+follows from the cell width — half the 15 mm inter-part gap on each side. One fewer
+number requiring justification.
+
+Cost versus the withdrawn version: y-domain 35 mm -> **20 mm**, roughly 40 % fewer
+elements, and the inter-part thermal cross-talk that D-05 discarded is now
+represented rather than dropped.
+
+### Rationale recorded for D-02
+
+The validation quantity is a bending response: cutting the legs releases a moment
+`M = integral(sigma_xx(z) * z dz)` that lifts the free end by 1.276 mm. What must be
+resolved is therefore the **through-thickness stress profile**, not the melt pool —
+melt-pool detail is integrated away. The continuous load-bearing beam is the
+constant-section bridge, z = 7.5 -> 12.5 mm, 5 mm thick (the 12 legs are
+discontinuous and contribute stress but little continuous bending stiffness).
+
+That gives a physical criterion for the lump ratio:
+
+| N | Computational layer | Layers through the 5 mm bridge | Verdict |
+|---|---|---|---|
+| 5 | 100 um | 50 | ample |
+| **10** | **200 um** | **25** | **resolves the profile and its moment** |
+| 25 | 500 um | 10 | marginal |
+| 50 | 1000 um | 5 | moment integral badly distorted |
+
+Cost estimate at N = 10, in-plane 250 um (167 um if the 0.5 mm thin leg needs three
+elements across): part 378 k - 567 k elements, plus ~30 % for the powder margin,
+plus a graded build plate (~120 k; a uniform 250 um plate would be 8.2 M and is out
+of the question). Total order **0.8 - 1.2 M elements**.
+
+Time steps: 63 computational layers x 20-50 steps each ~ **1300-3200 steps** plus
+cooldown and release — against ~6e7 steps for a path-resolved solve. Four orders of
+magnitude cheaper. This, not mesh size, is what makes the case tractable.
+
+**Coupling that must not be overlooked:** the lump ratio interacts with the
+stress-relaxation cutoff temperature (gap E, highest threat). A coarser lump gives a
+larger single thermal excursion, so more material exceeds the cutoff and has its
+stress and plastic strain reset. Lump ratio and cutoff temperature must therefore be
+swept **together**, not independently.
+
+Known losses at N = 10: intra-lump thermal cycling (10 heat-cool cycles become 1);
+the 45 degree overhang is described by only ~12 computational layers and is
+staircased, which falls in a stress-concentration region.
+
+---
+
+## A. Settled — verified, no decision needed
+
+### A.1 Geometry (measured directly from the official STL, `references/geometry/`)
+
+`AMB2018_01_Part.STL` — binary, 376 triangles, 190 welded vertices, **watertight**
+(564 edges each used by exactly 2 triangles, 0 boundary, 0 non-manifold), Euler
+characteristic 2, orientation consistent, signed volume +3732.5 mm3, one connected
+component, zero degenerate triangles. Units mm.
+
+| Quantity | Value |
+|---|---|
+| Bounding box | 75.000 x 5.000 x 12.500 mm |
+| Leg height | 0 -> 5.0 mm |
+| 45 degree overhang | 5.0 -> 7.5 mm |
+| Constant-section bridge | 7.5 -> 12.0 mm |
+| Ridges | 12.0 -> 12.5 mm (0.5 mm tall) |
+
+Legs at mid-height (z = 2.5 mm), from ray-cast cross section at y = 2.5 mm.
+Gaps are uniformly 2.000 mm; the repeat period is 14.000 mm; 4 repeats.
+
+| Type | Count | Width | Left edge x (mm) |
+|---|---|---|---|
+| Thick | 4 | 5.0 mm | 0.0, 14.0, 28.0, 42.0 |
+| Thin | 4 | **0.5 mm** | 7.0, 21.0, 35.0, 49.0 |
+| Medium | 4 | 2.5 mm | 9.5, 23.5, 37.5, 51.5 |
+| End block | 1 | 19.0 mm at mid-plane | 56.0 (see tip note) |
+
+The 0.5 mm thin leg is the minimum feature and sets the mesh floor.
+
+**Tip correction (2026-07-28):** the "56.0 to 75.0" end-block extent above is a
+mid-plane (y = 2.5) statement only. Ray casting across y shows the part's right end
+is a **45-degree point in plan view**: max-x runs from 72.55 mm at the y edges to
+75.00 mm at mid-plane, at every height from the legs through the bridge (the ridges
+stop at x = 71.0). The part is **not** an extrusion of its mid-plane cross-section;
+meshes and scan paths must model the tip. This matches the JRES scan tables (odd
+base line lengths 16.49-18.94 mm; even 0.00-4.94 mm; "laser on time decreases in
+tip", Fig 8) and is recorded in `inputs/scan-timing.json`.
+
+Ridges (CMM measurement targets) — 11, each 1.000 mm wide, 7.000 mm pitch,
+centres at x = 0.5, 7.5, 14.5, 21.5, 28.5, 35.5, 42.5, 49.5, 56.5, 63.5, 70.5 mm.
+
+`AMB2018_01_Build.STL` — watertight, 2896 triangles, 5 components:
+build plate 100 x 100 x 12.7 mm (z 4.035 -> 16.735) plus 4 parts sitting on it at
+z 16.735 -> 29.235. Parts spaced 20 mm in y (centres 19.8 / 39.8 / 59.8 / 79.8),
+staggered in x by 0.4-0.5 mm (left edges 21.318 / 21.718 / 22.218 / 22.718).
+The plate is genus 4 — four ~6 mm through-holes at the corners
+(x 10-16 / 86-92, y 9.3-15.3 / 85.3-91.3): the 1/4"-20 cap-screw mounting holes.
+Not a defect.
+
+### A.2 Process parameters
+
+| Quantity | Value | Class | Source |
+|---|---|---|---|
+| Machine | EOSint M270D | `paper_text` | Heigel JRES 2020 |
+| Infill power / speed | 195 W / 800 mm/s | `paper_text` | Phan 2019, JRES Table 2 |
+| Contour power / speed | 100 W / 900 mm/s | `paper_text` | same |
+| Layer height | 20 um | `paper_text` | same |
+| Hatch spacing | 100 um | `paper_text` | same |
+| Scan strategy | infill X-parallel odd layers, Y-parallel even layers; contour first | `paper_text` | Phan 2019 |
+| Atmosphere | **nitrogen**, ~0.5 % O2 steady state; build aborts above 1.3 % | `paper_text` | JRES |
+| Recoater | 80 mm/s; HSS blade for IN625 | `paper_text` | JRES |
+| Build duration | 9 h 23 min / 9 h 22 min / 9 h 6 min (three builds) | `paper_table` | Heigel IMMI Table 1 |
+| Layer time, layers 1-250 (legs) | **52 s**, of which ~26 s is scanning all four parts | `paper_text` | Heigel IMMI |
+| Dwell placement | imposed **at the end of each layer** (so the NIST AMMT could replicate the build later) | `paper_text` | Heigel IMMI, verbatim |
+
+Argon belongs to the AMMT, which built AMB2018-02. It is **not** this build. Do not mix.
+
+### A.3 Thermal initial conditions
+
+Build plate setpoint was 80 C **but was never reached**. Measured at build start
+(14 thermocouples, Heigel IMMI Build3):
+
+| Location | Temperature |
+|---|---|
+| IN625 substrate | **73.5 C** (8 TCs, 72.2-74.6) |
+| Steel build plate | **73.9 C** (4 TCs, 73.1-74.5) |
+| Chamber gas | 32 C (max 38 C during build) |
+| Frame around build volume | 49.8 C |
+
+**Use 73.5 C for the substrate initial condition, not 80 C.**
+
+### A.4 Validation targets
+
+Part deflection after wire-EDM separation, upward, per ridge. Recovered from the
+live NIST figure `figure_2b.fw_.png` and cross-checked against Phan Fig. 16.
+
+| x (mm) | IN625 (mm) | IN625 sigma | 15-5 PH (mm) |
+|---|---|---|---|
+| 0.5 | 1.276 | 0.002 | 1.168 |
+| 7.5 | 0.997 | 0.001 | 0.914 |
+| 14.5 | 0.754 | 0.002 | 0.695 |
+| 21.5 | 0.551 | 0.003 | 0.516 |
+| 28.5 | 0.387 | 0.003 | 0.358 |
+| 35.5 | 0.250 | 0.001 | 0.231 |
+| 42.5 | 0.146 | 0.000 | 0.133 |
+| 49.5 | 0.065 | 0.000 | 0.076 |
+| 56.5 | 0.012 | 0.001 | 0.008 |
+| 63.5 | 0.000 | 0.001 | 0.002 |
+| 70.5 | 0.003 | 0.001 | -0.001 |
+
+sigma is statistical over the 3 CMM points per ridge and **excludes** the CMM
+MPE of 0.005 mm (ISO 10360-2). The 15-5 column is single-sourced from the figure
+and has no published uncertainties.
+
+Residual elastic strain: neutron (IN625 + 15-5, X/Y/Z) and synchrotron EDXRD
+(IN625, X/45/Z/shear) numeric files already downloaded and checksum-verified under
+`references/measurements/`.
+
+### A.5 Elastic constants used by the benchmark itself
+
+From Phan 2019's own reference list — these are the **only** material properties
+the governing paper cites:
+
+| Quantity | Value | Ref |
+|---|---|---|
+| Single-crystal C11 / C12 / C44 | 243.6 / 156.7 / 117.8 GPa | [9] Wang et al. 2016, MSEA 674:406-412 |
+| Isotropic E / nu (contour method) | 207 GPa / 0.278 | [20] Special Metals INCONEL 625 bulletin |
+
+Both numeric values are printed in Phan's body text — the source papers are not
+needed to obtain them.
+
+Note: 207 GPa / 0.278 are **wrought annealed handbook** constants applied to an
+as-built LPBF part. As-built LPBF IN625 is <001>-textured along the build
+direction, so the true modulus differs. This is a benchmark simplification, and it
+is already baked into the published contour-method stresses being validated
+against. Use the same constants for consistency with the benchmark's own reduction.
+
+---
+
+## B. Conflicts — must be registered, not silently resolved
+
+| # | Conflict | Evidence |
+|---|---|---|
+| B1 | **Layer count 624 vs 625** | JRES Table 2 says 624 (byte-verified); Phan 2019 says 625 (byte-verified). Arithmetic favours 625: 625 x 20 um = 12.500 mm, exactly the measured STL bridge height. 624 may be a thermography frame count. |
+| B2 | **Laser spot size** | Phan and Heigel IMMI: 85 um D4-sigma contour / 100 um defocused infill. JRES Table 2: a single 0.10 mm vendor figure. AMB2022-04: 80 um D4-sigma contour. State which metric is used. |
+| B3 | **Solidus** | Special Metals / Wikipedia melting range 1288-1349 C; NIST CALPHAD (Ghosh) solidus 1587 K = 1314 C. Also: Scheil (non-equilibrium, appropriate for LPBF) predicts a solidus tens to >100 K below equilibrium. Three different numbers depending on definition. **D-08 addition (2026-07-29):** mc_ni_v2036 at the mill-cert composition (Nb 3.97 wt%, top of spec) gives equilibrium solidus 1552 K = 1279 C (35 K below Ghosh, who used a nominal composition + TCNI-family database) and Scheil fs=0.95 at 1423 K = 1150 C. The model does not pick one solidus: mushy-zone latent heat follows the Scheil fs(T) curve (convention D.6). **Kaschnitz IJT 2019 addition (2026-07-30):** a fourth datum, 1295 C — the dilatometry range endpoint their paper quotes as the solidus. |
+| B4 | **Ridge numbering is inverted** between prose and figures | NIST prose calls the maximum-deflection end "ridge 1"; NIST Fig. 1 and Phan Fig. 9 both label that same end "Ridge 11". **Key the model on the x coordinate, never the ridge index.** |
+| B5 | Bridge height | JRES text says 12 mm; IMMI says 12.5 mm; **STL measures 12.500 mm**. Use 12.5. |
+
+---
+
+## C. Awaiting approval — material data source scope
+
+Phan 2019 cites **only** elastic constants (section A.5). It is a measurement
+paper and runs no simulation, so it contains no thermophysical or plastic data.
+That gap is structural, not a search failure. Running a thermo-mechanical model
+therefore requires sources outside the governing paper. Three options:
+
+| Option | Scope | Trade |
+|---|---|---|
+| **A** | Extend within the AM-Bench series: AMB2022-04 mechanical (specimens cut from a reserved AMB2018-01 bridge) + Zhang 2019 powder conductivity (NIST-measured) + Keller 2017 CALPHAD recipe for cp / latent heat / solidus | Highest provenance; mechanical data is same-build material. Keller is not in Phan's reference list. |
+| **B** | Phan's references only, plus purchased measured data (Kaschnitz 2019 x2) | Most conservative. Both papers paywalled and **it is unverified whether they tabulate numbers or only plot them** — may be wasted money. |
+| **C** | Register as `assumption`, compute thermophysics via CALPHAD in-house, cite database version | What NIST itself does. Defensible, but the evidence class is "assumption", not "measured". |
+
+**DECIDED 2026-07-28: Option A** (decision D-01). Consequences:
+
+- Mechanical properties come from AMB2022-04, whose specimens were machined from a
+  reserved AMB2018-01 bridge — same machine, same powder lot, same scan pattern.
+  Evidence class `author_artifact` within the benchmark series.
+- Powder conductivity from Zhang et al. 2019 (NIST-measured). Class `paper_table`.
+  Still to confirm: the measurement gas (the build was under nitrogen; Wei 2018
+  shows ~200 % gas dependence) and whether extrapolation above 500 C is defensible.
+- cp, latent heat and solidus/liquidus from a CALPHAD run following the Keller 2017
+  recipe (Thermo-Calc TCNI + Scheil-Gulliver). Class `assumption`; the database
+  version must be recorded.
+- Keller 2017 is outside Phan's reference list. That extension is what this decision
+  authorises, and it must be recorded as such in the source manifest.
+- **Absorptivity is NOT inherited from Keller.** Section C.2 shows A = 0.50 there is
+  unsourced and that NIST's own companion paper calls it too large. Register A as an
+  `assumption` with a sensitivity bracket.
+
+### C.1 Verified negatives (do not re-search these)
+
+- AM-Bench published **no** IN625 thermophysical property data in 2018, 2022 or 2025.
+  Levine et al.'s own Outcomes paper names "a lack of material property data" as a
+  motivation for AM-Bench and lists powder/liquid/solid thermal conductivity as an
+  *outstanding measurement need*.
+- AMB2018-03 is polycarbonate (material extrusion); AMB2018-04 is Polyamide 12 (PBF).
+  Both polymer benchmarks. Zero alloy data.
+- AM-Bench 2025 is IN718 and Ti-6Al-4V. No IN625.
+- AMB2022-04 (mechanical) and AMB2022-05 (microstructure) are explicit extensions of
+  AMB2018-01 and **do** cover IN625 — but mechanically and microstructurally, never
+  thermophysically.
+- **Mills (2002) does not contain IN625.** Its only Ni superalloys are CMSX-4,
+  Hastelloy X and IN718. Papers claiming "IN625 properties from Mills" are
+  misciting — including Psihoyos & Labeas (doi 10.3934/matersci.2022027), which
+  models this very benchmark and also states 600 mm/s and a 45-degree/90-degree
+  rotating scan strategy, both wrong. Do not use that paper as a reference.
+- Raw 55-point CMM deflection data was **never published** — the Wayback capture of
+  2020-12-13 already shows "download link will be provided soon" with no hyperlink.
+  Only the co-chairs have it. The 11 ridge averages in A.4 are sufficient.
+
+### C.2 Resolved: the powder-conductivity substitution is safe
+
+An earlier concern was that Keller 2017's absorptivity A = 0.50 might have been
+co-calibrated with its assumed powder conductivity of 1.0-3.0 W/(m K), so that
+substituting Zhang 2019's measured 0.65-1.02 W/(m K) would break a fitted pair.
+
+Reading the arXiv LaTeX source of both Keller 2017 and Ghosh 2018 shows otherwise:
+
+- A = 0.50 appears once, with **no citation and no justification**. The word
+  "absorpt" occurs exactly once in the whole paper.
+- Keller cites Ma et al. 2015 for "appropriate parameter values" — and **Ma used
+  A = 0.12**, a factor of 4.2 lower.
+- Ghosh et al. (NIST's own companion paper) state A = 0.5 is **too large** and
+  causes systematic melt-pool depth over-prediction.
+- Keller's validation case is a **bare plate with no powder at all** (verbatim:
+  "FEA simulation results are compared against experimental laser scans on bare
+  plates, without powder"), so k_powder took no part in it.
+
+**A and k_powder have zero covariance. There is no calibration to break.**
+Absorptivity should be registered as an `assumption` with a sensitivity bracket,
+not inherited as 0.50.
+
+---
+
+## D. Awaiting approval — modelling conventions
+
+### D.1 Powder / solid property design
+
+Powder and solid are the **same alloy**. Proposed rule:
+
+> Mass-normalised thermodynamic properties (cp, latent heat, transformation
+> temperatures) take identical values in powder and solid. Volume-normalised
+> properties (rho, rho*cp) scale with packing fraction phi. Thermal conductivity
+> and emissivity must be taken independently and **must not** be derived by
+> scaling the solid values.
+
+Justification: powder conduction is dominated by inter-particle contact resistance
+and interstitial gas, not by geometric dilution — measured k_powder is 4-7 % of
+solid, where porosity scaling alone would give ~50 %. This is also why Wei et al.
+2018 find a ~200 % difference between helium and argon.
+
+This reduces the powder data requirement to exactly two quantities:
+**k_powder(T)** (available, NIST-measured) and **emissivity_powder** (unavailable).
+
+### D.2 Density jump at consolidation
+
+Steady-state mass balance: `g = t / phi`, so ~40 um of loose powder
+(phi ~ 0.5; 33-45 um for Zhang's measured phi = 0.44-0.60) is consumed to produce
+each 20 um solid layer. The melt pool must therefore penetrate ~20 um into the
+previous solid — consistent with the observed 2-3x layer-thickness melt depth.
+
+**Proposed convention:** an element represents the **final consolidated solid
+volume and its mass**.
+
+| State | rho | k | Mechanical |
+|---|---|---|---|
+| Void (above the powder bed surface) | — | — | strictly zero contribution |
+| Powder, in-part (activated, not yet melted) | **rho_solid** | k_powder | weak solid / none |
+| Powder, lateral margin (never melts) | **phi * rho_solid** | k_powder | weak solid / none |
+| Consolidated solid | rho_solid | k_solid | full |
+
+Consequence: powder -> solid becomes a **conductivity switch only**. Mass is
+conserved exactly, no source term is needed, and the convention is self-consistent
+with "layer thickness = solid increment", which is what the machine parameter means.
+
+The in-part / lateral asymmetry is deliberate: the two element classes represent
+different things (future solid volume vs actual powder volume).
+
+**Registered cost:** the ~40 um of loose powder above the solid surface is
+compressed into a 20 um element, so within that element rho*cp is ~2x and thermal
+diffusivity ~0.5x the true powder values, and the exposed surface sits ~20 um low.
+Energy-to-melt is exact. Expected second-order for part-scale deflection,
+first-order for melt-pool geometry.
+
+### D.3 Activation timing — **not** a free choice
+
+Activation must follow **recoat**, not scanning:
+
+```
+recoat  -> layer N activates as POWDER (rho_solid, k_powder, no load path)
+scan    -> melts -> switches to SOLID (rho_solid, k_solid, full stiffness)
+dwell   -> layer N+1 not yet recoated; the top surface is genuinely bare
+recoat  -> layer N+1 activates as powder and re-covers the top
+```
+
+If layers are activated on scanning instead, the model never has the insulating
+powder blanket over the part between layers, and top-surface radiative/convective
+loss is systematically over-predicted across a 9.4 h, 625-layer build.
+
+Cheap test before committing: run a few layers both ways and compare cumulative
+top-surface heat loss. A few percent is ignorable; tens of percent is not.
+
+### D.4 Domain (decision D-07)
+
+```
+x : substrate real extent — 20.34 mm beyond the part's left end,
+    4.66 mm beyond its right end (measured from AMB2018_01_Build.STL)
+y : 20.000 mm periodic cell, centred on the part; symmetry / periodic
+    boundaries at +/- 10 mm from the part centreline
+z : substrate 12.7 mm + part 12.5 mm; Dirichlet 73.9 C on the substrate
+    underside (measured); powder fills to the current build height, above
+    which elements are strictly void
+```
+
+Lateral powder margin is not an independent parameter — it is half the 15 mm
+inter-part gap, fixed by the cell width.
+
+**Mesh grading is mandatory, not an optimisation.** At a uniform 250 um in-plane
+spacing the powder region alone would be ~3.5 M elements and the substrate ~8.2 M.
+Graded, the expected totals are: part 378 k (378 k at 250 um, 567 k if the 0.5 mm
+thin leg needs three elements across), powder ~220 k at ~1 mm, substrate ~42 k at
+1-2 mm — order **0.6 - 1.0 M elements**.
+
+### D.5 Still undecided
+
+- **Release-stage domain.** Deflection was measured after the part, still attached
+  to an EDM'd-out section of substrate, had its 12 legs cut. Whether the release
+  step reuses the build domain or switches to that cut-out section is open.
+- **Lump-ratio convergence study design.** D-02 fixes the method and the starting
+  ratio; the sub-domain, the convergence metric and the acceptance threshold are
+  not yet specified. Must be frozen before the full case runs.
+
+### D.6 CALPHAD-derived thermophysical conventions (decision D-08, 2026-07-29)
+
+- **Mushy-zone latent-heat release follows the Scheil fs(T) curve directly**
+  (fs=0.05 at 1354 C, 0.50 at 1328 C, 0.90 at 1202 C, 0.95 at 1150 C, terminal
+  transient to 871 C). No single "effective solidus" is chosen; conflict B3
+  becomes a definitional note rather than a value to resolve. The deep Scheil
+  tail (< fs 0.98) carries < 2 % of the latent heat and may be truncated at a
+  registered cutoff when the solver needs one.
+- **Model cp = gamma-frozen cp** (FCC_A1-only, mill-cert composition), not
+  equilibrium cp: equilibrium cp double-counts delta/carbide dissolution
+  enthalpies (833 vs Gen3-measured 469 J/(kg K) at 500 C) that the as-built
+  gamma microstructure does not exhibit on process timescales. Verified against
+  Gen3 CSP within its 95 % CI at 6/9 temperatures (<= 10 % high elsewhere).
+- Latent heat 259 kJ/kg (equilibrium enthalpy gap across the melting window).
+- Caveats registered in `references/calphad/README.md`: database
+  tested-composition window slightly exceeded (Cr 20.61 vs < 20, Mo 8.82 vs
+  < 5-8 wt%); no molar-volume parameters (rho(T) gap unchanged); isolated
+  gamma-cp bump at 260 C; 5 non-converged equilibrium points at 775-850 K.
+
+### D.7 sigma_y high-temperature closure + T_cut x N joint sweep (decision D-11)
+
+- **sigma_y(T) model (single form, not part of the sweep space):** below
+  773 K, MaCTO three-temperature curves (298/523/773 K) interpolated as-is,
+  BD/TD anisotropy kept, hardening modulus scaled proportionally to yield.
+  Above 773 K, J-C-type power softening
+  `sigma_y(T) = sigma_y(773K) * [1 - ((T-773)/(T_zero-773))^m]` with m fitted
+  to the MaCTO three-point trend (no new free parameter), T_zero = solidus
+  1552 K. Form risk is covered by the T_cut sweep upper range.
+- **T_cut semantics — COMPLETE history-variable reset** (user addition 1):
+  while T > T_cut an element carries no mechanical history; on the cooling
+  crossing of T_cut: `eqp := 0`, stress-free reference `T_ref := T_cut`,
+  hardening state reset (implicit — hardening is eqp-driven), flow-curve
+  active mask re-initialized from the current phase. NOT reset: phase state,
+  activation/solidification records, max-temperature diagnostics (physical
+  state and bookkeeping, not mechanical history).
+- **Two-cycle gate test** (user addition 2, must pass BEFORE the matrix):
+  fully-constrained small patch driven through two identical thermal cycles
+  T0 -> T_cut+100 K -> T0. Pass = (i) just above T_cut the stress magnitude
+  is below the yield-tolerance floor; (ii) the residual stress at T0 after
+  cycle 2 equals cycle 1 within 1e-10 relative (memory fully wiped);
+  (iii) the returned stress matches the analytic constrained-cooling
+  estimate min(sigma_y(T0), E*alpha*(T_cut-T0)/(1-nu)) within 2 %.
+- **Sweep matrix (full 15 runs, user choice):** T_cut in {800, 900, 1000
+  (Balbaa precedent), 1100 C, none} x N in {50, 25, 10}. Sub-domain: D-07
+  periodic cell truncated to one leg-group period (x = 0-14 mm incl.
+  substrate), built to the overhang-band top; ~30-60k elements per run.
+  This matrix IS the D.5 lump-ratio convergence study (merged).
+- **Dual computable convergence metrics** (user addition 3), both required:
+  `M1 = ||sigmax_Ni(z) - sigmax_Ni+1(z)||_2 / ||sigmax_Ni+1(z)||_2` on the
+  leg mid-plane vertical line, fields interpolated to a common z-grid;
+  `M2 = |Mroot_Ni - Mroot_Ni+1| / |Mroot_Ni+1|` with
+  `Mroot = integral of sigmax*(z - zbar) dA` over the leg-root cross
+  section. Converged when M1 < 5 % AND M2 < 5 %.
+- **Freeze rule:** N frozen by the dual metric. On the frozen N, report the
+  T_cut sensitivity band; if small (below the propagated MaCTO yield
+  uncertainty) freeze T_cut = 1000 C and close the gap; if large, T_cut is
+  NOT frozen — L3 runs the sweep endpoints and the final deflection is
+  published as a prediction band with the sensitivity as open model
+  uncertainty. No run in this matrix sees any measured deflection/strain.
+- **Gate test EXECUTED AND PASSED 2026-08-03**
+  (`tools/d11_two_cycle_gate.py`, evidence `derived/d11/gate-test.json`;
+  biaxial one-element patch — the registered E*alpha*dT/(1-nu) estimate is
+  the biaxial formula; a fully-clamped patch is hydrostatic and cannot
+  yield in J2). First run FAILED criterion (ii): cycle drift 8.4 % with
+  L0-like hardening — production code wiped the plastic-strain TENSOR via
+  reference capture but let the scalar eqp survive the cooling crossing.
+  Fixed in the v06 lifecycle layer (runner.py): eqp := 0 on the crossing,
+  eps_p folded into eps_ref (stress-exact; anchor stays at the last
+  above-T_cut capture). Post-fix: (i) 0 MPa above T_cut, (ii) 2.6e-12 and
+  1.8e-12 (<= 1e-10), (iii) 630.19 vs 630.00 MPa (0.03 %, perfect-plastic
+  instrument; the hardening variant exceeds min() by exactly H*eqp = 38
+  MPa, physically consistent). paper_irreversible and relax-disabled paths
+  untouched by construction; tests/unit 164 passed post-change. The 15-run
+  matrix is UNBLOCKED.
+
+### D.8 Emissivity bracket (decision D-12)
+
+- **Model (verified against the ORIGINAL Sih & Barlow 1995, archived
+  `references/docs/SihBarlow1995_emissivity_SFF.pdf`; also re-derived from
+  its Eqs 5-11, 3.082 = 4*0.514*3/2):**
+  `eps_pb = A_H*eps_H + (1-A_H)*eps_s`;
+  `A_H = 0.908 phi^2 / (1.908 phi^2 - 2 phi + 1)`;
+  `eps_H = eps_s (2+3.082x) / (eps_s (1+3.082x) + 1)`, `x = ((1-phi)/phi)^2`.
+- **phi definition CONFIRMED** (user requirement): phi = fractional POROSITY
+  ("phi = 1 - p" verbatim in the original) — same quantity Zhang 2019
+  measured (40.3-55.7 %). **Notation guard:** the D-03 compaction phi is the
+  PACKING fraction; ledger convention from here on: `phi_void` (Sih-Barlow,
+  Zhang) vs `phi_pack = 1 - phi_void` (D-03).
+- **Brackets:** eps_solid in [0.12 (Kieruj polished, Zhang's value), 0.50
+  (oxidized envelope, Sensors 2024)]; phi_void in [0.403, 0.557] (Zhang
+  measured). Generated corners (`tools/emissivity_bracket.py` ->
+  `derived/emissivity-bracket.json`): eps_powder 0.244 / 0.256 / 0.616 /
+  0.676 -> **interval [0.24, 0.68]** (dominated by eps_solid; phi_void moves
+  it only 0.01-0.06). The earlier draft interval [0.4, 0.8] was wrong and
+  was withdrawn on user review.
+- **Sensitivity design:** two L1 thermal runs at the all-low / all-high
+  extremes (no 4-corner runs — radiation is monotone in eps). Freeze
+  mid-values and close the gap if interpass delta-T < 2 K; otherwise
+  propagate as an uncertainty band alongside the T_cut band. Convection h
+  is outside this decision.
+
+---
+
+## E. Data gaps — each needs a decision, not a search
+
+### E.0 Option A acquisition status (2026-07-28)
+
+All Option A resources that exist are now archived and hashed in
+`source-manifest.json` (schema v2). Cross-check: the four files also fetched
+independently by the earlier research agents match byte-for-byte.
+
+| Resource | Where | Status |
+|---|---|---|
+| MaCTO mechanical data (3 files: raw curves, answers table, README) | `references/material/amb2022-04-macto/` | **acquired** (DOI 10.18434/mds2-2681) |
+| Special Metals INCONEL 625 bulletin | `references/material/` | **acquired** |
+| Gen3 CSP k/cp/alpha spreadsheet | `references/material/` | **acquired** |
+| Zhang 2019 powder-conductivity paper | `references/docs/` | **acquired** (via Europe PMC render; author manuscript) |
+| Keller 2017 CALPHAD-recipe preprint | `references/docs/` | **acquired** (arXiv PDF, 25 pp) |
+| Kaschnitz IJT 2019 (companion paper: cp, rho, alpha, k, resistivity, -170 to 1290 C) | `references/docs/` + tables transcribed to `references/material/Kaschnitz2019_IJT_tables2-3_thermophysical.json` | **acquired** (user-supplied 2026-07-30; doi 10.1007/s10765-019-2490-8) |
+| Heugenhauser & Kaschnitz HTHP 48 (density through melting: mushy + liquid) | — | paywalled, NOT acquired — no longer blocking (solid-range rho covered by the IJT companion); only needed if liquid density ever matters |
+| CALPHAD run (cp, latent heat, solidus/liquidus, Scheil fs(T)) | `references/calphad/` | **done 2026-07-29** (D-08) — pycalphad 0.11.2 + mc_ni_v2036 (ODbL), database version and adaptation script archived, gates in `references/calphad/README.md` |
+
+Still open from the gap table below: sigma_y above 773 K (extrapolation +
+relaxation cutoff), emissivity (solid and powder), and layer time for layers
+251+. (Zhang gas check resolved 2026-07-28; CALPHAD resolved 2026-07-29 via
+D-08; rho(T) resolved 2026-07-30 via Kaschnitz IJT 2019.)
+
+| Gap | Status | Candidate | Threat to residual stress |
+|---|---|---|---|
+| sigma_y(T), hardening, 773 K -> solidus | **D-11 APPROVED 2026-07-30 (section D.7)** — data still does not exist; the treatment is now frozen | MaCTO-anchored J-C softening + T_cut with complete history reset; two-cycle gate test, then the 15-run T_cut x N sweep with dual convergence metrics; freeze-or-publish-band exit (Denlinger & Michaleris, doi 10.1016/j.addma.2016.06.011, remains the method precedent; its IN625 stance still unverified — full text not acquired) | **Highest** until the sweep reports; then either closed or an explicit prediction band |
+| Emissivity — **both** solid and powder are missing | no usable value for either. Solid IN625 epsilon is strongly oxidation-dependent (Sensors 2024, 673-873 K; chamber runs ~0.5 % O2). Powder-bed effective epsilon is higher (cavity effect), never measured for IN625. Zhang 2019 used epsilon_solid = 0.12-0.16 (Kieruj 2016) for its capsule in the inverse FE and states the sensitivity there was insignificant — a value for *their* problem, not a general input. Under D-04 the top surface alternates bare-solid (post-scan) and powder-covered (post-recoat), so both enter the model. | **D-12 APPROVED 2026-07-30 (section D.8)**: bracket generated from the verified Sih-Barlow 1995 original — eps_solid [0.12, 0.50], eps_powder [0.24, 0.68] (`derived/emissivity-bracket.json`); decision by two L1 extreme runs, 2 K interpass criterion, freeze-or-band exit | Medium (was High); closes after the L1 runs |
+| Latent heat, self-consistent solidus/liquidus | **RESOLVED 2026-07-29 (D-08)** | pycalphad + mc_ni_v2036: latent heat 259 kJ/kg, equilibrium window 1279-1357 C, Scheil fs(T) archived in `references/calphad/trial_results.json` | Low (was Medium); see conflict B3 |
+| Layer time, layers 251+ | **RESOLVED 2026-07-30 (D-10 + measured timing closure)** | `derived/layer-schedule.json`: per-layer clock from the JRES tables (dead time 34.4 s = 52 − computed legs active, I1; ridge band rules inferred, I2; reading A = constant absolute dead time). **Measured closure via M31935 timestamps** (user-approved time-dimension use, `tools/m31935_timing_check.py` → `derived/m31935-timing-check.json`): layer cycle 52.15 ± 0.57 s over 9 increments (confirms the published 52 s, with a ±0.6 s parity alternation suggesting parity-adjusted dwell); odd-layer in-ROI spans 3.98-4.00 s match the computed 4.5 s part active and EXCLUDE the 1.48x scaling reading B would need (~5.7 s span) — the D-10 closed-loop −32 % residual vs the published "~26 s" plate scan is closed as a source-side approximation, not a reconstruction error. Result: bridge ≈ 54-56 s/layer, build total 9.23 h. NOTE: the "9.4 h build" quoted in earlier ledger arguments is an internal estimate, not a published number — those arguments are order-of-magnitude and unaffected. Direct 251+ verification (bridge-band M31935 bundles) optional when nist.gov is reachable | Low (was Medium) |
+| k_solid(T) | available | Special Metals (measured at Battelle, -157 -> 982 C); Gen3 CSP xlsx (260-1000 C with 95 % CI, but k is derived as alpha*cp*rho with rho fixed at 8.44, so it drifts at high T) | Low |
+| k_powder(T) | available, NIST-measured | Zhang et al. 2019, 0.65 W/(m K) @ 100 C -> 1.02 @ 500 C. **Gas check RESOLVED 2026-07-28:** the specimens were LPBF-printed hollow disks that sealed the powder *with the build-chamber gas inside* ("the powder thermal properties restore the powder-bed status, including the inert gas environment"), built on an **EOS M270** — same machine family and material as AMB2018-01. The paper does not name the sealed gas explicitly; nitrogen (standard for IN625 on EOS, and what AMB2018-01 used) is registered as an `inferred` input. The single "nitrogen or argon" sentence in the paper refers to the LFA furnace purge, which never reaches the sealed powder. Remaining caveat: extrapolation above 500 C unverified. Bonus data from the same paper: powder porosity 40.3-55.7 % over 100-500 C, temperature-dependent powder density in Fig. 17(a). | Low |
+| cp(T) | available | Special Metals 12 points (footnoted "Calculated", not measured); Gen3 CSP; **Kaschnitz DSC now acquired** (IJT 2019, -170 to 1250 C, +-3/5 %; its 500-620 C precipitation kink on heating AND cooling independently confirms the Gen3 CSP jump at 580-620 C); D.6 gamma-frozen CALPHAD cp gains a third cross-check | Low |
+| rho(T) | **RESOLVED 2026-07-30** (solid range) | Kaschnitz IJT 2019 Table 2/3: measured rho0 (Archimedean) + dilatometry, -150 to 1290 C, 8501 -> 7914 kg/m3 (transcribed with spot-checked extractor). Liquid/mushy density remains only in HTHP 48 (not acquired, not blocking); Balbaa's transcribed endpoints agree | Low |
+| 15-5 PH deflection uncertainties | never published | Phan is IN625-only; the promised 15-5 paper does not appear to exist | Low (only if 15-5 is modelled) |
+
+### In-situ thermography (DOI 10.18434/M31935) — temperature use REJECTED; time-dimension use APPROVED 2026-07-30
+
+**Amendment (2026-07-30, user-approved):** the frame timestamps
+(`Layer.BuildTime`, cumulative from the first laser-on of layer 1, dropped
+frames accounted) are admitted as the **time-dimension reference** —
+`tools/m31935_timing_check.py`. This does not touch the emissivity coupling
+that grounds the temperature rejection below: `Layer.RadiantTemp` values
+remain off-limits for calibration. Verified in the local Build1 layers 1-10
+bundle: camera ~1800 fps, stores laser-in-ROI frames only (ROI ~18.7 x 4.3
+mm), cross-file clock continuous (layer 2 starts at t = 51.75 s).
+
+Original rejection (unchanged for temperature use):
+
+Data descriptor: Heigel, Lane, Levine, Phan, Whiting (2020), *J. Res. NIST* 125:125005,
+doi 10.6028/jres.125.005, archived at
+`references/docs/Heigel2020_AMB2018-01_in-situ-thermography_JRES-125-005.pdf`.
+
+Dataset: 122 zip archives plus two MATLAB functions, covering all 624 layers of two
+builds. A sample layer file was inspected directly:
+
+| Property | Value |
+|---|---|
+| Format | MATLAB v5 `Layer` struct, readable with `scipy.io.loadmat` |
+| Pixel size | 51.95 x 33.98 um |
+| ROI | 126 x 360 px = **6.55 x 12.23 mm** — covers legs 7/8/9 only (x = 28-40 mm) |
+| Frame rate | **1799 fps** (0.556 ms per frame); 2497 frames for 3.979 s of layer 1 |
+| Field | `RadiantTemp`, uint16, 126 x 360 x 2497 = 113 M values, 227 MB uncompressed per layer |
+| Calibration | Sakuma-Hattori coefficients `SHvariable_A/B/C` = 2.655 / -800.7 / 1.94e6 |
+| Occupancy | **0.838 % non-zero.** >550 C: 0.81 %; >1050 C: 0.05 % (camera saturates 1050-1100 C) |
+| Hot area | median 0.46 mm2 per active frame, max 3.55 mm2 |
+
+**Not used.** Three candidate uses were considered and all fail:
+
+1. *Heat-source / absorptivity calibration* — blocked. Converting radiant to true
+   temperature requires an emissivity that has no measured value (gap E). Fitting
+   absorptivity against this data means fitting A and epsilon to one dataset:
+   unidentifiable, and precisely the coupling that discredited Keller's A = 0.50.
+   Would need AMB2018-02 sectioned melt-pool geometry as an independent constraint.
+2. *Scan-path verification* — **redundant.** Tables 3, 4 and 5 of the same paper
+   specify contour timing per feature and per-line laser on/off timing for odd and
+   even layers to the millisecond. The path is defined, not inferred.
+3. *Cooling-rate extraction* — blocked by the same emissivity coupling.
+
+Scale mismatch against the approved N = 10 model is also decisive: 34-52 um pixels
+against 200 um computational layers, and 0.556 ms frames against ~26 s steps — five
+orders of magnitude in time.
+
+Recorded as a negative result so it is not re-evaluated. Physical relevance is not
+the issue: the camera's 550-1050 C window sits squarely in the range where the
+thermal-gradient mechanism generates residual stress. The instrument is simply the
+wrong scale for a part-level lumped model.
+
+### Note on the MaCTO mechanical data
+
+AMB2022-04 specimens were machined from a **reserved AMB2018-01 bridge**, so their
+stress-strain curves already contain whatever precipitation occurred during that
+build. IN625 is solid-solution strengthened but precipitates M23C6, gamma'' and
+delta between 650-875 C, and the lower part of a 9.4 h build cycles through that
+window repeatedly.
+
+Convenient: no precipitation-kinetics model is needed. But it introduces a weak
+circularity — material data carrying thermal history A is used to predict the
+process that produces thermal history A. Register it; do not assume it away.
+
+---
+
+## V. Verification track (code-to-code; decision D-09)
+
+Comparison source: Balbaa & Elbestawi 2022, "Multi-Scale Modeling of Residual
+Stresses Evolution in Laser Powder Bed Fusion of Inconel 625", JMMP 6(1):2,
+DOI 10.3390/jmmp6010002 (CC BY 4.0), archived at
+`references/docs/Balbaa2022_multiscale-RS-LPBF-IN625_JMMP-6-2.pdf`.
+
+- **V1 — single-track melt-pool triangle** (our solver vs NIST bare-plate
+  measurement vs Balbaa ABAQUS): spec and workspace at
+  `verification/v1-single-track/SPEC.md`. Runs ahead of the L-ladder in a
+  **separate session**; that session owns only its own subdirectory.
+  **COMPLETE 2026-07-29** (`verification/v1-single-track/RESULTS.md`, commit
+  e5b27b2). CBM-B (195 W / 800 mm/s — the AMB2018-01 infill condition):
+  width 141/133/131 um, depth 90.6/91/44 um, length 575/780/378 um
+  (ours / NIST / Balbaa). Verdict per the SPEC framing: width error comparable
+  to Balbaa, depth and length significantly better; our depth is
+  measurement-accurate where Balbaa is -52 %. Registered limitation: melt-pool
+  LENGTH is systematically low (-20 to -26 %) and near-solidus cooling rate
+  ~2.3x fast — one phenomenon (no Marangoni flow in the tail). Consequence
+  for the main case: energy deposition and conduction are verified at the
+  AMB2018-01 infill point; any conclusion sensitive to melt-pool length or
+  solidification rate must NOT be drawn from this solver. Keyhole physics
+  absent (case A depth -24 %); irrelevant to AMB2018-01 (conduction mode).
+  Sensitivity variants (rho endpoints, powder-k 2x ambiguity): no effect.
+- **V2 — cube RS code-to-code** (Balbaa part-scale, J-C plasticity, XRD
+  profiles): deferred until the main-case mechanics stage (L3).
+- **Quarantine**: Balbaa's inputs (Table 1 properties, machining-derived J-C
+  parameters, A = 0.62, phi = 0.4, epsilon = 0.4) are used verbatim inside V
+  runs only and never enter the main case; main-case inputs (D-01/D-08
+  genealogy) never enter V runs. V results verify the solver, not the case.
+- Reliability notes registered when auditing the paper: Table 1 cites k and cp
+  to the Kaschnitz *density* paper (citation hygiene concern); J-C parameters
+  come from a turning/tool-wear study (ref. strain rate 1670 /s); solidus
+  1563 K and latent heat 290 kJ/kg are second-hand from Gan 2019. First-hand
+  content: DRS absorptivity 0.62 @ 1070 nm, as-built RT tensile
+  (Ramberg-Osgood K = 1618 MPa, n = 0.243), XRD in-depth RS profiles,
+  two-color pyrometer temperatures.
+- **Transcription traps found by the V1 session** (details in
+  `verification/v1-single-track/RESULTS.md`; anyone citing Balbaa must check):
+  (1) the paper's Fig. 1 powder-conductivity curve is ~2x its own Eq. 12-13 —
+  use the figure, not the formula; (2) Eq. 14 + 15 double-count porosity;
+  (3) ref. [49] cannot be the k/cp source — **provenance break RESOLVED
+  2026-07-30**: Balbaa's Table 1 ranges (k 10.1-31.6, cp 0.419-0.657, rho
+  8453->~7925) match Kaschnitz IJT 2019 Table 3 exactly; he cited the density
+  companion paper instead of the IJT paper the numbers actually come from;
+  (4) his Eq 11 (Sih-Barlow hole emissivity) prints the denominator's "+1"
+  as "-1" — unphysical (eps_H > 1); the archived 1995 original has "+1".
+- Network note: nist.gov and ncbi unreachable all day 2026-07-29 (was
+  reachable 2026-07-28) — Lane 2020 was retrieved via the Wayback archive of
+  NIST TechPubs; comparison against the raw data.nist.gov dataset remains
+  open (deviation D-V1-13).
+
+---
+
+## L. Compute ladder — L0 pipeline shakedown (runs 5-8, 2026-07-31, verified 2026-08-03)
+
+**Verdict: the L0 pipeline is WIRED AND VERIFIED.** Run 8 (GPU) completed all
+1748 steps and passed all six criteria (`derived/l0/run8-verify.json`; full log
+`derived/l0/run8-run.log`; resolved flags `derived/l0/run8-used-config.json`;
+output archive `/home/user/work/output/amb_l0_20260731T092534Z`). L0 numbers
+are MECHANISM evidence, not physics conclusions — the registered deviations
+below stand until L1/L2 close them.
+
+### L.1 Real-condition wiring convention (rev 4, `tools/run_l0.sh`)
+
+- **Deposition**: macro consolidation-on-activation — `liquidus == solidus
+  == 1552` disables melt detection (untriggerable at dt = 20 s lumping);
+  activated material solidifies immediately. Material is born at plate
+  temperature 347.05 K and heated by real laser energy (no flash initial
+  condition — the D-02 flash convention is retired for the main case).
+- **T_ref anchor**: `--phase-history-model legacy_reset` +
+  `--stress-relaxation-temperature 1273.15` assigns T_ref := 1273.15 K once
+  at consolidation (Denlinger stress-free-above-T_cut semantics == D-11
+  T_cut; the D-11 sweep varies this value). In macro mode nothing remelts,
+  so T_ref is never rewritten and eqp is never erased.
+- **Energy**: 48.75 W x 0.62 absorptivity over a 640 s scan phase
+  = 19.34 kJ per computational layer == 195 W x 0.62 x the D-10 aggregate
+  laser-on time. Power is scaled /4 because `--scan-steps-per-layer` is
+  PER HATCH LINE (4 lines x 8 steps x 20 s); instantaneous power is an
+  aggregation construct at part scale — the conserved invariants are
+  per-layer energy and the layer clock.
+- **Clock**: 640 s scan + 2020 s dwell (101 steps) = 2660 s per
+  computational layer == D-10 N=50 aggregate (legs 2608 s, bridge 2740 s).
+- **Powder**: `--powder-elset POWDER` is MANDATORY — permanent-powder cells
+  (43810: leg gaps + margin) are excluded from activation every step, stay
+  STATE_POWDER, and participate thermally with powder conductivity. Weak-solid
+  mechanics regularization (E 10 GPa / yield 1 MPa / hardening 10 MPa) is the
+  Kaess-golden numerical treatment, not material data.
+- **Mechanics acceptance**: rel-tol 5e-5 / abaqus acceptance / max-iter 50 /
+  line search (Kaess-golden quartet; the default 1e-9/1e-11 tolerances hit
+  the known j2 stagnation floor and diverged under the run-5 overfeed).
+
+### L.2 Run record and lessons
+
+| run | platform | outcome |
+|---|---|---|
+| 5 | CPU | KILLED ITSELF — `--scan-steps-per-layer` per-line semantics deposited 4x the intended energy (77.4 kJ/layer); mechanics Newton diverged at step ~10 under default tolerances |
+| 6 | CPU | completed; mechanism criteria passed BUT all 59150 build cells consolidated — without `--powder-elset` the layer-plane activation + macro consolidation fused leg gaps and margin into a slab |
+| 7 | CPU | rev-4 wiring correct (state ledger ties out cell-exact); interrupted at layer 4 during environment work; ~32 min/layer |
+| 8 | GPU | COMPLETE, six criteria passed; bitwise-identical to run 7 over the full comparable range (4 layers); ~17 min/layer (1.75x) |
+
+Six criteria (C1-C6): build-region state counts == mesh sets exactly
+(POWDER 43810 / PART 15340); T_ref uniform 1273.1500 K; eqp max 1.9e-2;
+part von Mises max 643.9 MPa (mill-cert yield + hardening) persisting
+unchanged through the 120-step cooldown; final field at 347.05 K; CPU/GPU
+step equivalence. Interpass dwell tails return to plate temperature —
+the real layer clock leaves no heat accumulation at L0 aggregation.
+
+### L.3 Registered L0 deviations (fixed at L1 unless noted)
+
+1. Uniform layer clock under-feeds the bridge band ~-29 % and gives
+   computational layer 13 (24 ridge layers) the same clock — needs the
+   per-layer schedule runner extension.
+2. Total absorbed 251 kJ vs ~289 kJ real (-13 %) — same fix.
+3. PROVISIONAL-L0 material tables (constant alpha, linear yield decay,
+   flat powder-k extrapolation, linear mushy release, constant h,
+   single mid-value emissivity) — replaced per D-11/D-12/D.6 at L1.
+4. Scan raster is 4 uniform serpentine lines over the part footprint, not
+   the real per-layer part cross-section path.
+5. Peak temperatures are sub-grid at dt = 20 s (scan peaks ~1600-2200 K,
+   no resolved melt pool) — inherent to part-scale lumping, verified
+   separately by V1.
+
+### L.4 GPU platform supplement (decision D-13, user-ordered 2026-07-31)
+
+Environment `jax-fem-gpu` = clone of `jax-fem-env` + `jax[cuda12]==0.10.2`
+(CUDA 12.9 wheels, cuDNN 9.24, RTX 5080 16 GB). Architecture: GPU assembly
++ CPU pardiso direct solve (v04 design). Evidence: runs 7/8 bitwise-equal
+step lines over 4 layers; branch-line ablation (`CPU_GPU_ABLATION.txt`,
+untracked) independently measured assembly 3.5x. **GATE PASSED 2026-08-03**:
+FEniCSx gold benchmarks 5/5 OK in the GPU environment (21 s) — deviations
+2.4e-8 / 3.0e-8 / 6.0e-8 / 5.6e-8, hyperelasticity 1.9e-4, same magnitudes
+as the CPU-environment gate of 2026-07-30. The GPU environment is cleared
+for results-bearing use. `run_l0.sh` platform is parameterized
+(`XLA_PLATFORM=gpu PYTHON_BIN=<gpu env python>`); default remains the
+CPU configuration.
+
+---
+
+## F. Environment
+
+```
+/home/user/miniconda3/envs/jax-fem-env/bin/python
+```
+
+jax 0.10.2 (CPU, x64), petsc4py 3.25.1, fenics-basix 0.10.0, pypardiso 0.4.7 +
+MKL 2026.1.0 (verified: residual 0 on a 2x2 solve), gmsh 4.15.2, meshio 5.3.5,
+pymupdf 1.28.0.
+
+GPU environment (2026-07-31, decision D-13):
+`/home/user/miniconda3/envs/jax-fem-gpu/bin/python` — full clone of
+jax-fem-env + `jax[cuda12]==0.10.2` (CUDA 12.9 runtime wheels, cuDNN 9.24;
+RTX 5080 16 GB; WSL uses the Windows driver, no in-distro toolkit). Gold-gate
+regression PASSED in this environment 2026-08-03, 5/5 (section L.4).
+
+Branch `test`; rollback point `backup/test-before-merge` at `79d416a`.
+Gold gate: `tests/benchmarks/` 5/5 vs FEniCSx passed post-merge in the CPU
+environment (2026-07-30, four cases ~1e-8, hyperelasticity 1.9e-4).
+
+Operational notes (2026-07-31): Windows recycles the WSL distro when the last
+client disconnects — long detached runs need a persistent client attached
+(nohup alone does not survive); process cleanup must target exact PIDs, never
+broad `pkill -f` patterns (two sessions share this distro).

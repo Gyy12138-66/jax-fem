@@ -1,0 +1,10 @@
+--- a/cases/AM-Benchmark/verification/v2-cube-rs/inputs/scoring-spec-thermal-gate-v2.md
++++ b/cases/AM-Benchmark/verification/v2-cube-rs/inputs/scoring-spec-thermal-gate-v2.md
+@@ -122,6 +122,7 @@
+ - 顶表面下第一层单元中心高度；
+ - 沿窗口中心的扫描方向直线布置：`P1=(1.0, 2.0) mm`、`P2=(2.0, 2.0) mm`、`P3=(3.0, 2.0) mm`；
+ - 数值值取包含该坐标的顶层单元（边界歧义时取单元中心欧氏距离最近者；距离并列按 element id 最小者），不得用邻域平均或为贴图移动探针。
++- 探针坐标若不落在任何顶层单元内（坐标或网格变更所致），**不得静默取最近单元充作合规读数**：应解析到最近单元、在产物中置 `contains_probe=false` 并显式记录该标记与偏移量，该探针本轮的 Fig 15/16 读数记为不可判定；实现不得因此中止运行。
+ 
+ 若 A 包数字化证明论文图内明确给出了不同物理坐标，则**本冻结轮仍使用上述预注册点**并把“论文位置不可同址复现”列为偏差，不得看到曲线后换点。
+ 

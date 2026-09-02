@@ -1,0 +1,159 @@
+# V1 single-track deviation registry (Kaess discipline: register, don't silently fill)
+# Scope: reproducing Balbaa2022 (DOI 10.3390/jmmp6010002) single-track model and
+# comparing against NIST AMB2018-02 (Lane2020, DOI 10.1007/s40192-020-00169-1).
+# Status values: open | resolved | ambiguous | accepted-gap
+#   ambiguous = the paper admits TWO defensible readings and no evidence in it
+#   separates them. Both are recorded, one is adopted and named as adopted, and
+#   the exposure is quantified. Not the same as "open" (which means we still owe
+#   work) and not the same as "resolved" (which claims the question is settled).
+# "adopted" fields state what WE will use when a run cannot proceed otherwise;
+# every adopted value must be visible in RESULTS.md, never tuned to match outputs.
+
+- id: D-V1-01
+  what: full temperature-dependent curves for ks, rho_s, cp_s of bulk IN625
+  paper_says: "Table 1 prints only ranges (ks 10.1-31.6 W/mK, rho 8453-7925 kg/m3, cp 419-657 J/kgK); curves are in ref [49] Heugenhauser & Kaschnitz 2019, which is paywalled and not archived in this repo"
+  status: open
+  adopted: null
+  resolution_path: "acquire [49], or use [42] Gan2019 IMMI property table (same values Balbaa cites for liquid props) with the printed ranges as a consistency check; decision to be recorded here before any run"
+
+- id: D-V1-02
+  what: laser spot radius r in heat-source Eq 17/18
+  paper_says: "nowhere stated numerically; r appears only symbolically"
+  status: resolved
+  adopted: "r = 50 um (D4sigma diameter 100 um) for the CBM-B validation leg"
+  justification: "Balbaa's Exp[68] bars match NIST CBM case B exactly (width 133 / depth 91 / length 780 um); CBM laser spot D4sigma = 100 um per Lane2020 Table 1. Balbaa's own EOS M280 spot is nominally ~100 um as well. NOT tuned: value comes from the NIST machine spec, provenance 'NIST measurement'."
+
+- id: D-V1-03
+  what: process condition (P, v) of Balbaa's 20-um-layer validation runs (Figs 8-10)
+  paper_says: "not stated in Sec 3.2 or Sec 4.1"
+  status: resolved
+  adopted: "195 W, 800 mm/s (= AMB2018-02 case B)"
+  justification: "Exp[68] bar values match CBM-B compiled reference values exactly (133/91/780 um); see inputs/nist-meltpool.json triangle_anchor"
+
+- id: D-V1-04
+  what: which temperature 'Tmelt' triggers the USDFLD powder->liquid state switch
+  paper_says: "Sec 2.6.1 uses the symbol Tmelt without defining it; Table 1 has solidus 1563 K and liquidus 1623 K; melt-pool DIMENSIONS are extracted at the 1290 C solidus contour (Sec 3.2)"
+  status: resolved
+  adopted: "our solver's native mushy-band treatment (enthalpy interpolation between solidus 1563 and liquidus 1623 K) instead of a binary state switch; melt-pool extraction always at the 1290 C solidus contour, unaffected"
+  justification: "the binary-switch temperature only matters for Balbaa's USDFLD material-state bookkeeping; our phases module interpolates powder/mushy/liquid properties continuously, which subsumes both readings. Registered as a model difference in RESULTS.md"
+
+- id: D-V1-05
+  what: ambient temperature and initial temperature are internally inconsistent in the paper
+  paper_says: "Sec 2.2.2: T_inf assumed 300 K; Table 1: T_inf = 313 K; Sec 2.6.2 (multi-track): ambient 40 C with 80 C preheat; Sec 2.1 Eq 2: initial condition = preheat 80 C (stated once, generically); single-track section states neither"
+  status: open
+  adopted: null
+  resolution_path: "baseline: initial T 80 C + T_inf 313 K (Table 1); sensitivity check with 300 K if convection/radiation terms matter at melt-pool scale (expected negligible)"
+
+- id: D-V1-06
+  what: unit typos in Table 1 as printed
+  paper_says: "latent heats printed as kJ/kg.K (dimensionally wrong for latent heat -> kJ/kg intended); dsigma/dT printed as N.m/K (surface tension gradient -> N/(m.K) intended)"
+  status: accepted-gap
+  adopted: "kJ/kg for Lf/Lv; N/(m.K) for dsigma/dT"
+  justification: "standard units for these quantities; values (290, 640, -1.1e-4) are consistent with IN625 literature in those units"
+
+- id: D-V1-07
+  what: powder layer in the validation model vs bare-plate experiment
+  paper_says: "NIST AMB2018-02 tracks are on BARE plates; Balbaa still modeled a 20 um powder layer (Sec 3.2) and attributes his depth underestimate partly to this (p.14)"
+  status: accepted-gap
+  adopted: "code-to-code leg reproduces Balbaa as-published (20 um powder layer); code-to-experiment leg additionally runs a bare-plate variant with the same Balbaa bulk properties (no powder-model contribution). Both reported."
+  justification: "the triangle requires Balbaa's setup for his leg and the physical setup for the NIST leg; mixing them silently would hide the known geometry mismatch"
+
+- id: D-V1-08
+  what: temperature-dependent nitrogen conductivity kg(T) curve
+  paper_says: "Table 1 prints only the range 0.02604-0.0947 W/mK, citing [51] (Zimina & Fomicheva 1992, Russian-language journal, not accessible)"
+  status: open
+  adopted: null
+  resolution_path: "affects only Sih-Barlow powder conductivity and convection film properties; if [51] unavailable use standard NIST N2 correlations and register the swap here"
+
+- id: D-V1-09
+  what: Balbaa's predicted/measured values in Figs 8-10 are bar charts without printed numbers
+  paper_says: "only the exponential-source width (131 um) is stated in text"
+  status: accepted-gap
+  adopted: "digitized from 200 dpi render: width 128/133/142/131/137, depth 60/91/48/44/51 (Exp69/Exp68/Linear/Exponential/Goldak), length 780/380/378/340 (Exp68/Linear/Exponential/Goldak); estimated read-off error +/-2 um (width/depth), +/-10 um (length)"
+  justification: "text value 131 um and the exact match of Exp[68] bars to Lane Table 4 confirm digitization accuracy"
+
+- id: D-V1-10
+  what: implementation details of the effective-conductivity (Marangoni) model
+  paper_says: "keff = kl + h*L with L = half melt pool width (chicken-and-egg: L is an output); paper says Marangoni approximated 'based only on the outward flow in the melt pool width direction' without giving the update scheme, iteration, or directionality of keff"
+  says_also: "convection film properties (Pr, nu of N2) not tabulated"
+  status: open
+  adopted: null
+  resolution_path: "decide whether our leg applies an equivalent keff enhancement or none; if none, expect shorter/narrower pools -- report as physics difference, do not tune"
+
+- id: D-V1-11
+  what: NIST experiment preheat / plate initial temperature
+  paper_says: "Lane2020 does not state a preheat; fixture designed to minimize conductive loss; no heated build plate mentioned"
+  status: open
+  adopted: null
+  resolution_path: "assume room temperature (~293 K) for the bare-plate leg unless the AMB2018-02 description page (currently unreachable) states otherwise; register the assumption before running"
+
+- id: D-V1-12
+  what: SPEC.md citation nit
+  paper_says: "SPEC cites '[69] Dilip et al. 2017'; Balbaa's reference list has Dilip et al. 2016 SFF Symposium proceedings"
+  status: accepted-gap
+  adopted: "2016"
+  justification: "transcribed from the Balbaa reference list as printed (p.41); SPEC not edited since it is a shared-history document -- noted here and to be flagged in RESULTS.md"
+
+- id: D-V1-14
+  what: substrate mesh grading
+  paper_says: "Sec 2.6.1: 'minimum size of 10 um employed in the powder layer'; substrate grading not specified"
+  status: resolved
+  adopted: "uniform 10 um hexes everywhere (100 x 48 x 30 = 144k cells)"
+  justification: "finer than or equal to Balbaa's mesh everywhere; removes an unknown instead of guessing his grading"
+
+- id: D-V1-15
+  what: powder heat capacity porosity scaling as printed double-counts
+  paper_says: "Eq 14 Cp_pb = (1-phi)*Cp_s AND Eq 15 rho_pb = (1-phi)*rho_s; entered together in an FE code the volumetric heat capacity becomes (1-phi)^2*rho_s*Cp_s"
+  status: accepted-gap
+  adopted: "reproduce as printed (cp_powder table = 0.6*cp_s, rho_powder = 0.6*rho_s)"
+  justification: "code-to-code parity requires his inputs as printed; physically the correct scaling would keep cp_s unchanged. Affects only the 20 um powder layer pre-melt; sensitivity variant possible later"
+
+- id: D-V1-16
+  what: whether the printed 1 mm x 240 um x 300 um is the half (symmetric) domain or the full domain
+  paper_says: "Sec 2.6.1 states the dimensions and separately that an XZ symmetry plane was used 'to reduce the model's size'"
+  status: resolved
+  adopted: "240 um read as modeled half-width; we mesh the full 480 um width with the track centered and no symmetry BC (numerically equivalent)"
+  justification: "a 240 um FULL width would put insulated side walls < 2 pool half-widths from the melt boundary (131 um pool in 480 um vs 240 um); reading it as half-width is the only physically sensible option and matches ABAQUS practice"
+
+- id: D-V1-17
+  what: track start/end positions within the 1 mm domain
+  paper_says: "not stated"
+  status: resolved
+  adopted: "x from 0.05 to 0.95 mm (50 um margins); measurements extracted at steady state near mid-track"
+  justification: "steady-state extraction makes the margins immaterial; registered for completeness"
+
+- id: D-V1-18
+  what: density is temperature-dependent in Balbaa (8453 -> 7925) but constant-per-phase in our solver
+  paper_says: "Table 1 range [49]"
+  status: resolved
+  adopted: "baseline rho_solid = 8453 (RT endpoint), rho_liquid = 7925; bounding run at rho_solid = 7925 executed 2026-07-29"
+  justification: "bounding run moved width +0.6%, depth +4.1%, length 0%, CR +0.5% -- below every discrepancy of interest (RESULTS.md sensitivity table). Constant-per-phase density is immaterial for this case"
+
+- id: D-V1-19
+  what: radiation emissivity and convection coefficient actually applied
+  paper_says: "radiation: Eq 8 with powder-bed emissivity from Eq 9-11 (es = 0.4 -> e_pb = 0.5312 at phi = 0.4); convection: Eq 4-7 flat-plate correlation with N2 at 3 m/s, film-temperature gas properties not tabulated"
+  status: ambiguous
+  status_changed: "2026-08-20 (Opus5 line-by-line audit of Eq 1-24, IET-19; closed under IET-20). WAS resolved. Downgraded because the original entry silently picked ONE of two defensible readings of Table 1 and recorded it as settled. The numbers below did not change; the honesty of the registration did."
+  the_ambiguity: "Table 1 prints the row as 'Emissivity (e) 0.4'. But in HIS OWN Eq 8/9 the symbol `e` is the POWDER-BED emissivity and `e_s` is the bulk-solid one. So the printed 0.4 admits two readings that cannot be separated from the text: (A) 0.4 is e_s -> feed Eq 9-11 -> e_pb = 0.5312, which is what we adopted; (B) 0.4 is already e, i.e. he radiated with 0.4 and Eq 9-11 is background derivation he did not re-apply. Under reading (B) we are radiating 33 % more than he did."
+  reading_A_adopted: "e_pb = 0.5312, computed from his Eq 9-11 at es = 0.4, phi = 0.4. Exactly reproduced independently (model/emissivity_bracket.py and V2 make_v1_tables.py); the arithmetic is not in doubt, only which symbol Table 1 names."
+  reading_B_alternative: "e = 0.4 taken literally from the Table 1 row. Consistent with the printed symbol; inconsistent with Table 1 also listing the phi = 0.4 porosity that Eq 9-11 needs."
+  why_it_stays_ambiguous: "no third piece of evidence exists in the paper. He never prints a radiated-power number, never plots a surface-loss term, and the Fig 7 contours are far too coarse to separate a 33 % change in a term this small. Choosing between (A) and (B) would be a preference, not a finding, so both are registered."
+  quantified_both_readings_immaterial: "MEASURED on the V2 thermal-gate as-is production arm (box-159, 2026-08-19, 8866/8866 ledger steps, branch tip 9fecd40), summing the ledger over the WHOLE run: top-surface convection + radiation together remove surface_loss_j = 0.1297 J, against laser_deposited_j = 28.3543 J into the domain and dirichlet_exchange_into_domain_j = -35.8953 J through the fixed 353.15 K baseplate. Surface losses are therefore 0.46 % of deposited energy and the baseplate is the dominant sink by ~277x. Reading (B) scales the radiative part of that 0.1297 J by 0.4/0.5312; the resulting change is far below any observable the V1 triangle or the V2 thermal gate reports. NEITHER READING CAN CHANGE ANY CONCLUSION -- which is exactly why registering the ambiguity costs nothing and hiding it would have been indefensible."
+  convection_leg_unchanged: "constant h = 20 W/m2K instead of the Eq 5-7 film-temperature correlation. Recomputed from his own recipe (Churchill flat plate, N2 at 3 m/s, W = 250 mm, film temperature 400-700 K): h = 12-13 W/m2K, nearly flat in film temperature. Our 20 is ~1.6x high, i.e. biased toward MORE cooling (conservative), and it lives inside the same 0.1297 J. A strict Balbaa-parity arm would swap in Eq 6-7; it is a cheap change with nothing measurable riding on it."
+  two_colour_immunity: "the D-V2-24 two-colour synthetic reading is a RATIO of two radiances, so a grey-body emissivity cancels exactly. That reading is therefore immune to this ambiguity by construction -- worth stating, because it means the code-to-experiment leg cannot be contaminated by whichever reading is right."
+  adopted: "reading (A): emissivity 0.5312, constant h = 20 W/m2K. UNCHANGED -- the downgrade is to the status, not to the model."
+  resolution_path: "none available from the paper. Carry both readings; report reading (A) as adopted with (B) named. If Balbaa's raw model files ever surface, one line of his ABAQUS input settles it."
+
+- id: D-V1-20
+  what: printed Sih-Barlow equations do not reproduce the paper's own Fig 1 powder curve
+  paper_says: "Eq 12-13 (with the ln(ks/kg) term restored - the PDF text layer drops it) give k_pb 0.21..0.74 W/mK; Fig 1 shows ~0.55..1.55 W/mK (~2x higher); Fig 1 also confirms solid k is exactly the linear 10.1..31.6 ramp (validates D-V1-01)"
+  status: resolved
+  adopted: "k_powder table = Fig 1 curve digitized (the model as run); Sih-Barlow-as-printed kept as k_powder_sihbarlow.csv sensitivity variant"
+  justification: "the figure reflects what his ABAQUS model consumed; equations-as-printed demonstrably do not. Transcription finding reported in RESULTS.md. Sensitivity run 2026-07-29 (v1_cbmB-sbpowder): the factor-2 powder-k ambiguity moves width +0.2%, depth 0.0%, length 0%, CR -5% -- immaterial to the triangle"
+
+- id: D-V1-13
+  what: raw AMB2018-02 datasets from data.nist.gov
+  paper_says: "SPEC asks for 'the Lane et al. paper and/or the AMB2018-02 measurement tables from the NIST portal'; all *.nist.gov hosts unreachable on 2026-07-29 (connect timeout local + remote)"
+  status: open
+  adopted: "paper Tables 3/4 (authoritative compiled reference values) transcribed from the Wayback copy of the NIST TechPubs PDF"
+  resolution_path: "re-try data.nist.gov for CHAL-AMB2018-02-MP/CR records when network allows; diff against transcription"

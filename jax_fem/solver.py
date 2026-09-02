@@ -3,8 +3,10 @@ import jax.numpy as np
 import jax.flatten_util
 import numpy as onp
 from jax.experimental.sparse import BCOO
+from jax.experimental.sparse.linalg import spsolve as jax_sparse_spsolve
 import scipy
 import time
+import logging
 from petsc4py import PETSc
 from jax_fem import logger
 from jax import config
@@ -20,11 +22,36 @@ except ImportError:
 
 
 def _timing_record(timing, name, dt):
-    timing[name] += dt
+    if timing is None:
+        return
+    timing[name] = timing.get(name, 0.) + dt
+
+
+def _counter_record(timing, name, count=1):
+    if timing is None:
+        return
+    timing[name] = int(timing.get(name, 0)) + int(count)
+
+
+def _linear_solver_info_value(info):
+    if info is None:
+        return 0
+    if hasattr(info, 'block_until_ready'):
+        info.block_until_ready()
+    return int(onp.asarray(info).item())
+
+
+def _block_until_ready_tree(value):
+    """Synchronize JAX leaves so stage timers include device execution."""
+    for leaf in jax.tree_util.tree_leaves(value):
+        if hasattr(leaf, 'block_until_ready'):
+            leaf.block_until_ready()
+    return value
 
 
 def _log_newton_iter_start(iter_num):
-    print()
+    if logger.isEnabledFor(logging.INFO):
+        print()
     logger.info("  iter %d", iter_num)
 
 
@@ -40,18 +67,37 @@ def _log_newton_iter_summary(iter_num, local_s, global_s, res_val, rel_res_val, 
 
 
 def _log_timing_table(n_iters, parts, wall_s):
-    rows = (
+    if not logger.isEnabledFor(logging.INFO):
+        return
+    rows = [
         ('local_assembly', 'local'),
         ('global_matrix', 'global'),
-        ('linear', 'linear'),
+    ]
+    has_linear_breakdown = any(
+        parts.get(key, 0.) > 0.
+        for key in ('sparse_conversion', 'linear_kernel', 'linear_residual_check')
     )
+    if has_linear_breakdown:
+        rows.extend((
+            ('sparse_conversion', 'convert'),
+            ('linear_kernel', 'kernel'),
+            ('linear_residual_check', 'check'),
+        ))
+    else:
+        rows.append(('linear', 'linear'))
     print()
     logger.info("Timing summary — %d Newton iter, %.3f s wall", n_iters, wall_s)
     for key, label in rows:
-        dt = parts[key]
+        dt = parts.get(key, 0.)
+        if dt <= 0.:
+            continue
         pct = 100. * dt / wall_s if wall_s > 0 else 0.
         logger.info("  %-8s %7.3f s  %5.1f%%", label, dt, pct)
-    other = wall_s - sum(parts.values())
+    accounted = sum(
+        parts.get(key, 0.)
+        for key in ('local_assembly', 'global_matrix', 'linear')
+    )
+    other = wall_s - accounted
     if other >= 0.01:
         pct = 100. * other / wall_s if wall_s > 0 else 0.
         logger.info("  %-8s %7.3f s  %5.1f%%", "other", other, pct)
@@ -60,13 +106,198 @@ def _log_timing_table(n_iters, parts, wall_s):
 ################################################################################
 # Linear solvers (JAX / SciPy / PETSc / AMGX)
 
-def jax_solve(A, b, x0, precond):
+_BCOO_STRUCTURE_CACHE_BY_ID = {}
+_BCOO_STRUCTURE_CACHE_BY_ID_LIMIT = 1024
+_BCOO_STRUCTURE_PATTERN_CACHE = []
+_BCOO_STRUCTURE_PATTERN_CACHE_LIMIT = 16
+
+
+class _BcooStructureCache:
+    def __init__(self, shape, indptr, indices):
+        self.shape = tuple(shape)
+        self.indptr = onp.asarray(indptr, dtype=onp.int64).copy()
+        self.csr_indices = onp.asarray(indices, dtype=onp.int64).copy()
+        row_counts = onp.diff(self.indptr)
+        rows = onp.repeat(onp.arange(self.shape[0], dtype=onp.int64), row_counts)
+        bcoo_indices = onp.stack((rows, self.csr_indices), axis=1)
+        self.bcoo_indices = np.asarray(bcoo_indices)
+        self.diag_positions = self._build_diag_positions(rows, self.csr_indices)
+        self.hits = 0
+        self.misses = 1
+
+    def matches(self, shape, indptr, indices):
+        return (
+            self.shape == tuple(shape)
+            and onp.array_equal(self.indptr, onp.asarray(indptr, dtype=onp.int64))
+            and onp.array_equal(self.csr_indices, onp.asarray(indices, dtype=onp.int64))
+        )
+
+    def _build_diag_positions(self, rows, indices):
+        diag_len = min(self.shape)
+        diag_positions = onp.full(diag_len, -1, dtype=onp.int64)
+        mask = (rows == indices) & (rows < diag_len)
+        if onp.any(mask):
+            positions = onp.nonzero(mask)[0]
+            diag_positions[rows[positions]] = positions
+        return diag_positions
+
+    def diagonal(self, data):
+        diag = onp.zeros(len(self.diag_positions), dtype=onp.asarray(data).dtype)
+        valid = self.diag_positions >= 0
+        diag[valid] = onp.asarray(data)[self.diag_positions[valid]]
+        return diag
+
+
+def _get_cached_bcoo_structure(A):
+    try:
+        return getattr(A, '_jax_fem_bcoo_cache', None)
+    except Exception:
+        return _BCOO_STRUCTURE_CACHE_BY_ID.get(id(A))
+
+
+def _set_cached_bcoo_structure(A, cache):
+    try:
+        setattr(A, '_jax_fem_bcoo_cache', cache)
+    except Exception:
+        _BCOO_STRUCTURE_CACHE_BY_ID[id(A)] = cache
+        while len(_BCOO_STRUCTURE_CACHE_BY_ID) > _BCOO_STRUCTURE_CACHE_BY_ID_LIMIT:
+            _BCOO_STRUCTURE_CACHE_BY_ID.pop(next(iter(_BCOO_STRUCTURE_CACHE_BY_ID)))
+
+
+def _get_cached_bcoo_structure_by_pattern(shape, indptr, indices):
+    for i, cache in enumerate(_BCOO_STRUCTURE_PATTERN_CACHE):
+        if cache.matches(shape, indptr, indices):
+            if i != 0:
+                _BCOO_STRUCTURE_PATTERN_CACHE.insert(
+                    0, _BCOO_STRUCTURE_PATTERN_CACHE.pop(i)
+                )
+            return cache
+    return None
+
+
+def _remember_bcoo_structure_pattern(cache):
+    _BCOO_STRUCTURE_PATTERN_CACHE.insert(0, cache)
+    del _BCOO_STRUCTURE_PATTERN_CACHE[_BCOO_STRUCTURE_PATTERN_CACHE_LIMIT:]
+
+
+def _get_bcoo_structure_cache(A, shape, indptr, indices):
+    cache = _get_cached_bcoo_structure(A)
+    if cache is not None and cache.matches(shape, indptr, indices):
+        cache.hits += 1
+        return cache, True
+
+    cache = _get_cached_bcoo_structure_by_pattern(shape, indptr, indices)
+    if cache is not None:
+        cache.hits += 1
+        _set_cached_bcoo_structure(A, cache)
+        return cache, True
+
+    cache = _BcooStructureCache(shape, indptr, indices)
+    _set_cached_bcoo_structure(A, cache)
+    _remember_bcoo_structure_pattern(cache)
+    return cache, False
+
+
+def _bcoo_from_petsc_csr(A, shape, indptr, indices, data):
+    cache, cache_hit = _get_bcoo_structure_cache(A, shape, indptr, indices)
+    data = np.asarray(data)
+    return BCOO(
+        (data, cache.bcoo_indices),
+        shape=cache.shape,
+        indices_sorted=False,
+        unique_indices=False,
+    ), cache, cache_hit
+
+
+def _jax_csr_arrays_from_petsc_csr(indptr, indices, data):
+    return (
+        np.asarray(data),
+        np.asarray(indices, dtype=np.int32),
+        np.asarray(indptr, dtype=np.int32),
+    )
+
+
+def jax_solve(
+    A,
+    b,
+    x0,
+    precond,
+    method='bicgstab',
+    tol=1e-10,
+    atol=1e-10,
+    maxiter=10000,
+    restart=20,
+    solve_method='batched',
+    timing=None,
+    check_residual=True,
+):
     logger.debug(f"JAX Solver - Solving linear system")
+    conversion_t0 = time.perf_counter()
     indptr, indices, data = A.getValuesCSR()
-    A_sp_scipy = scipy.sparse.csr_array((data, indices, indptr), shape=A.getSize())
-    A = BCOO.from_scipy_sparse(A_sp_scipy).sort_indices()
-    jacobi = np.array(A_sp_scipy.diagonal())
-    pc = lambda x: x * (1. / jacobi) if precond else None
+    if method == 'spsolve':
+        data_jax, indices_jax, indptr_jax = _jax_csr_arrays_from_petsc_csr(
+            indptr,
+            indices,
+            data,
+        )
+        if issubclass(PETSc.ScalarType, np.complexfloating):
+            logger.debug("JAX Solver - Using PETSc with complex number support")
+            data_jax = data_jax.astype(complex)
+            b = b.astype(complex)
+        _timing_record(timing, 'sparse_conversion', time.perf_counter() - conversion_t0)
+        if timing is not None:
+            timing['_last_linear_internal_breakdown'] = True
+
+        _counter_record(timing, 'jax_spsolve_calls')
+        solve_t0 = time.perf_counter()
+        x = jax_sparse_spsolve(data_jax, indices_jax, indptr_jax, b, tol=tol)
+        if hasattr(x, 'block_until_ready'):
+            x.block_until_ready()
+        _timing_record(timing, 'linear_kernel', time.perf_counter() - solve_t0)
+
+        if check_residual:
+            residual_conversion_t0 = time.perf_counter()
+            A_bcoo, _, bcoo_cache_hit = _bcoo_from_petsc_csr(
+                A,
+                A.getSize(),
+                indptr,
+                indices,
+                data,
+            )
+            _counter_record(
+                timing,
+                'bcoo_cache_hits' if bcoo_cache_hit else 'bcoo_cache_misses',
+            )
+            _timing_record(
+                timing,
+                'sparse_conversion',
+                time.perf_counter() - residual_conversion_t0,
+            )
+            check_t0 = time.perf_counter()
+            err = np.linalg.norm(A_bcoo @ x - b)
+            if hasattr(err, 'block_until_ready'):
+                err.block_until_ready()
+            _timing_record(
+                timing,
+                'linear_residual_check',
+                time.perf_counter() - check_t0,
+            )
+            logger.debug("JAX Solver - Finished solving, linear solve res = %.3g", err)
+            assert err < 0.1, f"JAX linear solver failed to converge with err = {err}"
+            x = np.where(err < 0.1, x, np.nan)
+        else:
+            logger.debug("JAX Solver - Finished solving; explicit residual check skipped")
+        return x
+
+    A, bcoo_cache, bcoo_cache_hit = _bcoo_from_petsc_csr(
+        A, A.getSize(), indptr, indices, data
+    )
+    _counter_record(
+        timing,
+        'bcoo_cache_hits' if bcoo_cache_hit else 'bcoo_cache_misses',
+    )
+    jacobi = np.array(bcoo_cache.diagonal(data)) if precond else None
+    pc = (lambda x: x * (1. / jacobi)) if precond else None
     
     if issubclass(PETSc.ScalarType, np.complexfloating):
         logger.debug("JAX Solver - Using PETSc with complex number support")
@@ -74,20 +305,53 @@ def jax_solve(A, b, x0, precond):
         b = b.astype(complex)
         if x0 is not None:
             x0 = x0.astype(complex)
+    _timing_record(timing, 'sparse_conversion', time.perf_counter() - conversion_t0)
+    if timing is not None:
+        timing['_last_linear_internal_breakdown'] = True
 
-    x, info = jax.scipy.sparse.linalg.bicgstab(A,
-                                               b,
-                                               x0=x0,
-                                               M=pc,
-                                               tol=1e-10,
-                                               atol=1e-10,
-                                               maxiter=10000)
+    solve_kwargs = {
+        'x0': x0,
+        'M': pc,
+        'tol': tol,
+        'atol': atol,
+        'maxiter': maxiter,
+    }
+    solve_t0 = time.perf_counter()
+    if method == 'bicgstab':
+        x, info = jax.scipy.sparse.linalg.bicgstab(A, b, **solve_kwargs)
+    elif method == 'cg':
+        x, info = jax.scipy.sparse.linalg.cg(A, b, **solve_kwargs)
+    elif method == 'gmres':
+        solve_kwargs['restart'] = restart
+        solve_kwargs['solve_method'] = solve_method
+        x, info = jax.scipy.sparse.linalg.gmres(A, b, **solve_kwargs)
+    else:
+        raise ValueError(
+            f"unknown JAX linear solver method {method!r}; "
+            "expected 'bicgstab', 'cg', 'gmres', or 'spsolve'"
+        )
+    if hasattr(x, 'block_until_ready'):
+        x.block_until_ready()
+    _timing_record(timing, 'linear_kernel', time.perf_counter() - solve_t0)
 
-    # Verify convergence
-    err = np.linalg.norm(A @ x - b)
-    logger.debug("JAX Solver - Finished solving, linear solve res = %.3g", err)
-    assert err < 0.1, f"JAX linear solver failed to converge with err = {err}"
-    x = np.where(err < 0.1, x, np.nan) # For assert purpose, somehow this also affects bicgstab.
+    if check_residual:
+        # Verify convergence with an explicit residual matvec. This is useful
+        # while developing new solver paths, but it is an extra per-step kernel.
+        check_t0 = time.perf_counter()
+        err = np.linalg.norm(A @ x - b)
+        if hasattr(err, 'block_until_ready'):
+            err.block_until_ready()
+        _timing_record(timing, 'linear_residual_check', time.perf_counter() - check_t0)
+        logger.debug("JAX Solver - Finished solving, linear solve res = %.3g", err)
+        assert err < 0.1, f"JAX linear solver failed to converge with err = {err}"
+        x = np.where(err < 0.1, x, np.nan) # For assert purpose, somehow this also affects bicgstab.
+    else:
+        logger.debug("JAX Solver - Finished solving; explicit residual check skipped")
+        info_value = _linear_solver_info_value(info)
+        if info_value != 0:
+            raise RuntimeError(
+                f"JAX {method} solver failed to converge (info={info_value})"
+            )
 
     return x
 
@@ -258,14 +522,28 @@ def AMGX_solve(A, b, x0, cfg_path):
         b
     )
 
-def linear_solver(A, b, x0, linear_options):
+def linear_solver(A, b, x0, linear_options, timing=None):
     # If user does not specify any solver, set jax_solver as the default one.
     if len(linear_options.keys() & {'jax_solver', 'amgx_solver', 'spsolve_solver', 'petsc_solver', 'custom_solver'}) == 0:
         linear_options['jax_solver'] = {}
 
     if 'jax_solver' in linear_options:
-        precond = linear_options['jax_solver']['precond'] if 'precond' in linear_options['jax_solver'] else True
-        x = jax_solve(A, b, x0, precond)
+        jax_options = linear_options['jax_solver']
+        precond = jax_options['precond'] if 'precond' in jax_options else True
+        x = jax_solve(
+            A,
+            b,
+            x0,
+            precond,
+            method=jax_options.get('method', 'bicgstab'),
+            tol=jax_options.get('tol', 1e-10),
+            atol=jax_options.get('atol', 1e-10),
+            maxiter=jax_options.get('maxiter', 10000),
+            restart=jax_options.get('restart', 20),
+            solve_method=jax_options.get('solve_method', 'batched'),
+            timing=timing,
+            check_residual=jax_options.get('check_residual', True),
+        )
     elif 'amgx_solver' in linear_options:
         cfg_path = linear_options['amgx_solver']['cfg_path'] if 'cfg_path' in linear_options['amgx_solver'] else None
         x = AMGX_solve(A, b, x0, cfg_path)
@@ -287,7 +565,115 @@ def linear_solver(A, b, x0, linear_options):
 ################################################################################
 # Dirichlet boundary conditions ("row elimination")
 
+def _bc_array_signature(array):
+    return (
+        id(array),
+        tuple(getattr(array, 'shape', ())),
+        str(getattr(array, 'dtype', None)),
+    )
+
+
+def _single_var_bc_flat(problem):
+    fes = getattr(problem, 'fes', [])
+    if getattr(problem, 'num_vars', None) != 1 or len(fes) != 1:
+        return None
+
+    fe = fes[0]
+    node_inds_list = getattr(fe, 'node_inds_list', [])
+    vec_inds_list = getattr(fe, 'vec_inds_list', [])
+    vals_list = getattr(fe, 'vals_list', [])
+    if not (
+        len(node_inds_list) == len(vec_inds_list) == len(vals_list)
+    ):
+        return None
+
+    vec = int(fe.vec)
+    offset = int(getattr(problem, 'offset', [0])[0])
+    signature = (
+        vec,
+        offset,
+        int(getattr(fe, '_dirichlet_bc_version', 0)),
+        tuple(
+            (
+                _bc_array_signature(node_inds),
+                _bc_array_signature(vec_inds),
+                _bc_array_signature(vals),
+            )
+            for node_inds, vec_inds, vals
+            in zip(node_inds_list, vec_inds_list, vals_list)
+        ),
+    )
+    cache = getattr(problem, '_jax_fem_single_var_bc_flat_cache', None)
+    if cache is not None and cache[0] == signature:
+        return cache[1]
+
+    if not node_inds_list:
+        flat_bc = (
+            np.asarray([], dtype=np.int64),
+            np.asarray([], dtype=np.float64),
+        )
+        cache = (signature, flat_bc)
+        problem._jax_fem_single_var_bc_flat_cache = cache
+        return flat_bc
+
+    flat_inds = []
+    flat_vals = []
+    for node_inds, vec_inds, vals in zip(node_inds_list, vec_inds_list, vals_list):
+        flat_inds.append((
+            np.asarray(node_inds) * vec + np.asarray(vec_inds) + offset
+        ).reshape(-1))
+        flat_vals.append(np.asarray(vals).reshape(-1))
+
+    flat_bc = (np.concatenate(flat_inds), np.concatenate(flat_vals))
+    cache = (signature, flat_bc)
+    problem._jax_fem_single_var_bc_flat_cache = cache
+    return flat_bc
+
+
+def _single_var_residual_bc_kernel(problem, single_var_bc, scale):
+    flat_inds, flat_vals = single_var_bc
+    if flat_inds.size == 0:
+        return None
+    try:
+        scale_value = float(scale)
+    except (TypeError, ValueError):
+        return None
+
+    cache_key = (id(flat_inds), id(flat_vals), scale_value)
+    cache = getattr(problem, '_jax_fem_single_var_residual_bc_jit_cache', None)
+    if cache is not None and cache[0] == cache_key:
+        return cache[1]
+
+    scaled_flat_vals = flat_vals * scale_value
+
+    @jax.jit
+    def apply_single_var_residual_bc(res_vec, dofs):
+        return res_vec.at[flat_inds].set(
+            dofs[flat_inds] - scaled_flat_vals,
+            unique_indices=True,
+        )
+
+    problem._jax_fem_single_var_residual_bc_jit_cache = (
+        cache_key,
+        apply_single_var_residual_bc,
+    )
+    return apply_single_var_residual_bc
+
+
 def apply_bc_vec(res_vec, dofs, problem, scale=1.):
+    single_var_bc = _single_var_bc_flat(problem)
+    if single_var_bc is not None:
+        flat_inds, flat_vals = single_var_bc
+        if flat_inds.size == 0:
+            return res_vec
+        kernel = _single_var_residual_bc_kernel(problem, single_var_bc, scale)
+        if kernel is not None:
+            return kernel(res_vec, dofs)
+        return res_vec.at[flat_inds].set(
+            dofs[flat_inds] - flat_vals * scale,
+            unique_indices=True,
+        )
+
     res_list = problem.unflatten_fn_sol_list(res_vec)
     sol_list = problem.unflatten_fn_sol_list(dofs)
 
@@ -314,6 +700,13 @@ def apply_bc(res_fn, problem, scale=1.):
 
 
 def assign_bc(dofs, problem):
+    single_var_bc = _single_var_bc_flat(problem)
+    if single_var_bc is not None:
+        flat_inds, flat_vals = single_var_bc
+        if flat_inds.size == 0:
+            return dofs
+        return dofs.at[flat_inds].set(flat_vals, unique_indices=True)
+
     sol_list = problem.unflatten_fn_sol_list(dofs)
     for ind, fe in enumerate(problem.fes):
         sol = sol_list[ind]
@@ -325,6 +718,13 @@ def assign_bc(dofs, problem):
 
 
 def assign_ones_bc(dofs, problem):
+    single_var_bc = _single_var_bc_flat(problem)
+    if single_var_bc is not None:
+        flat_inds, _ = single_var_bc
+        if flat_inds.size == 0:
+            return dofs
+        return dofs.at[flat_inds].set(1., unique_indices=True)
+
     sol_list = problem.unflatten_fn_sol_list(dofs)
     for ind, fe in enumerate(problem.fes):
         sol = sol_list[ind]
@@ -336,6 +736,13 @@ def assign_ones_bc(dofs, problem):
 
 
 def assign_zeros_bc(dofs, problem):
+    single_var_bc = _single_var_bc_flat(problem)
+    if single_var_bc is not None:
+        flat_inds, _ = single_var_bc
+        if flat_inds.size == 0:
+            return dofs
+        return dofs.at[flat_inds].set(0., unique_indices=True)
+
     sol_list = problem.unflatten_fn_sol_list(dofs)
     for ind, fe in enumerate(problem.fes):
         sol = sol_list[ind]
@@ -347,6 +754,14 @@ def assign_zeros_bc(dofs, problem):
 
 
 def copy_bc(dofs, problem):
+    single_var_bc = _single_var_bc_flat(problem)
+    if single_var_bc is not None:
+        flat_inds, _ = single_var_bc
+        new_dofs = np.zeros_like(dofs)
+        if flat_inds.size == 0:
+            return new_dofs
+        return new_dofs.at[flat_inds].set(dofs[flat_inds], unique_indices=True)
+
     new_dofs = np.zeros_like(dofs)
     sol_list = problem.unflatten_fn_sol_list(dofs)
     new_sol_list = problem.unflatten_fn_sol_list(new_dofs)
@@ -363,8 +778,57 @@ def copy_bc(dofs, problem):
     return jax.flatten_util.ravel_pytree(new_sol_list)[0]
 
 
+def _assign_bc_zero_seed(dofs, problem):
+    single_var_bc = _single_var_bc_flat(problem)
+    if single_var_bc is None:
+        return assign_bc(np.zeros_like(dofs), problem)
+
+    flat_inds, flat_vals = single_var_bc
+    cache_key = (
+        id(flat_inds),
+        id(flat_vals),
+        tuple(getattr(dofs, 'shape', ())),
+        str(getattr(dofs, 'dtype', None)),
+    )
+    cache = getattr(problem, '_jax_fem_single_var_bc_zero_seed_cache', None)
+    if cache is not None and cache[0] == cache_key:
+        return cache[1]
+
+    seed = np.zeros_like(dofs)
+    if flat_inds.size != 0:
+        seed = seed.at[flat_inds].set(flat_vals, unique_indices=True)
+    problem._jax_fem_single_var_bc_zero_seed_cache = (cache_key, seed)
+    return seed
+
+
+def _single_var_bc_initial_guess(dofs, problem):
+    single_var_bc = _single_var_bc_flat(problem)
+    if single_var_bc is None:
+        return None
+
+    flat_inds, flat_vals = single_var_bc
+    x0 = np.zeros_like(dofs)
+    if flat_inds.size != 0:
+        x0 = x0.at[flat_inds].set(
+            flat_vals - dofs[flat_inds],
+            unique_indices=True,
+        )
+    return x0
+
+
 ################################################################################
 # Newton helpers: flattening and tangent probe
+
+def _flatten_residual_list(res_list, problem):
+    fes = getattr(problem, 'fes', [])
+    if (
+        getattr(problem, 'num_vars', None) == 1
+        and len(fes) == 1
+        and len(res_list) == 1
+    ):
+        return np.reshape(res_list[0], (-1,))
+    return jax.flatten_util.ravel_pytree(res_list)[0]
+
 
 def get_flatten_fn(fn_sol_list, problem):
 
@@ -400,16 +864,22 @@ def newton_step(problem, res_vec, A, dofs, newton_cfg, timing):
     b = -res_vec
 
     # x0 will always be correct at boundary locations
-    x0_1 = assign_bc(np.zeros(problem.num_total_dofs_all_vars), problem)
+    bc_t0 = time.perf_counter()
     if hasattr(problem, 'P_mat'):
+        x0_1 = _assign_bc_zero_seed(dofs, problem)
         x0_2 = copy_bc(problem.P_mat @ dofs, problem)
         x0 = problem.P_mat.T @ (x0_1 - x0_2)
     else:
-        x0_2 = copy_bc(dofs, problem)
-        x0 = x0_1 - x0_2
+        x0 = _single_var_bc_initial_guess(dofs, problem)
+        if x0 is None:
+            x0_1 = _assign_bc_zero_seed(dofs, problem)
+            x0_2 = copy_bc(dofs, problem)
+            x0 = x0_1 - x0_2
+    _timing_record(timing, 'bc_initial_guess', time.perf_counter() - bc_t0)
 
     t0 = time.perf_counter()
-    inc = linear_solver(A, b, x0, newton_cfg.get('linear', {}))
+    timing['_last_linear_internal_breakdown'] = False
+    inc = linear_solver(A, b, x0, newton_cfg.get('linear', {}), timing=timing)
     linear_s = time.perf_counter() - t0
     _timing_record(timing, 'linear', linear_s)
 
@@ -422,8 +892,11 @@ def newton_step(problem, res_vec, A, dofs, newton_cfg, timing):
 
 
 def line_search(problem, dofs, inc):
-    """
-    TODO: This is useful for finite deformation plasticity.
+    """Backtracking line search on the residual norm.
+
+    Tries alpha = 1, 1/2, ..., 2^-8 and keeps the best step found. Useful for
+    plasticity, where elastic/plastic branch flip-flops make full Newton steps
+    oscillate around the yield-surface kink.
     """
     res_fn = problem.compute_residual
     res_fn = get_flatten_fn(res_fn, problem)
@@ -431,33 +904,23 @@ def line_search(problem, dofs, inc):
 
     def res_norm_fn(alpha):
         res_vec = res_fn(dofs + alpha*inc)
-        return np.linalg.norm(res_vec)
+        return float(np.linalg.norm(res_vec))
 
-    # grad_res_norm_fn = jax.grad(res_norm_fn)
-    # hess_res_norm_fn = jax.hessian(res_norm_fn)
-
-    # tol = 1e-3
-    # alpha = 1.
-    # lr = 1.
-    # grad_alpha = 1.
-    # while np.abs(grad_alpha) > tol:
-    #     grad_alpha = grad_res_norm_fn(alpha)
-    #     hess_alpha = hess_res_norm_fn(alpha)
-    #     alpha = alpha - 1./hess_alpha*grad_alpha
-    #     print(f"alpha = {alpha}, grad_alpha = {grad_alpha}, hess_alpha = {hess_alpha}")
-
+    best_alpha = 1.
+    best_norm = res_norm_fn(1.)
     alpha = 1.
-    res_norm = res_norm_fn(alpha)
-    for i in range(3):
+    for i in range(8):
         alpha *= 0.5
-        res_norm_half = res_norm_fn(alpha)
-        logger.debug(f"i = {i}, res_norm = {res_norm}, res_norm_half = {res_norm_half}")
-        if res_norm_half > res_norm:
-            alpha *= 2.
+        res_norm = res_norm_fn(alpha)
+        logger.debug(f"line search i = {i}, alpha = {alpha}, res_norm = {res_norm}, best = {best_norm}")
+        if res_norm < best_norm:
+            best_alpha = alpha
+            best_norm = res_norm
+        elif res_norm > 2. * best_norm:
+            # Residual is clearly growing again; stop shrinking.
             break
-        res_norm = res_norm_half
 
-    return dofs + alpha*inc
+    return dofs + best_alpha*inc
 
 
 ################################################################################
@@ -473,6 +936,17 @@ class _PetscTangentCache:
         self.mat = PETSc.Mat().createAIJ(size=(n, n))
         self.mat.setOption(PETSc.Mat.Option.KEEP_NONZERO_PATTERN, True)
         self.mat.setPreallocationCOO(coo_i, coo_j)
+        self.bc_versions = None
+        self.bc_row_inds_list = []
+        self._refresh_bc_rows(problem)
+
+    def _refresh_bc_rows(self, problem):
+        versions = tuple(
+            getattr(fe, '_dirichlet_bc_version', 0)
+            for fe in problem.fes
+        )
+        if versions == self.bc_versions:
+            return
         self.bc_row_inds_list = []
         for ind, fe in enumerate(problem.fes):
             for i in range(len(fe.node_inds_list)):
@@ -481,8 +955,10 @@ class _PetscTangentCache:
                     dtype=onp.int32,
                 )
                 self.bc_row_inds_list.append(row_inds)
+        self.bc_versions = versions
 
     def update(self, problem):
+        self._refresh_bc_rows(problem)
         values = onp.asarray(problem.V, dtype=onp.float64)
         self.mat.setValuesCOO(values)
         self.mat.assemble()
@@ -1042,9 +1518,49 @@ _METHOD_KEYS = frozenset({'newton', 'arc_length', 'dynamic_relax'})
 _LINEAR_OPTION_KEYS = frozenset({
     'jax_solver', 'amgx_solver', 'spsolve_solver', 'petsc_solver', 'custom_solver',
 })
-_NEWTON_OPTION_KEYS = frozenset({'tol', 'rel_tol', 'line_search_flag', 'initial_guess'})
+_NEWTON_OPTION_KEYS = frozenset({'tol', 'rel_tol', 'line_search_flag', 'initial_guess',
+                                 'residual_only_check', 'jacobian_reuse',
+                                 'max_iter', 'acceptance', '_profile_scope'})
 
 _LAMBDA_TARGET = 1.
+
+
+def _normalize_jacobian_reuse(value):
+    """Validate the opt-in modified-Newton tangent reuse policy.
+
+    ``max_reuse`` is the number of *additional* corrections allowed after
+    the first solve with a newly assembled tangent. The true residual is
+    always recomputed. A tangent is refreshed early when the residual
+    reduction ratio reaches ``refresh_residual_ratio``.
+    """
+    if value is None or value is False:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("newton 'jacobian_reuse' must be a dict")
+    unknown = set(value) - {'max_reuse', 'refresh_residual_ratio'}
+    if unknown:
+        raise ValueError(
+            "unknown newton 'jacobian_reuse' options: "
+            f"{sorted(unknown)}"
+        )
+    max_reuse = value.get('max_reuse', 0)
+    if isinstance(max_reuse, bool) or not isinstance(
+        max_reuse, (int, onp.integer)
+    ):
+        raise ValueError("jacobian_reuse 'max_reuse' must be an integer")
+    max_reuse = int(max_reuse)
+    if max_reuse < 1:
+        raise ValueError("jacobian_reuse 'max_reuse' must be >= 1")
+    refresh_ratio = float(value.get('refresh_residual_ratio', 0.9))
+    if not onp.isfinite(refresh_ratio) or not 0.0 < refresh_ratio <= 1.0:
+        raise ValueError(
+            "jacobian_reuse 'refresh_residual_ratio' must satisfy "
+            "0 < ratio <= 1"
+        )
+    return {
+        'max_reuse': max_reuse,
+        'refresh_residual_ratio': refresh_ratio,
+    }
 
 
 def _resolve_solver_options(solver_options):
@@ -1178,6 +1694,10 @@ def solver(problem, solver_options={}):
         - ``tol`` → ``1e-6`` (absolute residual :math:`\ell_2` norm)
         - ``rel_tol`` → ``1e-8`` (relative to the initial residual)
         - ``line_search_flag`` → ``False``
+        - ``jacobian_reuse`` → disabled. The experimental opt-in form is
+          ``{'max_reuse': N, 'refresh_residual_ratio': R}``; it recomputes
+          the true residual after every correction but can reuse a lagged
+          tangent factorization for at most ``N`` additional corrections.
         - ``initial_guess`` → zero displacement vector
         - ``linear``: The following are all equivalent for the linear solve::
 
@@ -1239,10 +1759,21 @@ def solver(problem, solver_options={}):
     if method == 'dynamic_relax':
         return _solve_dynamic_relax(problem, cfg)
 
-    print()
+    if logger.isEnabledFor(logging.INFO):
+        print()
     logger.info("Solving the nonlinear problem...")
     timing = {'local_assembly': 0., 'global_matrix': 0., 'linear': 0.}
     wall_start = time.perf_counter()
+    profile_scope = cfg.get('_profile_scope', None)
+    if profile_scope not in (None, 'thermal', 'mechanics'):
+        raise ValueError(
+            "newton '_profile_scope' must be 'thermal' or 'mechanics'"
+        )
+
+    def _record_newton_counter(name, count=1):
+        _counter_record(timing, name, count)
+        if profile_scope is not None:
+            _counter_record(timing, f'{profile_scope}_{name}', count)
 
     if 'initial_guess' in cfg:
         # We don't want inititual guess to play a role in the differentiation chain.
@@ -1256,27 +1787,90 @@ def solver(problem, solver_options={}):
 
     rel_tol = cfg.get('rel_tol', 1e-8)
     tol = cfg.get('tol', 1e-6)
+    residual_only_check = bool(cfg.get('residual_only_check', False))
+    jacobian_reuse = _normalize_jacobian_reuse(
+        cfg.get('jacobian_reuse', None)
+    )
+    max_iter = int(cfg.get('max_iter', 100))
+    if jacobian_reuse is not None:
+        _record_newton_counter('jacobian_reuse_enabled_solves')
+    # Hybrid Abaqus-style acceptance (opt-in; None keeps the legacy
+    # single-residual criteria bit-for-bit). Configured residual tolerances
+    # remain a strict acceptance exit, augmented by Abaqus/Standard usb 7.2.3:
+    # max-norm
+    # force residual measured against the increment's out-of-balance force
+    # scale (proxy for the time-averaged flux q~), a displacement-correction
+    # criterion, and a linear-convergence fallback that relaxes the force
+    # fraction after `fallback_after` iterations while the displacement
+    # criterion keeps guarding solution quality.
+    acceptance = cfg.get('acceptance', None)
+    if acceptance is not None:
+        acc_force_frac = float(acceptance.get('force_frac', 0.005))
+        acc_disp_frac = float(acceptance.get('disp_frac', 0.01))
+        acc_fb_frac = float(acceptance.get('fallback_frac', 0.02))
+        acc_fb_after = int(acceptance.get('fallback_after', 9))
 
     def newton_update_helper(dofs):
+        _record_newton_counter('jacobian_builds')
         if hasattr(problem, 'P_mat'):
             dofs = problem.P_mat @ dofs
 
         sol_list = problem.unflatten_fn_sol_list(dofs)
         t0 = time.perf_counter()
         res_list = problem.newton_update(sol_list)
+        _block_until_ready_tree(res_list)
         local_s = time.perf_counter() - t0
         _timing_record(timing, 'local_assembly', local_s)
-        res_vec = jax.flatten_util.ravel_pytree(res_list)[0]
+        residual_t0 = time.perf_counter()
+        t0 = time.perf_counter()
+        res_vec = _flatten_residual_list(res_list, problem)
+        _timing_record(timing, 'residual_flatten', time.perf_counter() - t0)
+
+        t0 = time.perf_counter()
         res_vec = apply_bc_vec(res_vec, dofs, problem)
+        _timing_record(timing, 'residual_bc', time.perf_counter() - t0)
 
         if hasattr(problem, 'P_mat'):
+            t0 = time.perf_counter()
             res_vec = problem.P_mat.T @ res_vec
+            _timing_record(timing, 'residual_projection', time.perf_counter() - t0)
+        _timing_record(timing, 'residual_vector', time.perf_counter() - residual_t0)
 
         t0 = time.perf_counter()
         A = get_A(problem)
         global_s = time.perf_counter() - t0
         _timing_record(timing, 'global_matrix', global_s)
         return res_vec, A, local_s, global_s
+
+    def residual_only_helper(dofs):
+        # Convergence probe: assemble the residual without the tangent. The
+        # element Jacobian and its device->host transfer are skipped entirely;
+        # the tangent is rebuilt only when another Newton step will run.
+        _record_newton_counter('residual_only_evaluations')
+        if hasattr(problem, 'P_mat'):
+            dofs = problem.P_mat @ dofs
+
+        sol_list = problem.unflatten_fn_sol_list(dofs)
+        t0 = time.perf_counter()
+        res_list = problem.compute_residual(sol_list)
+        _block_until_ready_tree(res_list)
+        local_s = time.perf_counter() - t0
+        _timing_record(timing, 'local_assembly', local_s)
+        residual_t0 = time.perf_counter()
+        t0 = time.perf_counter()
+        res_vec = _flatten_residual_list(res_list, problem)
+        _timing_record(timing, 'residual_flatten', time.perf_counter() - t0)
+
+        t0 = time.perf_counter()
+        res_vec = apply_bc_vec(res_vec, dofs, problem)
+        _timing_record(timing, 'residual_bc', time.perf_counter() - t0)
+
+        if hasattr(problem, 'P_mat'):
+            t0 = time.perf_counter()
+            res_vec = problem.P_mat.T @ res_vec
+            _timing_record(timing, 'residual_projection', time.perf_counter() - t0)
+        _timing_record(timing, 'residual_vector', time.perf_counter() - residual_t0)
+        return res_vec, local_s
 
     _log_newton_iter_start(0)
     res_vec, A, local_s, global_s = newton_update_helper(dofs)
@@ -1285,13 +1879,136 @@ def solver(problem, solver_options={}):
     rel_res_val = res_val/res_val_initial
     _log_newton_iter_summary(0, local_s, global_s, res_val, rel_res_val)
     n_iters = 0
-    while (rel_res_val > rel_tol) and (res_val > tol):
+    # Number of corrections already solved with the current tangent. A newly
+    # assembled tangent starts at zero and its first solve increments to one.
+    jacobian_corrections = 0
+
+    if acceptance is not None:
+        # Out-of-balance force scale of THIS increment (mean |component| of
+        # the iteration-0 residual): the within-increment proxy for Abaqus's
+        # time-averaged flux q~.
+        acc_q_scale = max(float(np.mean(np.abs(res_vec))), 1e-30)
+        acc_dofs_start = dofs
+        acc_last_du_max = None
+
+    def _accepted(n, res_vec_, res_val_, rel_res_val_, dofs_, last_du_max_):
+        # Keep the configured residual tolerances as a strict, conservative
+        # acceptance exit in every mode.  The Abaqus-style criteria are an
+        # additional route for stalled-but-stable states; they must not reject
+        # a state that the original residual test has already converged.  This
+        # matters for tiny/cut-back increments, where du_total can approach
+        # zero and make the relative displacement-correction ratio ill-scaled.
+        residual_ok = (rel_res_val_ <= rel_tol) or (res_val_ <= tol)
+        if acceptance is None:
+            return residual_ok
+        if residual_ok:
+            logger.info(
+                f"acceptance: strict residual criterion satisfied at iter {n} "
+                f"(residual={res_val_:.3e}, relative={rel_res_val_:.3e})")
+            return True
+        res_max = float(np.max(np.abs(res_vec_)))
+        frac = acc_force_frac if n < acc_fb_after else acc_fb_frac
+        if res_max > frac * acc_q_scale:
+            return False
+        if last_du_max_ is None:
+            # No correction taken yet: only accept on the strict force check.
+            return res_max <= acc_force_frac * acc_q_scale
+        du_total_max = float(np.max(np.abs(dofs_ - acc_dofs_start)))
+        disp_ok = last_du_max_ <= acc_disp_frac * max(du_total_max, 1e-30)
+        if disp_ok and res_max > acc_force_frac * acc_q_scale:
+            logger.info(
+                f"acceptance: linear-convergence fallback engaged at iter {n} "
+                f"(res_max/q_scale = {res_max / acc_q_scale:.3e} <= "
+                f"{acc_fb_frac:.1e}, disp criterion satisfied)")
+        return disp_ok
+
+    while not _accepted(n_iters, res_vec, res_val, rel_res_val, dofs,
+                        acc_last_du_max if acceptance is not None else None):
         n_iters += 1
+        if n_iters > max_iter:
+            acceptance_detail = ""
+            if acceptance is not None:
+                res_max = float(np.max(np.abs(res_vec)))
+                force_ratio = res_max / acc_q_scale
+                du_total_max = float(np.max(np.abs(dofs - acc_dofs_start)))
+                disp_ratio = (
+                    float("inf") if acc_last_du_max is None
+                    else acc_last_du_max / max(du_total_max, 1e-30)
+                )
+                force_limit = (
+                    acc_force_frac if n_iters - 1 < acc_fb_after
+                    else acc_fb_frac
+                )
+                acceptance_detail = (
+                    " Abaqus-style criteria: "
+                    f"force_ratio={force_ratio:.3e} "
+                    f"(limit={force_limit:.1e}), "
+                    f"displacement_correction_ratio={disp_ratio:.3e} "
+                    f"(limit={acc_disp_frac:.1e})."
+                )
+            raise RuntimeError(
+                f"Newton solver did not converge within max_iter={max_iter} "
+                f"iterations: residual={res_val:.3e} (tol={tol:.1e}), "
+                f"relative={rel_res_val:.3e} (rel_tol={rel_tol:.1e})."
+                f"{acceptance_detail} "
+                "Increase solver_options newton 'max_iter', enable "
+                "'line_search_flag', or check the tangent/material model.")
         _log_newton_iter_start(n_iters)
+        res_val_before_step = res_val
+        dofs_before_step = dofs
         dofs, linear_s = newton_step(problem, res_vec, A, dofs, cfg, timing)
-        res_vec, A, local_s, global_s = newton_update_helper(dofs)
-        res_val = np.linalg.norm(res_vec)
-        rel_res_val = res_val/res_val_initial
+        jacobian_corrections += 1
+        if acceptance is not None:
+            acc_last_du_max = float(np.max(np.abs(dofs - dofs_before_step)))
+        if jacobian_reuse is not None:
+            # Modified Newton: evaluate the true residual at every accepted
+            # trial point while retaining A. If another correction is needed,
+            # refresh on stagnation or after the configured factorization age;
+            # otherwise the unchanged A naturally takes the direct solver's
+            # phase-33 backsolve path.
+            res_vec, local_s = residual_only_helper(dofs)
+            global_s = 0.
+            res_val = np.linalg.norm(res_vec)
+            rel_res_val = res_val/res_val_initial
+            if not _accepted(n_iters, res_vec, res_val, rel_res_val, dofs,
+                             acc_last_du_max if acceptance is not None else None):
+                old_value = max(float(res_val_before_step), onp.finfo(float).tiny)
+                reduction_ratio = float(res_val) / old_value
+                stale = (
+                    not onp.isfinite(reduction_ratio)
+                    or reduction_ratio
+                    >= jacobian_reuse['refresh_residual_ratio']
+                )
+                age_exhausted = (
+                    jacobian_corrections
+                    >= 1 + jacobian_reuse['max_reuse']
+                )
+                if stale or age_exhausted:
+                    _record_newton_counter('jacobian_refreshes')
+                    _record_newton_counter(
+                        'jacobian_refresh_stagnation'
+                        if stale else 'jacobian_refresh_age',
+                    )
+                    res_vec, A, local_s, global_s = newton_update_helper(dofs)
+                    res_val = np.linalg.norm(res_vec)
+                    rel_res_val = res_val/res_val_initial
+                    jacobian_corrections = 0
+                else:
+                    _record_newton_counter('jacobian_reuse_hits')
+        elif residual_only_check:
+            res_vec, local_s = residual_only_helper(dofs)
+            global_s = 0.
+            res_val = np.linalg.norm(res_vec)
+            rel_res_val = res_val/res_val_initial
+            if not _accepted(n_iters, res_vec, res_val, rel_res_val, dofs,
+                             acc_last_du_max if acceptance is not None else None):
+                res_vec, A, local_s, global_s = newton_update_helper(dofs)
+                res_val = np.linalg.norm(res_vec)
+                rel_res_val = res_val/res_val_initial
+        else:
+            res_vec, A, local_s, global_s = newton_update_helper(dofs)
+            res_val = np.linalg.norm(res_vec)
+            rel_res_val = res_val/res_val_initial
         _log_newton_iter_summary(n_iters, local_s, global_s, res_val, rel_res_val, linear_s)
 
     assert np.all(np.isfinite(res_val)), f"res_val contains NaN, stop the program!"
@@ -1311,9 +2028,10 @@ def solver(problem, solver_options={}):
 
     _log_timing_table(n_iters, timing, time.perf_counter() - wall_start)
 
-    print()
-    logger.info(f"max of dofs = {np.max(dofs)}")
-    logger.info(f"min of dofs = {np.min(dofs)}")
+    if logger.isEnabledFor(logging.INFO):
+        print()
+        logger.info(f"max of dofs = {np.max(dofs)}")
+        logger.info(f"min of dofs = {np.min(dofs)}")
 
     return sol_list
 
