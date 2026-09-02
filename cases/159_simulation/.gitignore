@@ -1,0 +1,6 @@
+# Generated meshes (regenerate with mesh/make_0119_hex_mesh.py / mesh/convert_hm_voxel.py)
+mesh/out*/*.inp
+mesh/out*/*.vtu
+mesh/out*/*.npy
+mesh/out*/*.npz
+__pycache__/

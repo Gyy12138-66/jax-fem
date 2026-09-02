@@ -1,0 +1,105 @@
+[2026-08-28T12:02:10Z] ======== 159 pid=2775340 TAG=voxel STAGES='1 2 S' CFG=/home/user/work/d11_B_tree/cases/159_simulation/inputs/0119-flash-voxel.json ========
+[2026-08-28T12:02:10Z] branch: agent/gpt5-6sol/v2-stress-reproduction @ f9c4b96 dirty=1
+[2026-08-28T12:02:10Z] stage 1: generating preflight artefacts -> /home/user/work/159/output/v159_voxel/preflight
+{
+  "part_cells": 197381,
+  "raft_cells": 7020,
+  "nodes": 301456,
+  "activation_slabs": 182,
+  "physical_layers": 910,
+  "slab_area_mm2_first_min_max_last": [
+    877.5000000000449,
+    100.25000000000064,
+    877.5000000000449,
+    100.50000000000061
+  ],
+  "layer_scan_time_s_min_max": [
+    1.2852564102564183,
+    11.250000000000576
+  ],
+  "capture_fraction_slab_min_max": [
+    6.360888916588451e-05,
+    0.0005571852737304507
+  ],
+  "uniformity_min_over_max": 0.9934920192368836,
+  "commanded_power_W_min_max": [
+    22959448004.38877,
+    22984080594.235767
+  ],
+  "path_rows": 20010,
+  "expected_runner_steps": 20070,
+  "build_clock_s": 19870.392628205565,
+  "nominal_laser_energy_J": 1107104.9679487203,
+  "absorbed_laser_energy_nominal_J": 686405.0801282066,
+  "release_cut_box_m": [
+    0.0,
+    0.088,
+    0.0,
+    0.096,
+    0.0,
+    0.001
+  ]
+}
+  slab 1: physical layer 1 row 0 t=0.0002 s z=[1.00, 1.50] mm
+  slab 2: physical layer 6 row 110 t=203.1252 s z=[1.50, 2.00] mm
+  slab 3: physical layer 11 row 220 t=406.0498 s z=[2.00, 2.50] mm
+  slab 181: physical layer 901 row 19800 t=19125.6412 s z=[91.00, 91.50] mm
+  slab 182: physical layer 906 row 19910 t=19204.2870 s z=[91.50, 92.00] mm
+[2026-08-28T12:02:11Z] stage 1 gate: complete=True rows=20010 steps=20070 slabs=182 layers=910 energy=1107105.0 J build_clock=19870 s
+[2026-08-28T12:02:11Z] energy_layer1 start -> /home/user/work/159/output/v159_voxel/energy_layer1 (python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python platform=gpu extra: --path-file /home/user/work/159/output/v159_voxel/preflight/0119_path_layer1.csv --mechanics-every 0 --cooling-steps 0 --thermal-output-every 100000 --summary-every 2 --no-release-after-cooling)
+[2026-08-28T12:02:49Z] energy_layer1 end rc=0 ledger=12 complete=yes
+[2026-08-28T12:02:49Z] energy gate:
+{
+  "checks": {
+    "ledger_complete": true,
+    "no_nan_or_inf_in_log": true,
+    "newton_converged_everywhere": true
+  },
+  "energy": {
+    "capture_fraction": 0.0005571851347958681,
+    "per_step_capture_min": 0.0005571851347958681,
+    "per_step_capture_max": 0.0005571851347958682,
+    "max_relative_balance_error": 1.0084555597571726e-05
+  },
+  "profile": {
+    "wall_seconds": 35.77525769697968,
+    "steps": 12,
+    "newton_wall_seconds": 21.111054392182268,
+    "seconds_per_step": 2.9812714747483064
+  },
+  "all_checks_passed": true
+}
+[2026-08-28T12:02:49Z] ENERGY_GATE_RC=0
+energy trial: deposited 2441.2494 J vs physical absorbed 2441.2500 J (ratio 1.000000); capture 5.571851e-04 vs mesh 5.571853e-04 (ratio 1.000000); balance err max 1.01e-05; T_max 353 K; 2.98 s/step over 12 steps
+[2026-08-28T12:02:49Z] shakedown_2slabs start -> /home/user/work/159/output/v159_voxel/shakedown_2slabs (python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python platform=gpu extra: --max-print-layers 2 --cooling-steps 6 --cooling-dt 100)
+[2026-08-28T12:14:49Z] shakedown_2slabs end rc=0 ledger=226 complete=yes
+[2026-08-28T12:14:49Z] shakedown gate (slabs <= 2):
+{
+  "checks": {
+    "ledger_complete": true,
+    "no_nan_or_inf_in_log": true,
+    "newton_converged_everywhere": true,
+    "step_count_matches_run_ledger": true,
+    "activation_steps_match_preflight": true,
+    "part_consolidated_on_activation": true,
+    "stress_free_reference_applied": true,
+    "release_solve_present": true,
+    "release_removed_substrate": true,
+    "release_changed_part_stress": true
+  },
+  "energy": {
+    "capture_fraction": 0.0005567882475619566,
+    "per_step_capture_min": 0.0005563913603735094,
+    "per_step_capture_max": 0.0005571851347958682,
+    "max_relative_balance_error": 6.20124350139644e-05
+  },
+  "profile": {
+    "wall_seconds": 717.3322449909756,
+    "steps": 226,
+    "newton_wall_seconds": 612.3544328646967,
+    "seconds_per_step": 3.174036482260954
+  },
+  "all_checks_passed": true
+}
+[2026-08-28T12:14:51Z] SHAKEDOWN_GATE_RC=0
+[2026-08-28T12:14:51Z] V159_DONE /home/user/work/159/output/v159_voxel
