@@ -10,6 +10,55 @@ import logging
 from petsc4py import PETSc
 from jax_fem import logger
 from jax import config
+
+# ---------------------------------------------------------------------------
+# v159 matrix-dump probe (env-gated; zero cost when V159_DUMP_DIR is unset).
+# The stepper updates DUMP_CONTEXT every time step; linear_solver() saves the
+# first linear system (CSR A, b, x0) it sees per (layer, scope): thermal at the
+# first "hold" step of layers in V159_DUMP_LAYERS, mechanics at the first
+# solve of layers in V159_DUMP_MECH_LAYERS. Offline preconditioner studies.
+# ---------------------------------------------------------------------------
+import os as _os
+
+_DUMP_DIR = _os.environ.get("V159_DUMP_DIR") or None
+_DUMP_LAYERS = {int(v) for v in _os.environ.get("V159_DUMP_LAYERS", "").split(",") if v.strip()}
+_DUMP_MECH_LAYERS = {int(v) for v in _os.environ.get("V159_DUMP_MECH_LAYERS", "").split(",") if v.strip()}
+DUMP_CONTEXT = {}  # stepper sets {"layer", "step", "mode", "num_nodes"} each step
+_DUMPED = set()
+
+
+def _maybe_dump_linear_system(A, b, x0):
+    if _DUMP_DIR is None or not DUMP_CONTEXT:
+        return
+    try:
+        layer = int(DUMP_CONTEXT.get("layer", -1))
+        mode = str(DUMP_CONTEXT.get("mode", ""))
+        num_nodes = int(DUMP_CONTEXT.get("num_nodes", 0))
+        n = int(A.getSize()[0])
+        if num_nodes and n == num_nodes:
+            scope, wanted = "thermal", (layer in _DUMP_LAYERS and mode == "hold")
+        elif num_nodes and n == 3 * num_nodes:
+            scope, wanted = "mechanics", (layer in _DUMP_MECH_LAYERS)
+        else:
+            return
+        key = (layer, scope)
+        if not wanted or key in _DUMPED:
+            return
+        _DUMPED.add(key)
+        _os.makedirs(_DUMP_DIR, exist_ok=True)
+        step = int(DUMP_CONTEXT.get("step", -1))
+        indptr, indices, data = A.getValuesCSR()
+        path = _os.path.join(_DUMP_DIR, f"{scope}_L{layer:03d}_s{step:06d}.npz")
+        t0 = time.perf_counter()
+        onp.savez(
+            path,
+            indptr=onp.asarray(indptr), indices=onp.asarray(indices), data=onp.asarray(data),
+            b=onp.asarray(b), x0=(onp.asarray(x0) if x0 is not None else onp.zeros(0)),
+            n=n, layer=layer, step=step, mode=mode, scope=scope,
+        )
+        print(f"matrix_dump: {path} n={n} nnz={len(data)} ({time.perf_counter() - t0:.1f}s)", flush=True)
+    except Exception as exc:  # the probe must never take down a production run
+        print(f"WARNING: matrix_dump failed: {type(exc).__name__}: {exc}", flush=True)
 config.update("jax_enable_x64", True)
 
 
@@ -523,6 +572,7 @@ def AMGX_solve(A, b, x0, cfg_path):
     )
 
 def linear_solver(A, b, x0, linear_options, timing=None):
+    _maybe_dump_linear_system(A, b, x0)
     # If user does not specify any solver, set jax_solver as the default one.
     if len(linear_options.keys() & {'jax_solver', 'amgx_solver', 'spsolve_solver', 'petsc_solver', 'custom_solver'}) == 0:
         linear_options['jax_solver'] = {}

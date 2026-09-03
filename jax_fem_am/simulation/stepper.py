@@ -122,6 +122,7 @@ from jax_fem_am.solvers.nonlinear import mechanics_newton_overrides_from_args
 from jax_fem.generate_mesh import Mesh
 from jax_fem.problem import Problem
 from jax_fem.solver import solver
+import jax_fem.solver as _jax_fem_solver  # matrix-dump probe context
 from jax_fem.utils import save_sol
 
 
@@ -779,6 +780,10 @@ def main():
     highest_printed_layer = 0
 
     for state in step_states:
+        _jax_fem_solver.DUMP_CONTEXT.update(
+            layer=int(state.layer_idx) + 1, step=int(state.global_step),
+            mode=str(state.mode), num_nodes=len(points),
+        )
         if args.layer_activation_mode == "layer_on_scan":
             current_layer = int(state.layer_idx) + 1
             if should_activate_layer_for_state(state):
