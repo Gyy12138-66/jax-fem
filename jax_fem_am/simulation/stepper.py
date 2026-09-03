@@ -626,6 +626,13 @@ def main():
         ),
     )
 
+    if getattr(args, "mechanics_direct_solver", False):
+        # Hybrid mode: build-step mechanics solves go to the direct PARDISO
+        # path (see acceleration.install_solver_patch) while the thermal solves
+        # keep the configured iterative GPU solver. Release is always direct.
+        mechanics.prefer_direct_linear_solver = True
+        print("mechanics linear solves routed to the direct solver (--mechanics-direct-solver)")
+
     cell_centroids, cell_build_coord, substrate_cell, support_cell = classify_cells(points, cells, build_axis_id, build_sign, base_coord, args)
     if args.powder_solid_E is not None and args.powder_elset is None:
         raise ValueError("--powder-solid-E requires --powder-elset")

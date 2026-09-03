@@ -453,6 +453,9 @@ def runner_contract(cfg: dict, *, mesh_path: Path, path: Path, material: Path, l
             # works with that check skipped. Newton-level convergence checks
             # (thermal tol, mechanics acceptance + cutback) remain in force.
             argv.append("--xla-jax-skip-residual-check")
+        if lin.get("mechanics_direct"):
+            # Hybrid mode: thermal on the iterative GPU solver, mechanics on PARDISO.
+            argv.append("--mechanics-direct-solver")
     if tm["release_after_cooling"]:
         argv += ["--release-after-cooling", "--release-anchor-mode", "rigid_body",
                  "--release-cut-box", f"{box[0]:.12g}", f"{box[1]:.12g}", f"{box[2]:.12g}", f"{box[3]:.12g}",

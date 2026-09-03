@@ -409,6 +409,13 @@ def build_parser(config=None):
                              "under J2 flow (checkerboard hydrostatic pressure). On TET4 the strain "
                              "is element-constant, so B-bar is an exact no-op - TET4 locking needs a "
                              "hex mesh (or nodal averaging, not implemented).")
+    parser.add_argument("--mechanics-direct-solver", action="store_true",
+                        default=cfg(config, "mechanics_direct_solver", False),
+                        help="Hybrid solver mode: route every mechanics solve (build steps and "
+                             "release) to the direct PARDISO path even when --xla-linear-solver "
+                             "is iterative; thermal solves keep the configured solver. The v159 "
+                             "group-A diagnostics measured Jacobi-scaled kappa ~1e6 for the "
+                             "mechanics tangent versus ~30 for the thermal system.")
     parser.add_argument("--mechanics-max-cuts", type=int,
                         default=cfg(config, "mechanics_max_cuts", 0),
                         help="Abaqus-style automatic increment cutback for mechanics solves: on Newton "
