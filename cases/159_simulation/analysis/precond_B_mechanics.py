@@ -167,7 +167,11 @@ def bench_layer(path, coords_all, args):
         second = time.time() - t0
         rel = float(np.linalg.norm(bf - Aff @ x) / np.linalg.norm(bf))
         solver.free_memory(everything=True)
-        return {"setup_s": first - second, "solve_s": second, "first_solve_s": first, "rel_res": rel, "iters": 1, "converged": True}
+        # One factorise + backsolve is what the production PARDISO path pays per
+        # Newton iteration (phase23 reuses only the symbolic analysis), so that
+        # is the reference cost; the second call is recorded for information.
+        return {"setup_s": 0.0, "solve_s": first, "first_solve_s": first, "second_solve_s": second,
+                "rel_res": rel, "iters": 1, "converged": True}
 
     def jac_cg():
         t0 = time.time()
