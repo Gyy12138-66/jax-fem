@@ -266,3 +266,7 @@ class ScopedSolverPatchTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+import pytest as _pytest_lane
+pytestmark = _pytest_lane.mark.solver
