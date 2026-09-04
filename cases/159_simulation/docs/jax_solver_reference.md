@@ -207,3 +207,9 @@ A 组诊断(倾倒矩阵离线):热学活跃块 κ(Jacobi 缩放)12–42、与�
 
 **真实运行 smoke(2-slab shakedown,`--mechanics-linear-solver '{"backend":"pyamg","device":"gpu"}'`)**:门 RC=0;45 次力学求解零回退、零重建,迭代 14/23/45(min/中位/max),中位墙钟 0.35 s;打印阶段 u_max / vm_max 与 PARDISO 臂相对差 ≤1.6e-7;release 由标记直接路由 PARDISO(5 次);整体 2.24 s/步,PARDISO 力学臂同门 3.69 s/步。第一次 smoke 暴露并修掉三件事:release 标记原先只识别 jax/petsc/amgx 键,pyamg 这类迭代 custom_solver 没被路由(4×300 次白跑后回退);刚体模态原先要求整节点钉死,release 锚点按分量钉死时退化成常数近零空间(现按自由度逐行取刚体模态);pyamg 停滞警告原措辞含 "did not converge",被 `check_159.py` 的 Newton 失败正则误计(现改 "stalled")。显存:2-slab 运行期间 GPU 占用 10.9/16.3 GB(含热学 CG 与装配),生产高度下 S 矩阵与层级还要再加约 1.5–2 GB,是下一步 40-slab 运行要盯的量。
 
+**40-slab shakedown(力学 pyamg GPU,2026-09-04 17:57–19:42)**:2,606 步 6,159 s,**2.36 s/步**(hybrid/PARDISO 力学 4.18,模式 3 生产 5.78);逐段 2.07/2.03/2.12/2.32/2.37/2.45/2.34/2.53/2.54/2.67(hybrid 3.32…4.33),层 21–40 平坦在 2.3–2.7。打印阶段 132 行状态 u_max/vm_max 与 hybrid 相对差 ≤1.6e-7;能量账本超差步与 hybrid 完全相同(12 步,fast 节奏固有,门 RC=1 仅因此);零 Newton 失败、零 cutback、零回退。pyamg:1,142 次求解,40 次按层建层级 + 10 次因触顶 300 重建,新建层级中位 56 次迭代,复用中位 65(90% 分位 2.4 倍),Krylov 合计 211 s(占运行 4%);单次求解墙钟中位 0.53 s,其中 0.36 s 是 CPU 侧全矩阵钉死行检测/自由块抽取/右端修正。显存峰值 11.09 GB。时间构成从"solver 58% / 装配 24.5%"变为"装配 40% / solver 28% / python 18%":下一杠杆在装配与循环开销,不在线性求解。
+
+两处后续修正已提交:`max_coarse` 按候选数折算成自由度上限并用 Cholesky 求粗层逆(原先刚体模态让粗层长到 6,000 自由度,SVD 伪逆每层最多 29 s);复用层级的求解迭代数超过新建时 3 倍即丢弃重建(`rebuild_iter_factor`),下一次长运行验证。
+
+**release 发现(与求解器无关)**:两臂 release 后打印区应力逐单元一致(vm 最大差 0.6 MPa,eqp 1.6e-6),但位移差 124 mm——在打印节点上拟合为无穷小刚体运动,残差 3.5e-8,即纯刚体。原因:release 的 3 点刚体锚按整件几何选取,`--max-print-layers 40` 时只有 1 个锚点落在已打印材料里(其余在 z>21 mm 的未激活空洞区),打印体保留 3 个转动自由模态,PARDISO 在零空间里给出任意解,`release_u_max`(0.9 vs 124 mm、2-slab 时 2–151 mm)因此无意义;生产全高度时锚点在打印体内,1.06 mm 可信。建议:shakedown 模式下锚点从已打印节点里选,门指标 `release_u_max` 只统计 printed 节点。
+
