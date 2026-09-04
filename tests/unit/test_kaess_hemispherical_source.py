@@ -274,3 +274,7 @@ def _source_density_jax(point):
         zero,
     )
     return -residual[0]
+
+
+import pytest as _pytest_lane
+pytestmark = _pytest_lane.mark.meltpool
