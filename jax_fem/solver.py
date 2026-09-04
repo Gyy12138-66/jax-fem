@@ -266,6 +266,28 @@ def _jax_csr_arrays_from_petsc_csr(indptr, indices, data):
     )
 
 
+def _check_linear_residual(err, b, tol, atol, check_factor, method):
+    """Relative post-solve residual guard.
+
+    Replaces the historical absolute ``assert err < 0.1``: the true residual
+    must satisfy ``err <= check_factor * max(tol * |b|, atol)``, i.e. a
+    bounded multiple of the Krylov stopping criterion, whatever the scale of
+    ``b`` (flash steps have |b| ~ 1e9, where 0.1 absolute meant 1e-10
+    relative). Failure (or NaN) raises RuntimeError, which the acceleration
+    wrapper catches and retries on the configured fallback solver.
+    """
+    b_norm = float(np.linalg.norm(b))
+    limit = float(check_factor) * max(float(tol) * b_norm, float(atol))
+    err_value = float(err)
+    if not (err_value <= limit):  # NaN fails this test too
+        raise RuntimeError(
+            f"JAX {method} solver failed to converge: true residual {err_value:.3e} "
+            f"exceeds {limit:.3e} = {float(check_factor):g} x max(tol*|b|, atol) "
+            f"(tol={float(tol):g}, atol={float(atol):g}, |b|={b_norm:.3e})"
+        )
+    return err_value
+
+
 def jax_solve(
     A,
     b,
@@ -279,6 +301,7 @@ def jax_solve(
     solve_method='batched',
     timing=None,
     check_residual=True,
+    check_factor=100.0,
 ):
     logger.debug(f"JAX Solver - Solving linear system")
     conversion_t0 = time.perf_counter()
@@ -332,8 +355,7 @@ def jax_solve(
                 time.perf_counter() - check_t0,
             )
             logger.debug("JAX Solver - Finished solving, linear solve res = %.3g", err)
-            assert err < 0.1, f"JAX linear solver failed to converge with err = {err}"
-            x = np.where(err < 0.1, x, np.nan)
+            _check_linear_residual(err, b, tol, atol, check_factor, 'spsolve')
         else:
             logger.debug("JAX Solver - Finished solving; explicit residual check skipped")
         return x
@@ -392,8 +414,7 @@ def jax_solve(
             err.block_until_ready()
         _timing_record(timing, 'linear_residual_check', time.perf_counter() - check_t0)
         logger.debug("JAX Solver - Finished solving, linear solve res = %.3g", err)
-        assert err < 0.1, f"JAX linear solver failed to converge with err = {err}"
-        x = np.where(err < 0.1, x, np.nan) # For assert purpose, somehow this also affects bicgstab.
+        _check_linear_residual(err, b, tol, atol, check_factor, method)
     else:
         logger.debug("JAX Solver - Finished solving; explicit residual check skipped")
         info_value = _linear_solver_info_value(info)
@@ -593,6 +614,7 @@ def linear_solver(A, b, x0, linear_options, timing=None):
             solve_method=jax_options.get('solve_method', 'batched'),
             timing=timing,
             check_residual=jax_options.get('check_residual', True),
+            check_factor=jax_options.get('check_factor', 100.0),
         )
     elif 'amgx_solver' in linear_options:
         cfg_path = linear_options['amgx_solver']['cfg_path'] if 'cfg_path' in linear_options['amgx_solver'] else None

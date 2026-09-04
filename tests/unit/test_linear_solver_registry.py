@@ -92,12 +92,12 @@ class BlockBuildingTest(unittest.TestCase):
     def test_jax_block_maps_precond_and_forwards_controls(self):
         block = registry.build_linear_block(
             {"backend": "jax", "method": "cg", "precond": "jacobi", "tol": 1e-6,
-             "atol": 1e-6, "maxiter": 10000, "check_residual": False}
+             "atol": 1e-6, "maxiter": 10000, "check_residual": False, "check_factor": 50}
         )
         self.assertEqual(
             block,
             {"jax_solver": {"precond": True, "method": "cg", "tol": 1e-6, "atol": 1e-6,
-                            "maxiter": 10000, "check_residual": False}},
+                            "maxiter": 10000, "check_residual": False, "check_factor": 50.0}},
         )
         no_pc = registry.build_linear_block("jax:bicgstab:none")
         self.assertEqual(no_pc["jax_solver"], {"precond": False, "method": "bicgstab"})
@@ -156,7 +156,7 @@ class ScopedDefaultsTest(unittest.TestCase):
         self.assertEqual(
             blocks["thermal"],
             {"jax_solver": {"precond": True, "method": "cg", "tol": 1e-6, "atol": 1e-6,
-                            "maxiter": 10000, "check_residual": False}},
+                            "maxiter": 10000}},
         )
         self.assertEqual(blocks["mechanics"]["custom_solver"].label, "pardiso_v07(phase23)")
 
@@ -253,6 +253,53 @@ class ScopedSolverPatchTest(unittest.TestCase):
         self.assertEqual(module.solver(TransientThermal(), solver_options={"newton": {}}), "ok")
         self.assertEqual(len(calls), 2)
         self.assertIs(calls[1][1]["newton"]["linear"]["custom_solver"], fallback["custom_solver"])
+
+    def test_newton_stall_retries_once_under_iterative_block(self):
+        fallback = registry.build_fallback_linear_block("pardiso", pardiso_mode_default="phase23")
+        calls = []
+
+        def fake_solver(problem, solver_options=None):
+            calls.append(solver_options)
+            if len(calls) == 1:
+                raise RuntimeError("Newton solver did not converge within max_iter=100 iterations")
+            return "ok"
+
+        module = SimpleNamespace(solver=fake_solver)
+        report = acceleration.ProfilingReport(label="unit")
+        acceleration.install_solver_patch(
+            module, None, fallback_to_spsolve=True, profiler=report,
+            scoped_linear_options={"thermal": {"jax_solver": {"precond": True, "method": "cg"}}},
+            fallback_options=fallback,
+        )
+        self.assertEqual(module.solver(TransientThermal(), solver_options={"newton": {}}), "ok")
+        self.assertEqual(len(calls), 2)
+        self.assertIs(calls[1]["newton"]["linear"]["custom_solver"], fallback["custom_solver"])
+        self.assertEqual(report.meta["solver_fallbacks"], 1)
+        self.assertEqual(report.meta["newton_stall_fallbacks"], 1)
+
+    def test_newton_stall_under_direct_block_is_not_retried(self):
+        calls = []
+
+        def fake_solver(problem, solver_options=None):
+            calls.append(solver_options)
+            raise RuntimeError("Newton solver did not converge within max_iter=50 iterations")
+
+        module = SimpleNamespace(solver=fake_solver)
+        acceleration.install_solver_patch(
+            module, None, fallback_to_spsolve=True,
+            scoped_linear_options={"mechanics": registry.build_linear_block("pardiso:phase23")},
+            fallback_options={"spsolve_solver": {}},
+        )
+        with self.assertRaises(RuntimeError):
+            module.solver(ThermoMechanical(), solver_options={"newton": {}})
+        self.assertEqual(len(calls), 1)
+
+    def test_iterative_block_detection(self):
+        self.assertTrue(registry.is_iterative_linear_block({"jax_solver": {}}))
+        self.assertTrue(registry.is_iterative_linear_block(registry.build_linear_block("pyamg")))
+        self.assertFalse(registry.is_iterative_linear_block(registry.build_linear_block("pardiso:phase23")))
+        self.assertFalse(registry.is_iterative_linear_block({"spsolve_solver": {}}))
+        self.assertFalse(registry.is_iterative_linear_block(None))
 
     def test_no_retry_when_active_block_is_the_fallback_backend(self):
         fallback = registry.build_fallback_linear_block("pardiso", pardiso_mode_default="phase23")

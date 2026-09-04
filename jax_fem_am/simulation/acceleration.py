@@ -48,6 +48,7 @@ from jax_fem_am.solvers.linear import (
     ITERATIVE_LINEAR_KEYS,
     SCOPES,
     build_fallback_linear_block,
+    is_iterative_linear_block,
     json_safe_spec,
     linear_block_label,
     same_linear_backend,
@@ -1227,31 +1228,44 @@ def install_solver_patch(
         try:
             return run_original_solver(problem, patched_options, active_options)
         except Exception as exc:
-            # A Newton stall is a property of the nonlinear problem, not of the
-            # linear backend: SciPy spsolve reproduces pardiso stall residuals
-            # bit-identically (both are direct solvers), so retrying burns a
-            # full Newton budget for nothing. Re-raise so callers (e.g. the
-            # mechanics increment cutback) can subdivide the load instead.
+            # A Newton stall under a DIRECT linear solver is a property of the
+            # nonlinear problem (spsolve and PARDISO reproduce each other's
+            # stall residuals), so retrying burns a full Newton budget for
+            # nothing: re-raise so the mechanics increment cutback can
+            # subdivide the load. Under an ITERATIVE block the stall may be the
+            # linear solver's doing (jax cg/bicgstab report info=None, so an
+            # unconverged solve is only visible to Newton): retry once on the
+            # direct fallback before giving up.
             newton_stall = (
                 isinstance(exc, RuntimeError)
                 and "Newton solver did not converge" in str(exc)
             )
+            iterative_active = is_iterative_linear_block(active_options)
             if (
                 active_options is None
                 or not fallback_to_spsolve
                 or same_linear_backend(active_options, fallback_block)
-                or newton_stall
+                or (newton_stall and not iterative_active)
             ):
                 raise
             if profiler is not None:
                 profiler.meta["solver_fallbacks"] = (
                     int(profiler.meta.get("solver_fallbacks", 0)) + 1
                 )
+                if newton_stall:
+                    profiler.meta["newton_stall_fallbacks"] = (
+                        int(profiler.meta.get("newton_stall_fallbacks", 0)) + 1
+                    )
                 profiler.meta["last_solver_fallback"] = (
                     f"{type(exc).__name__}: {exc}"
                 )
+            reason = (
+                "Newton stalled under an iterative linear solver"
+                if newton_stall
+                else "experimental linear solver failed"
+            )
             print(
-                "WARNING: experimental linear solver failed; retrying this solve "
+                f"WARNING: {reason}; retrying this solve "
                 f"with {linear_block_label(fallback_block)}. "
                 f"Error: {type(exc).__name__}: {exc}",
                 flush=True,

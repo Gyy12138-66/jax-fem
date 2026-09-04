@@ -906,9 +906,10 @@ class MacroMech100V04XlaWrapperTest(unittest.TestCase):
         self.assertEqual(report.meta["solver_fallbacks"], 1)
 
     def test_install_solver_patch_does_not_retry_newton_stall(self):
-        # A Newton stall reproduces bit-identically under spsolve (both direct
-        # solvers), so the fallback must re-raise instead of burning a second
-        # full Newton budget; increment cutback handles it upstream.
+        # Under a DIRECT solver a Newton stall reproduces bit-identically on
+        # the spsolve fallback, so it must re-raise instead of burning a second
+        # full Newton budget; increment cutback handles it upstream. (Iterative
+        # blocks retry once: tests/unit/test_linear_solver_registry.py.)
         calls = []
 
         def fake_solver(problem, solver_options=None):
@@ -921,7 +922,7 @@ class MacroMech100V04XlaWrapperTest(unittest.TestCase):
 
         self.wrapper.install_solver_patch(
             original_module,
-            {"jax_solver": {"precond": True}},
+            {"custom_solver": self.wrapper._PardisoCustomSolver("phase23")},
             fallback_to_spsolve=True,
             profiler=report,
         )

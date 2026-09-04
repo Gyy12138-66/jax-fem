@@ -113,6 +113,56 @@ class PyamgKrylovSolverTest(unittest.TestCase):
         self.assertEqual(solver.stats["fallbacks"], 1)
         self.assertEqual(solver.stats["hierarchy_rebuilds"], 0)
 
+    def test_jax_device_path_matches_cpu_jacobi_path(self):
+        A, b, x0, rows, coords = self._vector_system()
+        problem = SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)])
+        cpu = amg.PyamgKrylovSolver(tol=1e-8, maxiter=300, max_coarse=20, smoother="jacobi")
+        gpu = amg.PyamgKrylovSolver(tol=1e-8, maxiter=300, max_coarse=20, smoother="jacobi", device="gpu")
+        cpu.bind_problem(problem)
+        gpu.bind_problem(problem)
+        xc = cpu(FakePetscMat(A), b, x0, {})
+        xg = gpu(FakePetscMat(A), b, x0, {})
+        self.assertLess(np.linalg.norm(A @ xg - b) / np.linalg.norm(b), 1e-7)
+        np.testing.assert_allclose(xg[rows], b[rows])
+        np.testing.assert_allclose(xg, xc, rtol=1e-4, atol=1e-9)
+        self.assertEqual(gpu.stats["fallbacks"], 0)
+        self.assertEqual(gpu.stats["device"], "jax")
+        self.assertGreaterEqual(gpu._cache.hierarchy_info["levels"], 2)
+        # same hierarchy + same smoother => same Krylov path up to rounding
+        self.assertLessEqual(abs(cpu.stats["last_iterations"] - gpu.stats["last_iterations"]), 2)
+        # second call: hierarchy and device structure reused
+        gpu(FakePetscMat(A), b, x0, {})
+        self.assertEqual(gpu.stats["pattern_rebuilds"], 1)
+        self.assertEqual(gpu.stats["hierarchy_rebuilds"], 0)
+        self.assertEqual(gpu.stats["calls"], 2)
+
+    def test_jax_device_scalar_problem(self):
+        P = pyamg.gallery.poisson((8, 8, 8), format="csr")
+        rows = list(range(10))
+        A = _pin_rows(P, rows)
+        b = np.ones(A.shape[0])
+        x0 = np.zeros(A.shape[0])
+        x0[rows] = 1.0
+        solver = amg.PyamgKrylovSolver(tol=1e-9, maxiter=200, max_coarse=20, near_nullspace="constant", device="jax")
+        x = solver(FakePetscMat(A), b, x0, {})
+        self.assertLess(np.linalg.norm(A @ x - b) / np.linalg.norm(b), 1e-8)
+
+    def test_jax_device_rejects_unsupported_options(self):
+        with self.assertRaises(ValueError):
+            amg.PyamgKrylovSolver(device="gpu", smoother="block_gauss_seidel")
+        with self.assertRaises(ValueError):
+            amg.PyamgKrylovSolver(device="gpu", method="bicgstab")
+        with self.assertRaises(ValueError):
+            amg.PyamgKrylovSolver(device="tpu")
+
+    def test_block_gauss_seidel_cpu_smoother(self):
+        A, b, x0, rows, coords = self._vector_system()
+        solver = amg.PyamgKrylovSolver(tol=1e-8, maxiter=300, max_coarse=20, smoother="block_gauss_seidel")
+        solver.bind_problem(SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)]))
+        x = solver(FakePetscMat(A), b, x0, {})
+        self.assertLess(np.linalg.norm(A @ x - b) / np.linalg.norm(b), 1e-7)
+        self.assertIn("block_gs", solver.label)
+
     def test_all_rows_pinned_returns_rhs(self):
         A = sp.identity(6, format="csr")
         b = np.arange(6, dtype=float)

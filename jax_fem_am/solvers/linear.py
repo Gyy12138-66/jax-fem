@@ -26,18 +26,21 @@ Spec forms accepted by :func:`parse_linear_solver_spec`::
 Backends and their keys:
 
     jax      method (cg|bicgstab|gmres|spsolve), precond (jacobi|none), tol,
-             atol, maxiter, restart, solve_method, check_residual
+             atol, maxiter, restart, solve_method, check_residual, check_factor
     pardiso  mode (base|nocmp|cache-idx|phase23|fp32ir)
     spsolve  (no keys)
     petsc    ksp_type, pc_type, gpu
     amgx     cfg_path
     pyamg    method (cg|bicgstab), near_nullspace (rigid_body|constant),
              scaled, tol, maxiter, max_coarse, rebuild (pattern|always),
-             fallback (pardiso|none)   -- CPU reference, see solvers/amg.py
+             fallback (pardiso|none), device (cpu|gpu), smoother
+             (jacobi|block_gauss_seidel), smoother_sweeps, smoother_omega
+             -- see solvers/amg.py (cpu = pyamg reference, gpu = jax V-cycle)
 
 Defaults (:data:`DEFAULT_SCOPED_SPECS`, selected by ``--xla-linear-solver
-auto``): thermal -> jax CG + Jacobi (tol/atol 1e-6, post-solve assert
-skipped), mechanics -> MKL PARDISO phase23. The v159 group-A/B diagnostics
+auto``): thermal -> jax CG + Jacobi (tol/atol 1e-6, relative post-solve
+residual check on: true residual <= check_factor x max(tol*|b|, atol),
+RuntimeError -> fallback), mechanics -> MKL PARDISO phase23. The v159 group-A/B diagnostics
 (2026-09-03) are the evidence: the thermal system has Jacobi-scaled kappa
 12-42 independent of build height, while the mechanics tangent has kappa
 6e4-4e6 and every Jacobi-type Krylov solve stalls on it.
@@ -93,7 +96,7 @@ DEFAULT_SCOPED_SPECS: Dict[str, Dict[str, Any]] = {
         "tol": 1e-6,
         "atol": 1e-6,
         "maxiter": 10000,
-        "check_residual": False,
+        "check_residual": True,
     },
     "mechanics": {"backend": "pardiso", "mode": "phase23"},
 }
@@ -103,7 +106,7 @@ _KEEP_WORDS = frozenset({"", "keep", "preserve", "none", "null", "base"})
 _ALLOWED_KEYS: Dict[str, frozenset] = {
     "jax": frozenset(
         {"backend", "method", "precond", "tol", "atol", "maxiter", "restart",
-         "solve_method", "check_residual"}
+         "solve_method", "check_residual", "check_factor"}
     ),
     "pardiso": frozenset({"backend", "mode"}),
     "spsolve": frozenset({"backend"}),
@@ -111,7 +114,8 @@ _ALLOWED_KEYS: Dict[str, frozenset] = {
     "amgx": frozenset({"backend", "cfg_path"}),
     "pyamg": frozenset(
         {"backend", "method", "near_nullspace", "scaled", "tol", "maxiter",
-         "max_coarse", "rebuild", "fallback", "verbose"}
+         "max_coarse", "rebuild", "fallback", "verbose", "device", "smoother",
+         "smoother_sweeps", "smoother_omega"}
     ),
 }
 
@@ -175,6 +179,8 @@ def normalize_linear_solver_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
             )
         if "check_residual" in out and out["check_residual"] is not None:
             out["check_residual"] = _as_bool(out["check_residual"], "check_residual")
+        if out.get("check_factor") is not None:
+            out["check_factor"] = float(out["check_factor"])
     elif backend == "pardiso":
         mode = out.get("mode")
         if mode is not None:
@@ -198,6 +204,12 @@ def normalize_linear_solver_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
         out["rebuild"] = _check_choice(out.get("rebuild", "pattern"), PYAMG_REBUILD, "rebuild")
         out["fallback"] = _check_choice(out.get("fallback", "pardiso"), ("pardiso", "none"), "fallback")
         out["verbose"] = _as_bool(out.get("verbose", False), "verbose")
+        out["device"] = _check_choice(out.get("device", "cpu"), ("cpu", "gpu", "jax"), "device")
+        out["smoother"] = _check_choice(
+            out.get("smoother", "jacobi"), ("jacobi", "block_gauss_seidel"), "smoother"
+        )
+        out["smoother_sweeps"] = int(out.get("smoother_sweeps", 2))
+        out["smoother_omega"] = float(out.get("smoother_omega", 4.0 / 3.0))
     return out
 
 
@@ -304,6 +316,8 @@ def build_linear_block(
                 inner[key] = spec[key]
         if spec.get("check_residual") is False:
             inner["check_residual"] = False
+        if spec.get("check_factor") is not None:
+            inner["check_factor"] = spec["check_factor"]
         return {"jax_solver": inner}
     if backend == "pardiso":
         mode = spec.get("mode", pardiso_mode_default)
@@ -440,6 +454,16 @@ def same_linear_backend(
         return True
     lc, rc = left[left_key], right[right_key]
     return lc is rc or getattr(lc, "label", None) == getattr(rc, "label", object())
+
+
+def is_iterative_linear_block(block: Optional[Mapping[str, Any]]) -> bool:
+    """True for Krylov backends (jax/petsc/amgx keys, or a custom solver that
+    declares ``iterative = True`` such as the pyamg backend)."""
+    if not block:
+        return False
+    if ITERATIVE_LINEAR_KEYS.intersection(block):
+        return True
+    return bool(getattr(block.get("custom_solver"), "iterative", False))
 
 
 def json_safe_spec(spec: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:

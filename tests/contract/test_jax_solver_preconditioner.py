@@ -639,6 +639,55 @@ class JaxSolvePreconditionerTest(unittest.TestCase):
 
 
 @unittest.skipIf(IMPORT_ERROR is not None, f"jax runtime unavailable: {IMPORT_ERROR}")
+class JaxSolveResidualGuardTest(unittest.TestCase):
+    """Post-solve residual guard is relative to max(tol*|b|, atol), raises RuntimeError."""
+
+    def setUp(self):
+        jax_fem_solver._BCOO_STRUCTURE_CACHE_BY_ID.clear()
+        if hasattr(jax_fem_solver, "_BCOO_STRUCTURE_PATTERN_CACHE"):
+            jax_fem_solver._BCOO_STRUCTURE_PATTERN_CACHE.clear()
+
+    def _solve_with(self, x_returned, b, **kwargs):
+        with mock.patch.object(
+            jax_fem_solver.jax.scipy.sparse.linalg, "cg", return_value=(x_returned, None)
+        ):
+            return jax_fem_solver.jax_solve(
+                FakePetscMat(), b, None, precond=False, method="cg", **kwargs
+            )
+
+    def test_bad_solution_raises_runtime_error_not_assertion(self):
+        with self.assertRaisesRegex(RuntimeError, "true residual"):
+            self._solve_with(jnp.array([5.0, 5.0]), jnp.array([1.0, 2.0]), tol=1e-8, atol=0.0)
+
+    def test_guard_scales_with_the_right_hand_side(self):
+        # |b| ~ 2e9 with a 1e-9-relative solution: the historical absolute
+        # ``err < 0.1`` rejected this (err ~ 2), the relative guard accepts it.
+        b = jnp.array([1e9, 2e9])
+        x = b * (1.0 + 1e-9)
+        out = self._solve_with(x, b, tol=1e-6, atol=0.0)
+        onp.testing.assert_allclose(onp.asarray(out), onp.asarray(x))
+
+    def test_check_factor_controls_the_margin(self):
+        b = jnp.array([1.0, 2.0])
+        x = b * (1.0 + 5e-6)  # err ~ 1.1e-5 = 5 x (tol |b|)
+        self._solve_with(x, b, tol=1e-6, atol=0.0, check_factor=10.0)
+        with self.assertRaises(RuntimeError):
+            self._solve_with(x, b, tol=1e-6, atol=0.0, check_factor=2.0)
+
+    def test_nan_solution_is_rejected(self):
+        with self.assertRaises(RuntimeError):
+            self._solve_with(jnp.array([onp.nan, onp.nan]), jnp.array([1.0, 2.0]), tol=1e-6)
+
+    def test_linear_solver_forwards_check_factor(self):
+        with mock.patch.object(jax_fem_solver, "jax_solve", return_value=jnp.array([1.0, 2.0])) as solve:
+            jax_fem_solver.linear_solver(
+                FakePetscMat(), jnp.array([1.0, 2.0]), None,
+                {"jax_solver": {"check_factor": 7.0}}, {},
+            )
+        self.assertEqual(solve.call_args.kwargs["check_factor"], 7.0)
+
+
+@unittest.skipIf(IMPORT_ERROR is not None, f"jax runtime unavailable: {IMPORT_ERROR}")
 class ResidualOnlyConvergenceCheckTest(unittest.TestCase):
     """Newton loop assembly-call pattern under 'residual_only_check'."""
 

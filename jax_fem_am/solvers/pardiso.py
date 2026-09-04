@@ -363,6 +363,7 @@ class PardisoCustomSolver:
     """
 
     label = "pardiso_solver(mkl multithreaded direct)"
+    iterative = False
 
     def __init__(self, mode=None):
         valid_modes = {None, "base", "nocmp", "cache-idx", "phase23", "fp32ir"}

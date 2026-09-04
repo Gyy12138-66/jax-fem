@@ -193,3 +193,12 @@ A 组诊断(倾倒矩阵离线):热学活跃块 κ(Jacobi 缩放)12–42、与�
 - `cases/159_simulation/model/make_159_preflight.py`(JSON → argv)
 - `cases/159_simulation/inputs/0119-flash-voxel-fast-hybrid.json`(新写法;`launch_mode.sh` 默认 `MODE=4`)
 - 测试:`tests/unit/test_linear_solver_registry.py`、`tests/unit/test_pyamg_krylov_solver.py`
+
+### 11.6 守卫补丁(2026-09-04 下午)
+
+- **线性层残差判据改相对量并抛异常。** `jax_solve` 的 `assert err < 0.1`(绝对量,flash 步 ‖b‖≈1e9 时等效强制 1e-10 相对精度)换成 `err ≤ check_factor × max(tol·‖b‖, atol)`(`check_factor` 默认 100,可在 jax 后端 spec 里配),不满足或 NaN 抛 `RuntimeError`,由 `accelerated_solver` 接住回退。`check_residual=true` 因此重新成为热学默认(多一次 SpMV),hybrid 配置同步打开。第 4 节描述的硬断言不再存在。
+- **迭代类块下 Newton 停滞允许回退一次。** jax 的 cg/bicgstab `info` 恒为 `None`,线性层不收敛只能被 Newton 看见;现在当前块是迭代类(jax/petsc/amgx,或声明 `iterative=True` 的 custom_solver 如 pyamg)时,"Newton solver did not converge" 也回退到配置的直接法重跑一次,`profile.json` 计入 `newton_stall_fallbacks`;直接法块下仍直接抛出交给力学 cutback。
+
+### 11.7 pyamg 后端的 GPU V-cycle(`device: gpu`)
+
+层级仍由 pyamg 在 CPU 构建(每个稀疏模式一次),`device: gpu` 时把各层 A/P/R 转成 jax CSR、光滑器用阻尼 Jacobi(ω = smoother_omega / ρ(D⁻¹A),ρ 由 pyamg 的 `rho_D_inv_A` 估计,与 CPU 路径的 `('jacobi', {'withrho': True})` 同一公式)、最粗层用伪逆,整个 V-cycle 和带迭代计数的 PCG 在一个 `jax.jit` 里跑;细层矩阵每次调用用当前值(粗层沿用建层级时的 Galerkin 算子)。`smoother: block_gauss_seidel` 只在 CPU 路径可用(B 组的原始设置)。验收:同一层级、同一光滑器下 GPU 与 CPU 的 CG 迭代数一致,L150 单次求解墙钟压到 PARDISO(6.4 s)以下。
