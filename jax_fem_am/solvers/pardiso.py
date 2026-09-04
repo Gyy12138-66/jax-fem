@@ -345,3 +345,79 @@ class VariantSolver:
             st = _RawPardiso(single_precision=False)
             self._states["nocmp"] = st
         return st
+
+
+class PardisoCustomSolver:
+    """jax-fem ``custom_solver`` adapter: PETSc AIJ -> SciPy CSR -> MKL PARDISO.
+
+    Direct solve like spsolve (same accuracy class), but factorization runs
+    multithreaded via MKL. pypardiso is imported lazily so the option
+    plumbing stays importable without it. ``mode`` selects a level of the
+    V07 ladder above (``None``/``"base"`` keeps the plain pypardiso path or
+    the legacy ``V07_PARDISO_MODE`` environment override).
+
+    Moved here from ``jax_fem_am.simulation.acceleration`` (which keeps the
+    ``_PardisoCustomSolver`` alias) so the per-physics linear-solver registry
+    in ``jax_fem_am.solvers.linear`` can build it without importing the
+    wrapper.
+    """
+
+    label = "pardiso_solver(mkl multithreaded direct)"
+
+    def __init__(self, mode=None):
+        valid_modes = {None, "base", "nocmp", "cache-idx", "phase23", "fp32ir"}
+        if mode not in valid_modes:
+            raise ValueError(f"unsupported PARDISO mode: {mode!r}")
+        self._solver = None
+        self._v07_variant = None
+        self._requested_mode = mode
+        if mode not in (None, "base"):
+            self.label = f"pardiso_v07({mode})"
+
+    def __deepcopy__(self, memo):
+        # Shared instance keeps the PARDISO handle alive across the
+        # option-rewrite deep copies done for every solve.
+        return self
+
+    def _maybe_v07_variant(self):
+        # V07 ablation hook: V07_PARDISO_MODE selects an experimental
+        # solver ladder from this module. Unset (or "base") keeps the plain
+        # pypardiso behaviour untouched.
+        if self._v07_variant is None:
+            import os
+
+            mode = self._requested_mode
+            if mode is None:
+                mode = os.environ.get("V07_PARDISO_MODE", "").strip()
+            if not mode or mode == "base":
+                self._v07_variant = False
+            else:
+                self._v07_variant = VariantSolver(mode)
+                self.label = self._v07_variant.label
+        return self._v07_variant
+
+    def stats_snapshot(self):
+        variant = self._maybe_v07_variant()
+        if variant is False:
+            return None
+        return dict(variant.stats_snapshot())
+
+    def __call__(self, A, b, x0, linear_options):
+        import pypardiso
+
+        variant = self._maybe_v07_variant()
+        if variant is not False:
+            return variant(A, b, x0, linear_options)
+
+        if self._solver is None:
+            self._solver = pypardiso.PyPardisoSolver()
+        indptr, indices, data = A.getValuesCSR()
+        Asp = scipy.sparse.csr_matrix(
+            (
+                data,
+                indices.astype(np.int32, copy=False),
+                indptr.astype(np.int32, copy=False),
+            )
+        )
+        rhs = np.asarray(b, dtype=np.float64)
+        return pypardiso.spsolve(Asp, rhs, solver=self._solver)

@@ -133,3 +133,63 @@ A 组诊断(倾倒矩阵离线):热学活跃块 κ(Jacobi 缩放)12–42、与�
 6. 2-slab shakedown 的 `release_u_max` 无参考价值:切 raft 后剩 1 mm 薄板,系统近奇异,同一打印态四个臂给出 2–151 mm;门只查存在性不查量级。
 7. `pardiso_mode` 是 preflight 必填字段,即使 `solver: jax` 也要保留。
 8. 2-slab 门覆盖不到高层数病态(力学 κ 增长、能量审计的 hold 步超差都在层 13+ 才出现),速度类结论要用 ≥40 层的中高度 shakedown。
+
+## 11. 按物理场独立选择线性求解器(2026-09-04,分支 precond-optimization)
+
+昨天两组测试(hybrid 40 层、B 组预条件器阶梯)落地成代码:热学与力学各自拥有独立的 `linear` 块,后端从一个注册表(`jax_fem_am/solvers/linear.py`)按配置选择。
+
+### 11.1 默认值
+
+`--xla-linear-solver` 的默认值从 `keep` 改为 **`auto`**:
+
+| 物理场 | 默认后端 | 说明 |
+|---|---|---|
+| 热学 | `jax` CG + Jacobi,tol/atol 1e-6,maxiter 10000,`check_residual=false` | A 组:活跃块 κ_Jacobi 12–42,与高度无关 |
+| 力学(打印步 + release) | MKL PARDISO `phase23` | A/B 组:κ_Jacobi 6e4–4e6,所有 Jacobi 类 Krylov 触顶 |
+| 回退 | `--xla-fallback-solver`,默认 `spsolve`(旧行为);v159 配置用 `pardiso` | 回退目标与当前后端相同时不再重试 |
+
+旧的全局取值(`pardiso` / `jax` / `spsolve` / `petsc` / `amgx` / `keep`)语义不变:两个物理场共用同一块,已固化的契约(cube、AM-Bench、kaess 脚本都显式传 `--xla-linear-solver pardiso`)逐位不受影响。`--mechanics-direct-solver` 保留为"力学 = pardiso"的别名。
+
+### 11.2 配置写法
+
+案例 JSON(`runner.linear_solver`),`make_159_preflight.py` 编译为 `--thermal-linear-solver '<json>'` / `--mechanics-linear-solver '<json>'` / `--xla-fallback-solver`:
+
+```json
+"linear_solver": {
+  "platform": "gpu", "python_bin": ".../jax-fem-gpu/bin/python",
+  "solver": "auto", "pardiso_mode": "phase23", "cell_target_batch_size": 32768,
+  "thermal":   {"backend": "jax", "method": "cg", "precond": "jacobi",
+                "tol": 1e-6, "atol": 1e-6, "maxiter": 10000, "check_residual": false},
+  "mechanics": {"backend": "pardiso", "mode": "phase23"},
+  "fallback": "pardiso"
+}
+```
+
+命令行等价简写:`--thermal-linear-solver jax:cg:jacobi --mechanics-linear-solver pardiso:phase23`。简写形式 `backend[:method[:precond]]`(jax)、`pardiso[:mode]`、`pyamg[:method[:near_nullspace]]`,或任意 `{"backend": ...}` JSON。未知后端、未知键、非法取值在 preflight/解析时直接报错。
+
+### 11.3 后端注册表
+
+| backend | 实现 | 键 |
+|---|---|---|
+| `jax` | vendored `jax_solve`(GPU/CPU Krylov) | `method` cg/bicgstab/gmres/spsolve,`precond` jacobi/none,`tol`,`atol`,`maxiter`,`restart`,`solve_method`,`check_residual` |
+| `pardiso` | `jax_fem_am.solvers.pardiso.PardisoCustomSolver`(从 acceleration.py 移入;全进程按 mode 共享一个实例,分解句柄跨热学/力学/release/回退复用) | `mode` base/nocmp/cache-idx/phase23/fp32ir |
+| `spsolve` | SciPy 直接法(单线程基线) | — |
+| `petsc` | petsc4py KSP | `ksp_type`,`pc_type`,`gpu` |
+| `amgx` | pyamgx | `cfg_path` |
+| `pyamg` | **新增** `jax_fem_am.solvers.amg.PyamgKrylovSolver`:剥钉死行取自由块,SA-AMG + 刚体模态近零空间(由 `bind_problem` 拿到的节点坐标构造)+ Jacobi 缩放 + CG;层级按稀疏模式缓存,不收敛先重建一次再回退 PARDISO | `method`,`near_nullspace` rigid_body/constant,`scaled`,`tol`,`maxiter`,`max_coarse`,`rebuild` pattern/always,`fallback` pardiso/none,`verbose` |
+
+`pyamg` 是 B 组结果的**CPU 参考实现**(单线程,L30 上比 16 线程 PARDISO 慢),用途是在真实运行里复现 46–56 次迭代、以及给 GPU V-cycle 实现当对照,不是生产车道。
+
+### 11.4 分发点与自定义求解器协议
+
+`acceleration.install_solver_patch` 按问题类名(`TransientThermal` / `ThermoMechanical`)选块:scope 块 > 全局块 > stepper 自带块。`prefer_direct_linear_solver` 标记(release)在当前块为迭代类时改走共享 PARDISO。自定义求解器协议:`x = solver(A_petsc, b, x0, linear_options)`;`__deepcopy__` 必须返回 self(Newton 选项每次求解都会被深拷贝);可选 `bind_problem(problem)`(每次求解前调用,拿网格坐标)、`stats_snapshot()`(写入 profile.json 的 `<scope>_custom_solver_stats`)、`label`。
+
+运行摘要与 `profile.json` 新增 `thermal_linear_solver` / `mechanics_linear_solver` / `fallback_solver` 行及 `scoped_linear_solvers`、`scoped_linear_solver_specs`、`fallback_linear_solver` 元数据。
+
+### 11.5 文件
+
+- `jax_fem_am/solvers/linear.py`(注册表、spec 解析、默认值)、`jax_fem_am/solvers/amg.py`(pyamg 后端)、`jax_fem_am/solvers/pardiso.py`(`PardisoCustomSolver`)
+- `jax_fem_am/simulation/acceleration.py`(scope 分发、CLI、摘要、回退)
+- `cases/159_simulation/model/make_159_preflight.py`(JSON → argv)
+- `cases/159_simulation/inputs/0119-flash-voxel-fast-hybrid.json`(新写法;`launch_mode.sh` 默认 `MODE=4`)
+- 测试:`tests/unit/test_linear_solver_registry.py`、`tests/unit/test_pyamg_krylov_solver.py`

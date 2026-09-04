@@ -11,6 +11,10 @@ inside the Newton loop without touching the physics driver:
     amgx     -- NVIDIA AMGX (via pyamgx) with persistent resources
     pardiso  -- MKL PARDISO via pypardiso (CPU multithreaded direct solve)
     keep     -- do not rewrite; use whatever the base config specifies
+    auto     -- (default) per physics: thermal jax CG + Jacobi, mechanics
+                PARDISO phase23; --thermal-linear-solver /
+                --mechanics-linear-solver override either scope with any
+                backend spec from jax_fem_am.solvers.linear
 
 Design constraints (see docs/XLA_UPGRADE_ROADMAP.md):
 
@@ -39,6 +43,19 @@ from contextlib import contextmanager
 
 from pathlib import Path
 from typing import Any, Dict, Iterator, Mapping, Optional, Sequence
+
+from jax_fem_am.solvers.linear import (
+    ITERATIVE_LINEAR_KEYS,
+    SCOPES,
+    build_fallback_linear_block,
+    json_safe_spec,
+    linear_block_label,
+    same_linear_backend,
+    scoped_linear_options_from_args,
+    scoped_specs_from_args,
+    shared_pardiso_solver,
+)
+from jax_fem_am.solvers.pardiso import PardisoCustomSolver as _PardisoCustomSolver
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -111,71 +128,9 @@ _SOLVER_CHOICE_TO_KEY = {
 }
 
 
-class _PardisoCustomSolver:
-    """`custom_solver` adapter: PETSc AIJ -> SciPy CSR -> MKL PARDISO.
-
-    Direct solve like spsolve (same accuracy class), but factorization runs
-    multithreaded via MKL. pypardiso is imported lazily so the option
-    plumbing stays importable without it.
-    """
-
-    label = "pardiso_solver(mkl multithreaded direct)"
-
-    def __init__(self, mode: Optional[str] = None) -> None:
-        valid_modes = {None, "base", "nocmp", "cache-idx", "phase23", "fp32ir"}
-        if mode not in valid_modes:
-            raise ValueError(f"unsupported PARDISO mode: {mode!r}")
-        self._solver = None
-        self._v07_variant = None
-        self._requested_mode = mode
-        if mode not in (None, "base"):
-            self.label = f"pardiso_v07({mode})"
-
-    def __deepcopy__(self, memo):
-        # Shared instance keeps the PARDISO handle alive across the
-        # option-rewrite deep copies done for every solve.
-        return self
-
-    def _maybe_v07_variant(self):
-        # V07 ablation hook: V07_PARDISO_MODE selects an experimental
-        # solver ladder from jax_fem_am/solvers/pardiso.py. Unset (or
-        # "base") keeps this class's behaviour untouched.
-        if self._v07_variant is None:
-            import os
-
-            mode = self._requested_mode
-            if mode is None:
-                mode = os.environ.get("V07_PARDISO_MODE", "").strip()
-            if not mode or mode == "base":
-                self._v07_variant = False
-            else:
-                from jax_fem_am.solvers.pardiso import VariantSolver
-
-                self._v07_variant = VariantSolver(mode)
-                self.label = self._v07_variant.label
-        return self._v07_variant
-
-    def __call__(self, A, b, x0, linear_options):
-        import numpy as onp
-        import scipy.sparse
-        import pypardiso
-
-        variant = self._maybe_v07_variant()
-        if variant is not False:
-            return variant(A, b, x0, linear_options)
-
-        if self._solver is None:
-            self._solver = pypardiso.PyPardisoSolver()
-        indptr, indices, data = A.getValuesCSR()
-        Asp = scipy.sparse.csr_matrix(
-            (
-                data,
-                indices.astype(onp.int32, copy=False),
-                indptr.astype(onp.int32, copy=False),
-            )
-        )
-        rhs = onp.asarray(b, dtype=onp.float64)
-        return pypardiso.spsolve(Asp, rhs, solver=self._solver)
+# ``_PardisoCustomSolver`` (PETSc AIJ -> SciPy CSR -> MKL PARDISO adapter) is
+# ``jax_fem_am.solvers.pardiso.PardisoCustomSolver``; the alias above keeps the
+# historical name for tests and the legacy --xla-linear-solver pardiso path.
 
 
 def linear_options_from_args(args: argparse.Namespace) -> Optional[Dict[str, Any]]:
@@ -187,7 +142,8 @@ def linear_options_from_args(args: argparse.Namespace) -> Optional[Dict[str, Any
     :func:`rewrite_solver_options`.
     """
     choice = getattr(args, "xla_linear_solver", "keep")
-    if choice in (None, "keep", "preserve"):
+    if choice in (None, "keep", "preserve", "auto"):
+        # 'auto' is resolved per physics by scoped_linear_options_from_args.
         return None
     if choice not in _SOLVER_CHOICE_TO_KEY:
         raise ValueError(
@@ -246,6 +202,14 @@ def linear_options_from_args(args: argparse.Namespace) -> Optional[Dict[str, Any
     return {key: inner}
 
 
+def _copy_linear_block(block: Mapping[str, Any]) -> Dict[str, Any]:
+    """Deep-copy a linear block except the ``custom_solver`` callable itself."""
+    return {
+        key: (value if key == "custom_solver" else copy.deepcopy(value))
+        for key, value in block.items()
+    }
+
+
 def _replace_linear_block(node: Dict[str, Any], replacement: Dict[str, Any]) -> bool:
     """Recursively rewrite linear-solver blocks in-place on a deep copy.
 
@@ -268,7 +232,7 @@ def _replace_linear_block(node: Dict[str, Any], replacement: Dict[str, Any]) -> 
     if isinstance(linear, dict) and (
         not linear or LINEAR_SOLVER_KEYS.intersection(linear)
     ):
-        node["linear"] = copy.deepcopy(replacement)
+        node["linear"] = _copy_linear_block(replacement)
         rewrote = True
 
     # Legacy flat layout: linear-solver key(s) live next to the tolerances.
@@ -276,8 +240,8 @@ def _replace_linear_block(node: Dict[str, Any], replacement: Dict[str, Any]) -> 
     if flat_keys:
         for key in flat_keys:
             del node[key]
-        for key, value in replacement.items():
-            node[key] = copy.deepcopy(value)
+        for key, value in _copy_linear_block(replacement).items():
+            node[key] = value
         rewrote = True
 
     # Recurse into sub-dicts (e.g. "newton", "line_search", ...) that we
@@ -316,7 +280,7 @@ def rewrite_solver_options(
     if method_keys:
         for method in method_keys:
             method_options = dict(rewritten.get(method) or {})
-            method_options["linear"] = copy.deepcopy(replacement)
+            method_options["linear"] = _copy_linear_block(replacement)
             rewritten[method] = method_options
         return rewritten
 
@@ -789,9 +753,30 @@ def build_arg_parser(parser: Optional[argparse.ArgumentParser] = None
                     "wrapper")
     g = parser.add_argument_group("XLA / GPU linear solver")
     _add_runtime_args(g)
-    g.add_argument("--xla-linear-solver", default="keep",
-                   choices=["keep", "preserve", *sorted(_SOLVER_CHOICE_TO_KEY)],
-                   help="linear solver used inside the Newton loop")
+    g.add_argument("--xla-linear-solver", default="auto",
+                   choices=["auto", "keep", "preserve",
+                            *sorted(_SOLVER_CHOICE_TO_KEY)],
+                   help=("linear solver used inside the Newton loop for BOTH "
+                         "physics. 'auto' (default) resolves per physics: "
+                         "thermal -> jax CG + Jacobi (tol/atol 1e-6), mechanics "
+                         "-> MKL PARDISO phase23; 'keep' leaves the stepper's "
+                         "own block (SciPy spsolve). --thermal-linear-solver / "
+                         "--mechanics-linear-solver override either physics."))
+    g.add_argument("--thermal-linear-solver", default=None, metavar="SPEC",
+                   help=("linear solver for the thermal Newton solves: backend "
+                         "shorthand (jax:cg:jacobi, pardiso:phase23, spsolve, "
+                         "pyamg) or a JSON object {\"backend\": ..., ...}; see "
+                         "jax_fem_am.solvers.linear"))
+    g.add_argument("--mechanics-linear-solver", default=None, metavar="SPEC",
+                   help=("linear solver for the build-step and release mechanics "
+                         "Newton solves (same SPEC forms as "
+                         "--thermal-linear-solver). Iterative choices still "
+                         "route the raft-release solve to PARDISO."))
+    g.add_argument("--xla-fallback-solver", default="spsolve",
+                   choices=["spsolve", "pardiso", "none"],
+                   help=("solver used to retry a failed linear solve (default "
+                         "SciPy spsolve, single-threaded; pardiso is the "
+                         "multithreaded direct path). 'none' disables retries."))
     g.add_argument("--xla-jax-precond", action="store_true",
                    help="enable Jacobi preconditioning for the JAX solver")
     g.add_argument("--xla-jax-method", default=None,
@@ -955,38 +940,7 @@ def parse_args(base_module, argv: Sequence[str] | None = None) -> argparse.Names
 
 
 def _solver_label(linear_options: Mapping[str, Any] | None) -> str:
-    if linear_options is None:
-        return "preserve original solver_options"
-    if "jax_solver" in linear_options:
-        opts = linear_options["jax_solver"]
-        parts = [
-            f"method={opts.get('method', 'bicgstab')}",
-            f"precond={opts.get('precond', False)}",
-        ]
-        if "tol" in opts:
-            parts.append(f"tol={opts['tol']}")
-        if "atol" in opts:
-            parts.append(f"atol={opts['atol']}")
-        if "maxiter" in opts:
-            parts.append(f"maxiter={opts['maxiter']}")
-        if opts.get("check_residual") is False:
-            parts.append("check_residual=False")
-        return f"jax_solver({', '.join(parts)})"
-    if "amgx_solver" in linear_options:
-        cfg_path = linear_options["amgx_solver"].get("cfg_path")
-        return f"amgx_solver(cfg_path={cfg_path or 'built-in'})"
-    if "petsc_solver" in linear_options:
-        opts = linear_options["petsc_solver"]
-        return (
-            f"petsc_solver(ksp_type={opts.get('ksp_type')}, "
-            f"pc_type={opts.get('pc_type')})"
-        )
-    if "spsolve_solver" in linear_options:
-        return "spsolve_solver(cpu scipy baseline)"
-    if "custom_solver" in linear_options:
-        custom = linear_options["custom_solver"]
-        return getattr(custom, "label", f"custom_solver({custom!r})")
-    return str(linear_options)
+    return linear_block_label(linear_options)
 
 
 def _pardiso_stats_snapshot(
@@ -996,6 +950,10 @@ def _pardiso_stats_snapshot(
     if not linear_options or "custom_solver" not in linear_options:
         return None
     custom = linear_options["custom_solver"]
+    direct_snapshot = getattr(custom, "stats_snapshot", None)
+    if direct_snapshot is not None and not hasattr(custom, "_maybe_v07_variant"):
+        snapshot = direct_snapshot()
+        return dict(snapshot) if snapshot else None
     variant = getattr(custom, "_v07_variant", None)
     if variant is None:
         initialize = getattr(custom, "_maybe_v07_variant", None)
@@ -1012,11 +970,23 @@ def _pardiso_stats_snapshot(
 def print_acceleration_summary(
     args: argparse.Namespace,
     linear_options: Mapping[str, Any] | None,
+    scoped_linear_options: Mapping[str, Mapping[str, Any] | None] | None = None,
+    fallback_options: Mapping[str, Any] | None = None,
 ) -> None:
     print("============================================================")
     print("mech100 XLA/GPU upgrade wrapper (v04)")
     print(f"original_solver_module = {BASE_SOLVER_PATH}")
     print(f"linear_solver_override = {_solver_label(linear_options)}")
+    for scope in SCOPES:
+        block = (scoped_linear_options or {}).get(scope)
+        label = (
+            linear_block_label(block)
+            if block is not None
+            else f"(global) {_solver_label(linear_options)}"
+        )
+        print(f"{scope + '_linear_solver':<22} = {label}")
+    if fallback_options is not None:
+        print(f"fallback_solver       = {linear_block_label(fallback_options)}")
     print(f"xla_platform           = {args.xla_platform}")
     print(f"xla_preallocate       = {args.xla_preallocate}")
     print(f"xla_mem_fraction      = {args.xla_mem_fraction}")
@@ -1079,20 +1049,35 @@ def install_solver_patch(
     profile_solver_call: bool = True,
     thermal_warm_start: bool = False,
     residual_only_check: bool = False,
+    scoped_linear_options: Mapping[str, Mapping[str, Any] | None] | None = None,
+    fallback_options: Mapping[str, Any] | None = None,
 ) -> None:
+    """Replace ``base_module.solver`` with the scope-aware accelerated solver.
+
+    ``linear_options`` is the global rewrite (legacy ``--xla-linear-solver``
+    value); ``scoped_linear_options`` maps ``"thermal"`` / ``"mechanics"`` to
+    a ``linear`` block that wins over the global one for problems of that
+    scope (``None`` entries fall through to the global block, and a global
+    ``None`` keeps whatever block the stepper wrote). ``fallback_options`` is
+    the block used to retry a failed solve when ``fallback_to_spsolve`` is
+    true (default: SciPy spsolve, the historical behaviour).
+    """
     original_solver = base_module.solver
-    fallback_options = {"spsolve_solver": {}}
+    fallback_block = (
+        dict(fallback_options) if fallback_options else {"spsolve_solver": {}}
+    )
+    scoped_blocks: Dict[str, Optional[Dict[str, Any]]] = {
+        scope: (dict(block) if block else None)
+        for scope, block in (scoped_linear_options or {}).items()
+    }
     # Problems marked prefer_direct_linear_solver (the stepper's release
     # solve: the raft cut plus rigid-body anchors give the worst-conditioned
     # matrix of the run, and Krylov solvers stall on it) are routed to the
     # multithreaded PARDISO direct path up front, instead of burning a failed
-    # iterative attempt plus the single-threaded spsolve fallback on every
-    # Newton iteration. Only applies when the configured solver is iterative.
-    direct_preference_options = {"custom_solver": _PardisoCustomSolver("phase23")}
-    iterative_solver_keys = frozenset(
-        {"jax_solver", "petsc_solver", "amgx_solver",
-         "cg_solver", "bicgstab_solver", "gmres_solver"}
-    )
+    # iterative attempt plus the single-threaded fallback on every Newton
+    # iteration. Only applies when the block active for that problem is
+    # iterative; the shared instance keeps the factorisation handle alive.
+    direct_preference_options = {"custom_solver": shared_pardiso_solver("phase23")}
     solve_internal_stages = (
         STAGE_LOCAL_ASSEMBLY,
         STAGE_GLOBAL_MATRIX,
@@ -1111,7 +1096,28 @@ def install_solver_patch(
             return "thermal"
         return None
 
-    def run_original_solver(problem, patched_options):
+    def _active_linear_options(scope):
+        block = scoped_blocks.get(scope) if scope is not None else None
+        return block if block is not None else linear_options
+
+    def _bind_custom_solver(block, problem):
+        # Custom solvers that need mesh data (pyamg rigid-body modes) expose
+        # bind_problem(); binding must never break a solve.
+        if not block:
+            return
+        bind = getattr(block.get("custom_solver"), "bind_problem", None)
+        if bind is None:
+            return
+        try:
+            bind(problem)
+        except Exception as exc:  # pragma: no cover - defensive
+            print(
+                f"WARNING: custom linear solver bind_problem failed: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+
+    def run_original_solver(problem, patched_options, active_options):
         if profiler is None:
             if profile_solver_call:
                 with _profile_stage(profiler, STAGE_SOLVER):
@@ -1123,7 +1129,7 @@ def install_solver_patch(
             for stage in solve_internal_stages
         }
         profile_scope = _newton_profile_scope(problem)
-        pardiso_before = _pardiso_stats_snapshot(linear_options)
+        pardiso_before = _pardiso_stats_snapshot(active_options)
         t0 = time.perf_counter()
         try:
             if profile_solver_call:
@@ -1141,7 +1147,7 @@ def install_solver_patch(
                 STAGE_NONLINEAR_SOLVE_OVERHEAD,
                 max(0.0, elapsed - internal_seconds),
             )
-            pardiso_after = _pardiso_stats_snapshot(linear_options)
+            pardiso_after = _pardiso_stats_snapshot(active_options)
             if (
                 profile_scope is not None
                 and pardiso_before is not None
@@ -1185,20 +1191,20 @@ def install_solver_patch(
     def accelerated_solver(problem, solver_options=None):
         if profiler is not None:
             profiler.record_setup_before_first_solve()
-        patched_options = (
-            rewrite_solver_options(solver_options or {}, dict(linear_options))
-            if linear_options is not None
-            else solver_options
-        )
+        profile_scope = _newton_profile_scope(problem)
+        active_options = _active_linear_options(profile_scope)
         if (
             getattr(problem, "prefer_direct_linear_solver", False)
-            and linear_options is not None
-            and iterative_solver_keys.intersection(linear_options)
+            and active_options is not None
+            and ITERATIVE_LINEAR_KEYS.intersection(active_options)
         ):
-            patched_options = rewrite_solver_options(
-                solver_options or {}, direct_preference_options
-            )
-        profile_scope = _newton_profile_scope(problem)
+            active_options = direct_preference_options
+        _bind_custom_solver(active_options, problem)
+        patched_options = (
+            rewrite_solver_options(solver_options or {}, dict(active_options))
+            if active_options is not None
+            else solver_options
+        )
         if profile_scope is not None:
             patched_options = inject_newton_option(
                 patched_options, "_profile_scope", profile_scope
@@ -1219,7 +1225,7 @@ def install_solver_patch(
                 profiler,
             )
         try:
-            return run_original_solver(problem, patched_options)
+            return run_original_solver(problem, patched_options, active_options)
         except Exception as exc:
             # A Newton stall is a property of the nonlinear problem, not of the
             # linear backend: SciPy spsolve reproduces pardiso stall residuals
@@ -1231,9 +1237,9 @@ def install_solver_patch(
                 and "Newton solver did not converge" in str(exc)
             )
             if (
-                linear_options is None
+                active_options is None
                 or not fallback_to_spsolve
-                or "spsolve_solver" in linear_options
+                or same_linear_backend(active_options, fallback_block)
                 or newton_stall
             ):
                 raise
@@ -1246,11 +1252,13 @@ def install_solver_patch(
                 )
             print(
                 "WARNING: experimental linear solver failed; retrying this solve "
-                f"with SciPy spsolve. Error: {type(exc).__name__}: {exc}",
+                f"with {linear_block_label(fallback_block)}. "
+                f"Error: {type(exc).__name__}: {exc}",
                 flush=True,
             )
+            _bind_custom_solver(fallback_block, problem)
             retry_options = rewrite_solver_options(
-                solver_options or {}, fallback_options
+                solver_options or {}, fallback_block
             )
             if profile_scope is not None:
                 retry_options = inject_newton_option(
@@ -1266,7 +1274,7 @@ def install_solver_patch(
                     retry_options,
                     profiler,
                 )
-            return run_original_solver(problem, retry_options)
+            return run_original_solver(problem, retry_options, fallback_block)
 
     base_module.solver = accelerated_solver
 
@@ -3272,6 +3280,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(base, argv_list)
     apply_runtime_env(args)
     replacement = linear_options_from_args(args)
+    scoped_replacement = scoped_linear_options_from_args(args)
+    fallback_block = build_fallback_linear_block(
+        getattr(args, "xla_fallback_solver", "spsolve"),
+        pardiso_mode_default=getattr(args, "xla_pardiso_mode", None),
+    )
+    fallback_enabled = bool(args.xla_fallback_to_spsolve) and fallback_block is not None
 
     report = ProfilingReport(label=args.profile_label)
     report.meta["base_solver"] = str(BASE_SOLVER_PATH)
@@ -3288,6 +3302,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         if replacement
         else copy.deepcopy(replacement)
+    )
+    report.meta["scoped_linear_solvers"] = {
+        scope: (linear_block_label(block) if block else None)
+        for scope, block in scoped_replacement.items()
+    }
+    report.meta["scoped_linear_solver_specs"] = {
+        scope: json_safe_spec(spec)
+        for scope, spec in scoped_specs_from_args(args).items()
+    }
+    report.meta["fallback_linear_solver"] = (
+        linear_block_label(fallback_block) if fallback_enabled else "disabled"
     )
     report.meta["full_loop_xla"] = False
     report.meta["thermal_warm_start_enabled"] = bool(
@@ -3350,7 +3375,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         configure_jax_fem_logging(args.xla_quiet_jax_fem_logs, report)
-        print_acceleration_summary(args, replacement)
+        print_acceleration_summary(
+            args, replacement, scoped_replacement,
+            fallback_block if fallback_enabled else None,
+        )
         if args.xla_show_devices:
             show_jax_devices()
         if args.xla_dry_run:
@@ -3400,17 +3428,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         install_solver_patch(
             base,
             replacement,
-            fallback_to_spsolve=args.xla_fallback_to_spsolve,
+            fallback_to_spsolve=fallback_enabled,
             profiler=report,
             profile_solver_call=False,
             thermal_warm_start=args.xla_thermal_warm_start,
             residual_only_check=args.xla_residual_only_check,
+            scoped_linear_options=scoped_replacement,
+            fallback_options=fallback_block,
         )
         base.parse_args = lambda: args
         rc = base.main()
         return int(rc or 0)
     finally:
         pardiso_stats = _pardiso_stats_snapshot(replacement)
+        for scope, block in scoped_replacement.items():
+            scoped_stats = _pardiso_stats_snapshot(block)
+            if scoped_stats is not None:
+                report.meta[f"{scope}_custom_solver_stats"] = scoped_stats
+                if pardiso_stats is None:
+                    pardiso_stats = scoped_stats
         if pardiso_stats is not None:
             report.meta["pardiso_stats"] = pardiso_stats
         report.finish()

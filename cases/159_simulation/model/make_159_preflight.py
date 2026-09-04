@@ -456,6 +456,14 @@ def runner_contract(cfg: dict, *, mesh_path: Path, path: Path, material: Path, l
         if lin.get("mechanics_direct"):
             # Hybrid mode: thermal on the iterative GPU solver, mechanics on PARDISO.
             argv.append("--mechanics-direct-solver")
+    for scope in ("thermal", "mechanics"):
+        # Per-physics blocks (spec keys documented in jax_fem_am/solvers/linear.py);
+        # compact, key-sorted JSON so the contract fingerprint is stable.
+        spec = lin.get(scope)
+        if spec:
+            argv += [f"--{scope}-linear-solver", json.dumps(spec, sort_keys=True, separators=(",", ":"))]
+    if lin.get("fallback"):
+        argv += ["--xla-fallback-solver", str(lin["fallback"])]
     if tm["release_after_cooling"]:
         argv += ["--release-after-cooling", "--release-anchor-mode", "rigid_body",
                  "--release-cut-box", f"{box[0]:.12g}", f"{box[1]:.12g}", f"{box[2]:.12g}", f"{box[3]:.12g}",
