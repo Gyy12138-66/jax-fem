@@ -202,3 +202,8 @@ A 组诊断(倾倒矩阵离线):热学活跃块 κ(Jacobi 缩放)12–42、与�
 ### 11.7 pyamg 后端的 GPU V-cycle(`device: gpu`)
 
 层级仍由 pyamg 在 CPU 构建(每个稀疏模式一次),`device: gpu` 时把各层 A/P/R 转成 jax CSR、光滑器用阻尼 Jacobi(ω = smoother_omega / ρ(D⁻¹A),ρ 由 pyamg 的 `rho_D_inv_A` 估计,与 CPU 路径的 `('jacobi', {'withrho': True})` 同一公式)、最粗层用伪逆,整个 V-cycle 和带迭代计数的 PCG 在一个 `jax.jit` 里跑;细层矩阵每次调用用当前值(粗层沿用建层级时的 Galerkin 算子)。`smoother: block_gauss_seidel` 只在 CPU 路径可用(B 组的原始设置)。验收:同一层级、同一光滑器下 GPU 与 CPU 的 CG 迭代数一致,L150 单次求解墙钟压到 PARDISO(6.4 s)以下。
+
+**离线验证(倾倒矩阵,2026-09-04)**:同一层级、同一 Jacobi×2 光滑器下 GPU 与 CPU 的 CG 迭代数逐一相同(L30 69/69,L150 76/76;块 Gauss-Seidel 的 CPU 参考为 46/50)。复用层级后单次求解墙钟 L30 0.50 s、L150 0.76 s(其中 Krylov 0.18 / 0.45 s),对照 PARDISO 分解+回代 2.2 / 6.4 s;首次调用另付 CPU 建层级 3–10 s(每个激活模式一次)。
+
+**真实运行 smoke(2-slab shakedown,`--mechanics-linear-solver '{"backend":"pyamg","device":"gpu"}'`)**:门 RC=0;45 次力学求解零回退、零重建,迭代 14/23/45(min/中位/max),中位墙钟 0.35 s;打印阶段 u_max / vm_max 与 PARDISO 臂相对差 ≤1.6e-7;release 由标记直接路由 PARDISO(5 次);整体 2.24 s/步,PARDISO 力学臂同门 3.69 s/步。第一次 smoke 暴露并修掉三件事:release 标记原先只识别 jax/petsc/amgx 键,pyamg 这类迭代 custom_solver 没被路由(4×300 次白跑后回退);刚体模态原先要求整节点钉死,release 锚点按分量钉死时退化成常数近零空间(现按自由度逐行取刚体模态);pyamg 停滞警告原措辞含 "did not converge",被 `check_159.py` 的 Newton 失败正则误计(现改 "stalled")。显存:2-slab 运行期间 GPU 占用 10.9/16.3 GB(含热学 CG 与装配),生产高度下 S 矩阵与层级还要再加约 1.5–2 GB,是下一步 40-slab 运行要盯的量。
+

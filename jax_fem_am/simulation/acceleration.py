@@ -1196,8 +1196,7 @@ def install_solver_patch(
         active_options = _active_linear_options(profile_scope)
         if (
             getattr(problem, "prefer_direct_linear_solver", False)
-            and active_options is not None
-            and ITERATIVE_LINEAR_KEYS.intersection(active_options)
+            and is_iterative_linear_block(active_options)
         ):
             active_options = direct_preference_options
         _bind_custom_solver(active_options, problem)

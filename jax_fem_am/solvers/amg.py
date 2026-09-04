@@ -91,6 +91,15 @@ def rigid_body_modes(coords: onp.ndarray) -> onp.ndarray:
     return B
 
 
+def rigid_body_modes_for_dofs(coords: onp.ndarray, dofs: onp.ndarray) -> onp.ndarray:
+    """Rows of the six rigid-body modes for the given global dofs
+    (``dof = 3 * node + comp``), so partially pinned nodes are handled."""
+    dofs = onp.asarray(dofs, dtype=onp.int64)
+    nodes, local = onp.unique(dofs // 3, return_inverse=True)
+    B_nodes = rigid_body_modes(coords[nodes])
+    return B_nodes[3 * local + (dofs % 3)]
+
+
 class _IterationCounter:
     def __init__(self) -> None:
         self.k = 0
@@ -378,20 +387,9 @@ class PyamgKrylovSolver:
                 )
                 self._rbm_warned = True
             return None
-        if free.size % 3 != 0:
+        if free.size == 0 or int(free[-1]) // 3 >= self._points.shape[0]:
             return None
-        nodes = free[0::3] // 3
-        expected = (3 * nodes[:, None] + onp.arange(3)[None, :]).ravel()
-        if not onp.array_equal(expected, free):
-            if not self._rbm_warned:
-                warnings.warn(
-                    "pyamg rigid_body near-nullspace: free dofs are not whole nodes; "
-                    "falling back to the constant near-nullspace",
-                    RuntimeWarning,
-                )
-                self._rbm_warned = True
-            return None
-        return rigid_body_modes(self._points[nodes])
+        return rigid_body_modes_for_dofs(self._points, free)
 
     # -- hierarchy ------------------------------------------------------------------
     def _smoother_spec(self):
@@ -599,7 +597,7 @@ class PyamgKrylovSolver:
         if not converged:
             return self._direct_fallback(
                 A, b, x0, linear_options,
-                f"did not converge (rel_res {self.stats['last_rel_res']:.2e} after "
+                f"stalled (rel_res {self.stats['last_rel_res']:.2e} after "
                 f"{self.stats['last_iterations']} {self.method} iterations)",
             )
         x_full[free] = y * scale if scale is not None else y

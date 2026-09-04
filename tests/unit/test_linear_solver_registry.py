@@ -239,6 +239,10 @@ class ScopedSolverPatchTest(unittest.TestCase):
         module.solver(ThermoMechanical(prefer_direct=True), solver_options={"newton": {"linear": {"spsolve_solver": {}}}})
         block = calls[0][1]["newton"]["linear"]
         self.assertIs(block["custom_solver"], registry.shared_pardiso_solver("phase23"))
+        # an iterative custom solver (pyamg) is re-routed as well
+        module, calls = self._install({"mechanics": registry.build_linear_block("pyamg")})
+        module.solver(ThermoMechanical(prefer_direct=True), solver_options={"newton": {"linear": {"spsolve_solver": {}}}})
+        self.assertIs(calls[0][1]["newton"]["linear"]["custom_solver"], registry.shared_pardiso_solver("phase23"))
         # a direct mechanics block is left alone
         custom = _RecordingCustom()
         module, calls = self._install({"mechanics": {"custom_solver": custom}})

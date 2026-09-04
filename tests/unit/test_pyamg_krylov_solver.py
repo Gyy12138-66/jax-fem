@@ -136,6 +136,24 @@ class PyamgKrylovSolverTest(unittest.TestCase):
         self.assertEqual(gpu.stats["hierarchy_rebuilds"], 0)
         self.assertEqual(gpu.stats["calls"], 2)
 
+    def test_partially_pinned_nodes_keep_rigid_body_modes(self):
+        # pin single components (like the release anchors), not whole nodes
+        P = pyamg.gallery.poisson((5, 5, 5), format="csr")
+        A = sp.kron(P, sp.identity(3), format="csr")
+        rows = [0, 4, 8, 3 * 7 + 2, 3 * 20 + 1]
+        A = _pin_rows(A, rows)
+        b = np.random.default_rng(1).standard_normal(A.shape[0])
+        b[rows] = 0.0
+        x0 = np.zeros(A.shape[0])
+        solver = amg.PyamgKrylovSolver(tol=1e-9, maxiter=300, max_coarse=20, device="jax")
+        solver.bind_problem(SimpleNamespace(fes=[SimpleNamespace(points=_grid_coords((5, 5, 5)), vec=3)]))
+        x = solver(FakePetscMat(A), b, x0, {})
+        self.assertLess(np.linalg.norm(A @ x - b) / np.linalg.norm(b), 1e-8)
+        self.assertEqual(solver._cache.hierarchy_info["near_nullspace"], "rigid_body")
+        B = amg.rigid_body_modes_for_dofs(_grid_coords((5, 5, 5)), np.array([0, 1, 2, 5]))
+        self.assertEqual(B.shape, (4, 6))
+        np.testing.assert_allclose(B[:3], amg.rigid_body_modes(_grid_coords((5, 5, 5))[[0, 1]])[:3])
+
     def test_jax_device_scalar_problem(self):
         P = pyamg.gallery.poisson((8, 8, 8), format="csr")
         rows = list(range(10))
