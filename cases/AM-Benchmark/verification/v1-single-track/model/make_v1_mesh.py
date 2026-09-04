@@ -12,19 +12,56 @@ Geometry (inputs/balbaa-model.json single_track_model + D-V1-16):
 Mesh: uniform 10 um hexes (Balbaa: min 10 um in the powder layer,
 substrate grading unspecified -> D-V1-14 uniform choice).
 100 x 48 x 30 = 144,000 elements. Units: meters, build axis z.
+
+Defaults reproduce the historical mesh byte-for-byte. The overrides exist
+for the WP2 convergence ladder (--cell-size 20/10/5 um) and the V1-E
+bare-plate domain sweep (--lx/--ly/--lz); every dimension must divide
+evenly by the cell size.
 """
+import argparse
 from pathlib import Path
 
-DX = DY = DZ = 10.0e-6
-NX, NY, NZ = 100, 48, 30
-LX, LY, LZ = NX * DX, NY * DY, NZ * DZ
+LAYER_THICKNESS = 20.0e-6
 
-out = Path(__file__).parent / "v1_single_track_c3d8.inp"
+ap = argparse.ArgumentParser()
+ap.add_argument("--cell-size", type=float, default=10.0e-6,
+                help="uniform hex edge in metres (default 10 um)")
+ap.add_argument("--lx", type=float, default=1.0e-3)
+ap.add_argument("--ly", type=float, default=0.48e-3)
+ap.add_argument("--lz", type=float, default=0.30e-3,
+                help="total depth incl. the 20 um top layer")
+ap.add_argument("--output", type=Path,
+                default=Path(__file__).parent / "v1_single_track_c3d8.inp")
+args = ap.parse_args()
+
+DX = DY = DZ = args.cell_size
+
+
+def _count(length, name):
+    n = round(length / args.cell_size)
+    if abs(n * args.cell_size - length) > 1e-12:
+        raise SystemExit(
+            f"{name}={length} is not an integer multiple of "
+            f"cell size {args.cell_size}"
+        )
+    return n
+
+
+NX, NY, NZ = _count(args.lx, "lx"), _count(args.ly, "ly"), _count(args.lz, "lz")
+n_layer = round(LAYER_THICKNESS / args.cell_size)
+if abs(n_layer * args.cell_size - LAYER_THICKNESS) > 1e-12:
+    raise SystemExit(
+        f"cell size {args.cell_size} does not tile the 20 um layer"
+    )
+LX, LY, LZ = NX * DX, NY * DY, NZ * DZ
+substrate_top = LZ - LAYER_THICKNESS
+
+out = args.output
 
 def nid(i, j, k):
     return 1 + i + j * (NX + 1) + k * (NX + 1) * (NY + 1)
 
-with open(out, "w") as f:
+with open(out, "w", newline="\n") as f:
     f.write("*HEADING\n")
     f.write("V1 single-track Balbaa2022-parity structured C3D8 mesh "
             "(units: m, build axis z, 20um powder layer on 280um substrate)\n")
@@ -49,4 +86,4 @@ with open(out, "w") as f:
 
 print(f"wrote {out}: {(NX+1)*(NY+1)*(NZ+1)} nodes, {eid} elements")
 print(f"domain: {LX*1e3:.2f} x {LY*1e3:.2f} x {LZ*1e3:.2f} mm")
-print(f"substrate top z = {28*DZ*1e6:.0f} um; layer top z = {LZ*1e6:.0f} um")
+print(f"substrate top z = {substrate_top*1e6:.0f} um; layer top z = {LZ*1e6:.0f} um")

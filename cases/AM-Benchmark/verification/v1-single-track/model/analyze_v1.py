@@ -28,14 +28,20 @@ import numpy as np
 
 SOLIDUS = 1563.0
 C2K = 273.15
-LAYER_TOP = 300.0e-6
-SUBSTRATE_TOP = 280.0e-6
-PROBE = np.array([0.5e-3, 0.24e-3, LAYER_TOP])
 
 ap = argparse.ArgumentParser()
 ap.add_argument("run_dir")
 ap.add_argument("--out", default=None)
+ap.add_argument("--layer-top", type=float, default=300.0e-6,
+                help="z of the powder-layer top in metres (V1-E domains differ)")
+ap.add_argument("--substrate-top", type=float, default=280.0e-6)
+ap.add_argument("--probe-y", type=float, default=0.24e-3,
+                help="track-centre y for the cooling-rate probe")
 args = ap.parse_args()
+
+LAYER_TOP = args.layer_top
+SUBSTRATE_TOP = args.substrate_top
+PROBE = np.array([0.5e-3, args.probe_y, LAYER_TOP])
 
 vtus = sorted(glob.glob(os.path.join(args.run_dir, "*.vtu")))
 if not vtus:
@@ -64,11 +70,14 @@ cell_centers = pts[cells].mean(axis=1)
 probe_node = int(np.argmin(np.linalg.norm(pts - PROBE, axis=1)))
 probe_err = float(np.linalg.norm(pts[probe_node] - PROBE))
 
-# structured-grid shape (make_v1_mesh.py: i fastest, then j, then k)
-NX, NY, NZ = 100, 48, 30
-XS = np.arange(NX + 1) * 10.0e-6
-YS = np.arange(NY + 1) * 10.0e-6
-ZS = np.arange(NZ + 1) * 10.0e-6
+# structured-grid axes inferred from the node coordinates, so any uniform
+# make_v1_mesh.py output works (convergence ladder cell sizes, V1-E domains).
+# Node ordering stays i fastest, then j, then k.
+XS = np.unique(np.round(pts[:, 0], 9))
+YS = np.unique(np.round(pts[:, 1], 9))
+ZS = np.unique(np.round(pts[:, 2], 9))
+NX, NY, NZ = len(XS) - 1, len(YS) - 1, len(ZS) - 1
+CELL = float(ZS[1] - ZS[0])
 
 records = []
 Tmax_nodal = None
@@ -109,14 +118,14 @@ if "_maxTh" in last:
         def width(sel):
             if not sel.any():
                 return 0.0
-            # cell centers are half a cell from the faces; add one cell (10 um)
-            return float(fc[sel, 1].max() - fc[sel, 1].min() + 10.0e-6)
+            # cell centers are half a cell from the faces; add one cell
+            return float(fc[sel, 1].max() - fc[sel, 1].min() + CELL)
         geom = {
             "n_fused_cells": int(fused.sum()),
             "width_mid_um": width(mid) * 1e6,
             "width_steady_max_um": width(steady) * 1e6,
-            "depth_from_layer_top_um": (LAYER_TOP - float(fc[steady, 2].min() - 5.0e-6)) * 1e6 if steady.any() else 0.0,
-            "depth_from_substrate_top_um": (SUBSTRATE_TOP - float(fc[steady, 2].min() - 5.0e-6)) * 1e6 if steady.any() else 0.0,
+            "depth_from_layer_top_um": (LAYER_TOP - float(fc[steady, 2].min() - 0.5 * CELL)) * 1e6 if steady.any() else 0.0,
+            "depth_from_substrate_top_um": (SUBSTRATE_TOP - float(fc[steady, 2].min() - 0.5 * CELL)) * 1e6 if steady.any() else 0.0,
             "fusion_x_extent_mm": [float(fc[:, 0].min()) * 1e3, float(fc[:, 0].max()) * 1e3],
         }
 

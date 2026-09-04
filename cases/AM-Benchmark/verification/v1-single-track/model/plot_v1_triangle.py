@@ -16,9 +16,11 @@ import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
 import numpy as np
 
-# ---- 中文字体:借用 Windows 侧字体(WSL 无 CJK 字体) ----
+# ---- 中文字体:借用 Windows 侧字体(WSL 无 CJK 字体;原生 Windows 同样适用) ----
 for cand in ("/mnt/c/Windows/Fonts/msyh.ttc", "/mnt/c/Windows/Fonts/simhei.ttf",
-             "/mnt/c/Windows/Fonts/msyhl.ttc"):
+             "/mnt/c/Windows/Fonts/msyhl.ttc",
+             "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf",
+             "C:/Windows/Fonts/msyhl.ttc"):
     if Path(cand).exists():
         fm.fontManager.addfont(cand)
         plt.rcParams["font.family"] = fm.FontProperties(fname=cand).get_name()
@@ -94,10 +96,10 @@ fig.suptitle("V1 单道熔池三角对照:我方 vs NIST AMB2018-02 实测 vs Ba
 fig.legend(handles=handles, labels=["我方求解器", "NIST 实测", "Balbaa 2022 (ABAQUS)"],
            frameon=False, fontsize=9.5, labelcolor=INK2, handlelength=1.2,
            ncol=3, loc="upper center", bbox_to_anchor=(0.5, 0.945))
-fig.text(0.5, 0.008,
-         "IN625 裸板单道,熔池边界=固相线 1290 °C(两参考文献共同约定);零标定——"
-         "无任何参数向实测或已发表值回调。Balbaa 仅在工况 B 发表了预测值;标注数值仅示工况 B。",
-         ha="center", fontsize=8, color=MUTED)
+fig.text(0.5, 0.004,
+         "IN625 单道,Balbaa 验证变体(20 µm 粉层 + 280 µm 基板)——非 NIST 裸板工况,与实测为跨工况诊断对照;\n"
+         "熔池边界=固相线 1290 °C;零标定——无任何参数向实测或已发表值回调。Balbaa 仅在工况 B 发表预测值。",
+         ha="center", va="bottom", fontsize=7.5, color=MUTED)
 fig.tight_layout(rect=[0, 0.035, 1, 0.895], w_pad=2.4)
 fa = OUT / "v1_triangle_absolute.png"
 fig.savefig(fa, dpi=200, facecolor=SURF)
@@ -131,10 +133,10 @@ ax.legend(frameon=False, fontsize=9, loc="lower left", labelcolor=INK2,
           handlelength=1.2)
 ax.set_title("工况 B(195 W / 800 mm/s)相对实测偏差:我方 vs 已发表 ABAQUS 结果",
              fontsize=11.5, color=INK, pad=10)
-fig2.text(0.5, 0.01,
-          "深度:我方 −0.5%(达测量精度)对 已发表 −51.6%;长度两者均低估,"
-          "原因为熔池内流动(Marangoni)未建模,已登记。",
-          ha="center", fontsize=8, color=MUTED)
+fig2.text(0.5, 0.005,
+          "深度:我方 −0.5% 对 已发表 −51.6%(单网格诊断值;模型为 20 µm 粉层变体,与裸板实测跨工况,\n"
+          "网格收敛与热源实现不确定度未闭合);长度两者均低估,原因为熔池内流动(Marangoni)未建模,已登记。",
+          ha="center", va="bottom", fontsize=7.5, color=MUTED)
 fig2.tight_layout(rect=[0, 0.05, 1, 1])
 fb = OUT / "v1_triangle_relative_caseB.png"
 fig2.savefig(fb, dpi=200, facecolor=SURF)
