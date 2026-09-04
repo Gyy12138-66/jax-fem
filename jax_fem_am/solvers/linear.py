@@ -115,7 +115,7 @@ _ALLOWED_KEYS: Dict[str, frozenset] = {
     "pyamg": frozenset(
         {"backend", "method", "near_nullspace", "scaled", "tol", "maxiter",
          "max_coarse", "rebuild", "fallback", "verbose", "device", "smoother",
-         "smoother_sweeps", "smoother_omega"}
+         "smoother_sweeps", "smoother_omega", "rebuild_iter_factor"}
     ),
 }
 
@@ -210,6 +210,7 @@ def normalize_linear_solver_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
         )
         out["smoother_sweeps"] = int(out.get("smoother_sweeps", 2))
         out["smoother_omega"] = float(out.get("smoother_omega", 4.0 / 3.0))
+        out["rebuild_iter_factor"] = float(out.get("rebuild_iter_factor", 3.0))
     return out
 
 

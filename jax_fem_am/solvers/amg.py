@@ -238,7 +238,7 @@ class _PatternCache:
     __slots__ = (
         "signature", "n", "free", "pin", "keep", "ff_indptr", "ff_indices", "ff_rows",
         "ff_diag_pos", "hierarchy", "hierarchy_info", "jax_levels", "jax_coarse_pinv",
-        "jax_omega0", "dev_rows", "dev_cols", "dev_indptr", "dev_diag_pos",
+        "jax_omega0", "dev_rows", "dev_cols", "dev_indptr", "dev_diag_pos", "fresh_iterations",
     )
 
     def __init__(self, signature, n, free, pin, keep, ff_indptr, ff_indices, ff_rows, ff_diag_pos):
@@ -260,6 +260,7 @@ class _PatternCache:
         self.dev_cols = None
         self.dev_indptr = None
         self.dev_diag_pos = None
+        self.fresh_iterations = None
 
 
 class PyamgKrylovSolver:
@@ -283,6 +284,7 @@ class PyamgKrylovSolver:
         smoother: str = "jacobi",
         smoother_sweeps: int = 2,
         smoother_omega: float = 4.0 / 3.0,
+        rebuild_iter_factor: float = 3.0,
         verbose: bool = False,
     ) -> None:
         if method not in ("cg", "bicgstab"):
@@ -317,6 +319,12 @@ class PyamgKrylovSolver:
         self.smoother = smoother
         self.smoother_sweeps = int(smoother_sweeps)
         self.smoother_omega = float(smoother_omega)
+        # Adaptive staleness rule: a reused hierarchy whose solve needs more than
+        # rebuild_iter_factor x the iterations of the fresh-hierarchy solve is
+        # dropped, so the next call rebuilds it (0 disables). In the 40-slab run
+        # the tangent drifts within a slab (elastic predictor -> plastic, then
+        # cooling): reused/fresh median 1.4, 90% 2.4, a few solves hit maxiter.
+        self.rebuild_iter_factor = float(rebuild_iter_factor)
         self.verbose = bool(verbose)
         smoother_label = (
             f"{smoother}x{self.smoother_sweeps}" if smoother == "jacobi" else "block_gs(sym)"
@@ -338,6 +346,7 @@ class PyamgKrylovSolver:
             "solve_s": 0.0,
             "pattern_rebuilds": 0,
             "hierarchy_rebuilds": 0,
+            "adaptive_rebuilds": 0,
             "fallbacks": 0,
             "last_iterations": 0,
             "last_rel_res": None,
@@ -614,7 +623,26 @@ class PyamgKrylovSolver:
                     f"hierarchy {'reused' if reused and attempt == 0 else 'fresh'})",
                     flush=True,
                 )
-            if converged or not reused or attempt == 1:
+            if converged:
+                if not reused or attempt == 1:
+                    cache.fresh_iterations = iters
+                elif (
+                    self.rebuild_iter_factor > 0
+                    and cache.fresh_iterations
+                    and iters > self.rebuild_iter_factor * cache.fresh_iterations
+                ):
+                    # stale hierarchy: drop it so the next call rebuilds
+                    cache.hierarchy = None
+                    self.stats["adaptive_rebuilds"] += 1
+                    if self.verbose:
+                        print(
+                            f"pyamg[{self.device}]: {iters} iterations > "
+                            f"{self.rebuild_iter_factor:g} x fresh {cache.fresh_iterations}; "
+                            "hierarchy marked for rebuild",
+                            flush=True,
+                        )
+                break
+            if not reused or attempt == 1:
                 break
             # The cached hierarchy no longer matches the tangent: rebuild once.
             self.stats["hierarchy_rebuilds"] += 1

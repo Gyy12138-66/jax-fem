@@ -181,6 +181,36 @@ class PyamgKrylovSolverTest(unittest.TestCase):
         self.assertLess(np.linalg.norm(A @ x - b) / np.linalg.norm(b), 1e-7)
         self.assertIn("block_gs", solver.label)
 
+    def test_adaptive_rebuild_drops_a_stale_hierarchy(self):
+        A, b, x0, rows, coords = self._vector_system()
+        problem = SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)])
+        solver = amg.PyamgKrylovSolver(tol=1e-8, maxiter=2000, max_coarse=20, rebuild_iter_factor=1.5)
+        solver.bind_problem(problem)
+        solver(FakePetscMat(A), b, x0, {})
+        fresh = solver._cache.fresh_iterations
+        self.assertGreater(fresh, 0)
+        # same pattern, strongly anisotropic free block -> hierarchy no longer fits
+        coo = A.tocoo()
+        w = np.where(np.isin(coo.row, rows), 1.0, np.where(coo.row % 3 == coo.col % 3, 1.0, 0.02))
+        scale = np.where((coo.row // 3 == coo.col // 3) | np.isin(coo.row, rows), 1.0, 40.0 ** ((coo.row % 5) / 4.0))
+        A2 = sp.csr_matrix((coo.data * w * scale, (coo.row, coo.col)), shape=A.shape)
+        A2 = 0.5 * (A2 + A2.T)
+        A2 = _pin_rows(A2, rows)
+        x = solver(FakePetscMat(A2), b, x0, {})
+        self.assertLess(np.linalg.norm(A2 @ x - b) / np.linalg.norm(b), 1e-7)
+        if solver.stats['last_iterations'] > 1.5 * fresh:
+            self.assertEqual(solver.stats['adaptive_rebuilds'], 1)
+            self.assertIsNone(solver._cache.hierarchy)
+            solver(FakePetscMat(A2), b, x0, {})
+            self.assertIsNotNone(solver._cache.hierarchy)
+            self.assertLessEqual(solver.stats['last_iterations'], solver.stats['iterations'])
+        # rule disabled -> nothing dropped
+        off = amg.PyamgKrylovSolver(tol=1e-8, maxiter=2000, max_coarse=20, rebuild_iter_factor=0)
+        off.bind_problem(problem)
+        off(FakePetscMat(A), b, x0, {})
+        off(FakePetscMat(A2), b, x0, {})
+        self.assertEqual(off.stats['adaptive_rebuilds'], 0)
+
     def test_all_rows_pinned_returns_rhs(self):
         A = sp.identity(6, format="csr")
         b = np.arange(6, dtype=float)
