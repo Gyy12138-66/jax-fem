@@ -100,6 +100,23 @@ def rigid_body_modes_for_dofs(coords: onp.ndarray, dofs: onp.ndarray) -> onp.nda
     return B_nodes[3 * local + (dofs % 3)]
 
 
+def _dense_inverse(Ac: onp.ndarray) -> onp.ndarray:
+    """Inverse of the coarsest-level operator: Cholesky when SPD, else a
+    symmetric pseudo-inverse (pyamg's default coarse solver is pinv)."""
+    import scipy.linalg as sla
+
+    Ac = onp.asarray(Ac, dtype=onp.float64)
+    Ac = 0.5 * (Ac + Ac.T)
+    try:
+        c, lower = sla.cho_factor(Ac, check_finite=False)
+        inv = sla.cho_solve((c, lower), onp.eye(Ac.shape[0]), check_finite=False)
+        if onp.all(onp.isfinite(inv)):
+            return inv
+    except sla.LinAlgError:
+        pass
+    return sla.pinvh(Ac, check_finite=False)
+
+
 class _IterationCounter:
     def __init__(self) -> None:
         self.k = 0
@@ -407,9 +424,15 @@ class PyamgKrylovSolver:
             # S = D^-1/2 A D^-1/2  =>  near-nullspace of S is D^1/2 B.
             B = B / scale[:, None]
         sm = self._smoother_spec()
+        # pyamg stops coarsening when dofs / blocksize <= max_coarse, and coarse
+        # levels carry blocksize = number of near-nullspace candidates; divide so
+        # that self.max_coarse is (approximately) a bound in dofs.
+        n_candidates = int(B.shape[1]) if B is not None else 1
+        max_coarse_blocks = max(10, self.max_coarse // n_candidates)
         ml = pyamg.smoothed_aggregation_solver(
-            S, B=B, max_coarse=self.max_coarse, presmoother=sm, postsmoother=sm
+            S, B=B, max_coarse=max_coarse_blocks, presmoother=sm, postsmoother=sm
         )
+        t_pyamg = time.perf_counter() - t0
         cache.hierarchy = ml
         cache.hierarchy_info = {
             "levels": len(ml.levels),
@@ -422,9 +445,14 @@ class PyamgKrylovSolver:
         self.stats["setup_s"] += setup
         self.stats["last_levels"] = cache.hierarchy_info["levels"]
         self.stats["last_operator_complexity"] = cache.hierarchy_info["operator_complexity"]
+        cache.hierarchy_info["level_sizes"] = [int(lvl.A.shape[0]) for lvl in ml.levels]
+        cache.hierarchy_info["setup_pyamg_s"] = t_pyamg
+        cache.hierarchy_info["setup_device_s"] = setup - t_pyamg
         if self.verbose:
             print(
-                f"pyamg[{self.device}]: hierarchy built in {setup:.2f}s -- levels {len(ml.levels)}, "
+                f"pyamg[{self.device}]: hierarchy built in {setup:.2f}s "
+                f"(pyamg {t_pyamg:.2f}s, device/coarse {setup - t_pyamg:.2f}s) -- "
+                f"levels {cache.hierarchy_info['level_sizes']}, "
                 f"operator complexity {ml.operator_complexity():.3f}, "
                 f"near-nullspace {cache.hierarchy_info['near_nullspace']}, smoother {sm[0]}",
                 flush=True,
@@ -455,8 +483,7 @@ class PyamgKrylovSolver:
         lvl0 = ml.levels[0]
         cache.jax_levels = levels
         cache.jax_levels[0] = (None, None, cache.jax_omega0, K["csr"](lvl0.P.tocsr()), K["csr"](lvl0.R.tocsr()))
-        Ac = ml.levels[-1].A.toarray()
-        cache.jax_coarse_pinv = jnp.asarray(onp.linalg.pinv(Ac))
+        cache.jax_coarse_pinv = jnp.asarray(_dense_inverse(ml.levels[-1].A.toarray()))
         if cache.dev_cols is None:
             cache.dev_rows = jnp.asarray(cache.ff_rows)
             cache.dev_cols = jnp.asarray(cache.ff_indices)
