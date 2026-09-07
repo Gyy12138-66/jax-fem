@@ -65,7 +65,9 @@ def scan_log(run: Path) -> dict:
     nan_hits = len(re.findall(r"\bnan\b|\binf\b", text, flags=re.IGNORECASE))
     release = re.search(r"release_vtk=(\S+) release_u_max=([-\d.eE+]+)", text)
     cut = re.search(r"release cut box: deactivating (\d+) cells", text)
+    anchor_rank = re.search(r"release rigid-body anchors: .*constraint rank (\d)/6", text)
     return {
+        "release_anchor_rank": int(anchor_rank.group(1)) if anchor_rank else None,
         "summary_lines": len(summaries),
         "newton_nonconvergence_count": nonconv,
         "cutback_mentions": cutbacks,
@@ -257,15 +259,15 @@ def main() -> None:
                 "u_max_after_m": float(un_a.max()),
                 "u_mean_after_m": float(un_a.mean()),
                 "u_max_after_all_nodes_m": float(np.abs(u_a).max()),
-                "anchor_rank_line": (re.search(r"release rigid-body anchors: .*constraint rank (\d)/6", text) or [None, None])[1],
+                "anchor_rank": log.get("release_anchor_rank"),
                 "removed_cells_vm_MPa_max_after": float(vm_a[removed > 0.5].max() / 1e6) if removed is not None and np.any(removed > 0.5) else None,
             }
         gate["release"] = release
         checks["release_solve_present"] = release.get("checked", False)
         checks["release_removed_substrate"] = release.get("removed_equals_substrate", False)
         checks["release_changed_part_stress"] = release.get("part_vm_changed_by_release", False)
-        if release.get("checked") and release.get("anchor_rank_line") is not None:
-            checks["release_anchor_rank_6"] = release["anchor_rank_line"] == "6"
+        if release.get("checked") and release.get("anchor_rank") is not None:
+            checks["release_anchor_rank_6"] = release["anchor_rank"] == 6
     gate["all_checks_passed"] = all(bool(v) for v in checks.values())
     out = args.output or (run / "cube_smoke_gate.json")
     out.write_text(json.dumps(gate, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
