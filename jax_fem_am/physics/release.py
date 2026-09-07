@@ -961,16 +961,27 @@ def validate_release_anchor_protocol(
     return protocol
 
 
-def make_anchor_mechanics_bc(points, candidate_node_ids=None):
-    # Anchors must sit on load-bearing (printed) material: the mesh extremes
-    # can land on void cells whose near-zero stiffness makes the release
-    # system singular (observed NaN). Pass the printed-node subset.
+#: 3-2-1 rigid-body anchor scheme: anchor0 pins x/y/z, anchor1 pins y/z, anchor2 pins z.
+RIGID_BODY_ANCHOR_COMPONENTS = ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))
+
+
+def select_rigid_body_anchor_nodes(points, candidate_node_ids=None):
+    """Return the three anchor node ids (global) of the 3-2-1 scheme.
+
+    anchor0: minimum x among the candidates; anchor1: farthest candidate from
+    anchor0; anchor2: candidate farthest from the anchor0-anchor1 line.
+    ``candidate_node_ids`` must be material that survives the release cut:
+    raft/support cells count as printed from step 0, and anchors chosen on
+    them are softened by the cut (x 1e-9) and constrain nothing (2026-09-04
+    40-slab shakedowns: two of three anchors on raft nodes, three free
+    rotations left, release displacement arbitrary while stresses agreed).
+    """
+    points = onp.asarray(points, dtype=onp.float64)
     if candidate_node_ids is not None and len(candidate_node_ids) >= 3:
-        candidates = points[onp.asarray(candidate_node_ids)]
+        ids = onp.asarray(candidate_node_ids, dtype=onp.int64)
     else:
-        candidates = points
-    span = max(float((points.max(axis=0) - points.min(axis=0)).max()), 1.0)
-    atol = 1e-8 * span
+        ids = onp.arange(len(points), dtype=onp.int64)
+    candidates = points[ids]
     anchor0_id = int(onp.argmin(candidates[:, 0]))
     anchor0 = candidates[anchor0_id]
     dist0 = onp.linalg.norm(candidates - anchor0, axis=1)
@@ -980,7 +991,46 @@ def make_anchor_mechanics_bc(points, candidate_node_ids=None):
     axis_norm = max(float(onp.linalg.norm(axis)), 1e-12)
     cross_dist = onp.linalg.norm(onp.cross(candidates - anchor0, axis / axis_norm), axis=1)
     anchor2_id = int(onp.argmax(cross_dist))
-    anchor2 = candidates[anchor2_id]
+    return [int(ids[anchor0_id]), int(ids[anchor1_id]), int(ids[anchor2_id])]
+
+
+def rigid_body_anchor_dof_pairs(anchor_node_ids):
+    ids = [int(v) for v in anchor_node_ids]
+    return onp.asarray([(ids[a], c) for a, c in RIGID_BODY_ANCHOR_COMPONENTS], dtype=onp.int64)
+
+
+def validate_rigid_body_anchor_rank(points, anchor_node_ids, retained_node_ids):
+    """Fail closed unless the 3-2-1 anchors sit on retained material and
+    remove all six rigid-body modes. Returns the constraint rank (6)."""
+    points = onp.asarray(points, dtype=onp.float64)
+    anchors = onp.asarray(anchor_node_ids, dtype=onp.int64).reshape(-1)
+    retained = onp.asarray(retained_node_ids, dtype=onp.int64).reshape(-1)
+    outside = anchors[~onp.isin(anchors, retained)]
+    if len(outside):
+        raise ValueError(
+            "release rigid-body anchors must lie on material retained after the cut; "
+            f"nodes {outside.tolist()} at {points[outside].tolist()} are cut or void"
+        )
+    if len(onp.unique(anchors)) != 3:
+        raise ValueError(f"release rigid-body anchors must be three distinct nodes, got {anchors.tolist()}")
+    rank = _rigid_body_constraint_rank(points, rigid_body_anchor_dof_pairs(anchors))
+    if rank != 6:
+        raise ValueError(
+            f"release rigid-body anchors {anchors.tolist()} at {points[anchors].tolist()} "
+            f"constrain only {rank} of 6 rigid-body modes (degenerate geometry)"
+        )
+    return rank
+
+
+def make_anchor_mechanics_bc(points, candidate_node_ids=None):
+    # Anchors must sit on load-bearing material that survives the release cut
+    # (see select_rigid_body_anchor_nodes); the caller validates the rank.
+    points = onp.asarray(points, dtype=onp.float64)
+    span = max(float((points.max(axis=0) - points.min(axis=0)).max()), 1.0)
+    atol = 1e-8 * span
+    anchor0, anchor1, anchor2 = (
+        points[i] for i in select_rigid_body_anchor_nodes(points, candidate_node_ids)
+    )
 
     def at_node(target):
         target = np.asarray(target)

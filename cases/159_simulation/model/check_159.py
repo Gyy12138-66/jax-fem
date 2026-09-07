@@ -238,6 +238,12 @@ def main() -> None:
             eqp_b = cell_field(before, "eq_plastic_strain")
             u_b = np.asarray(before.point_data["u"])
             u_a = np.asarray(after.point_data["u"])
+            # displacement statistics on part nodes that survive the cut (raft and
+            # never-activated void nodes carry meaningless 1e-9-scaled equations)
+            retained_cells = part & ((removed <= 0.5) if removed is not None else True)
+            retained_nodes = np.unique(np.asarray(after.cells[0].data)[retained_cells])
+            un_b = np.linalg.norm(u_b, axis=1)[retained_nodes]
+            un_a = np.linalg.norm(u_a, axis=1)[retained_nodes]
             release = {
                 "checked": True,
                 "release_removed_cells": int(np.sum(removed > 0.5)) if removed is not None else None,
@@ -247,14 +253,19 @@ def main() -> None:
                 "part_vm_MPa_after": {"mean": float(vm_a[part].mean() / 1e6), "max": float(vm_a[part].max() / 1e6)},
                 "part_vm_changed_by_release": bool(not np.allclose(vm_b[part], vm_a[part])),
                 "part_eqp_max_before": float(eqp_b[part].max()),
-                "u_max_before_m": float(np.abs(u_b).max()),
-                "u_max_after_m": float(np.abs(u_a).max()),
+                "u_max_before_m": float(un_b.max()),
+                "u_max_after_m": float(un_a.max()),
+                "u_mean_after_m": float(un_a.mean()),
+                "u_max_after_all_nodes_m": float(np.abs(u_a).max()),
+                "anchor_rank_line": (re.search(r"release rigid-body anchors: .*constraint rank (\d)/6", text) or [None, None])[1],
                 "removed_cells_vm_MPa_max_after": float(vm_a[removed > 0.5].max() / 1e6) if removed is not None and np.any(removed > 0.5) else None,
             }
         gate["release"] = release
         checks["release_solve_present"] = release.get("checked", False)
         checks["release_removed_substrate"] = release.get("removed_equals_substrate", False)
         checks["release_changed_part_stress"] = release.get("part_vm_changed_by_release", False)
+        if release.get("checked") and release.get("anchor_rank_line") is not None:
+            checks["release_anchor_rank_6"] = release["anchor_rank_line"] == "6"
     gate["all_checks_passed"] = all(bool(v) for v in checks.values())
     out = args.output or (run / "cube_smoke_gate.json")
     out.write_text(json.dumps(gate, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

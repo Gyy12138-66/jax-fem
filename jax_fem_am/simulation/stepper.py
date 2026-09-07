@@ -75,6 +75,8 @@ from jax_fem_am.physics.mechanics import ThermoMechanical
 from jax_fem_am.physics.release import (
     load_release_cell_set,
     make_anchor_mechanics_bc,
+    select_rigid_body_anchor_nodes,
+    validate_rigid_body_anchor_rank,
     make_box_anchor_mechanics_bc,
     make_full_bottom_mechanics_bc,
     make_paper_minimal_bottom_mechanics_bc,
@@ -1114,8 +1116,25 @@ def main():
 
     if args.release_after_cooling:
         release_point_fields = None
+        # The cut mask comes first: rigid-body anchors are chosen from printed
+        # material that SURVIVES the cut. Raft/support cells count as printed
+        # from step 0; anchoring on them (2026-09-04 40-slab shakedowns) left
+        # the part free to rotate because the cut softens those rows by 1e-9.
+        release_cut_cell = onp.zeros(len(cells), dtype=bool)
+        release_cut_box_values = None
+        if release_cell_set is not None:
+            release_cut_cell = onp.asarray(release_cell_set.cell_mask, dtype=bool)
+        elif args.release_cut_box is not None:
+            release_cut_box_values = [float(v) for v in args.release_cut_box]
+            lo = onp.asarray(release_cut_box_values[0::2])
+            hi = onp.asarray(release_cut_box_values[1::2])
+            release_cut_cell = onp.all(
+                (cell_centroids >= lo[None, :]) & (cell_centroids <= hi[None, :]),
+                axis=1,
+            )
+        retained_printed_cell = onp.asarray(last_printed_cell, dtype=bool) & (~release_cut_cell)
         printed_node_ids = onp.unique(
-            onp.asarray(cells)[onp.asarray(last_printed_cell, dtype=bool)].reshape(-1)
+            onp.asarray(cells)[retained_printed_cell].reshape(-1)
         )
         if release_cell_set is not None:
             release_bc = exact_release_bc
@@ -1124,13 +1143,18 @@ def main():
                 raise ValueError("--release-anchor-mode box requires --release-anchor-box")
             release_bc = make_box_anchor_mechanics_bc(points, args.release_anchor_box)
         else:
-            release_bc = make_anchor_mechanics_bc(points, candidate_node_ids=printed_node_ids)
-        release_cut_cell = onp.zeros(len(cells), dtype=bool)
-        if release_cell_set is not None:
-            release_cut_cell = onp.asarray(
-                release_cell_set.cell_mask,
-                dtype=bool,
+            rigid_anchor_ids = select_rigid_body_anchor_nodes(points, printed_node_ids)
+            rigid_anchor_rank = validate_rigid_body_anchor_rank(
+                points, rigid_anchor_ids, printed_node_ids
             )
+            print(
+                "release rigid-body anchors: nodes "
+                f"{rigid_anchor_ids} at {onp.asarray(points)[rigid_anchor_ids].tolist()} m, "
+                f"constraint rank {rigid_anchor_rank}/6 on retained printed material "
+                f"({len(printed_node_ids)} candidate nodes, {int(release_cut_cell.sum())} cut cells excluded)"
+            )
+            release_bc = make_anchor_mechanics_bc(points, candidate_node_ids=printed_node_ids)
+        if release_cell_set is not None:
             anchor_nodes, anchor_components, _ = (
                 mechanics.fes[0].Dirichlet_boundary_conditions(release_bc)
             )
@@ -1204,15 +1228,8 @@ def main():
                 f"{int(release_cut_cell.sum())} validated support cells"
             )
         elif args.release_cut_box is not None:
-            cut = [float(v) for v in args.release_cut_box]
-            lo = onp.asarray(cut[0::2])
-            hi = onp.asarray(cut[1::2])
-            release_cut_cell = onp.all(
-                (cell_centroids >= lo[None, :]) & (cell_centroids <= hi[None, :]),
-                axis=1,
-            )
             n_cut = int(release_cut_cell.sum())
-            print(f"release cut box: deactivating {n_cut} cells in {cut}")
+            print(f"release cut box: deactivating {n_cut} cells in {release_cut_box_values}")
         if release_cut_cell.any():
             cut_quad = make_quad_scalar(
                 release_cut_cell.astype(onp.float64),
@@ -1323,7 +1340,17 @@ def main():
             release_cut_cell,
             release_point_fields,
         )
-        print(f"release_vtk={vtk_path} release_u_max={float(np.max(np.abs(u_release[0]))):.12g}")
+        # release_u_max: displacement magnitude over printed nodes that survive the
+        # cut. Cut raft nodes and never-activated void nodes carry 1e-9-scaled
+        # equations whose displacements are numerically meaningless.
+        u_release_np = onp.asarray(u_release[0]).reshape(len(points), -1)
+        u_release_norm = onp.linalg.norm(u_release_np, axis=1)
+        release_u_max_retained = float(u_release_norm[printed_node_ids].max()) if len(printed_node_ids) else 0.0
+        print(
+            f"release_vtk={vtk_path} release_u_max={release_u_max_retained:.12g} "
+            f"release_u_mean={float(u_release_norm[printed_node_ids].mean()) if len(printed_node_ids) else 0.0:.12g} "
+            f"release_u_max_all_nodes={float(onp.max(onp.abs(u_release_np))):.12g}"
+        )
 
 
 if __name__ == "__main__":
