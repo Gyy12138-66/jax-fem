@@ -213,3 +213,15 @@ A 组诊断(倾倒矩阵离线):热学活跃块 κ(Jacobi 缩放)12–42、与�
 
 **release 发现(与求解器无关)**:两臂 release 后打印区应力逐单元一致(vm 最大差 0.6 MPa,eqp 1.6e-6),但位移差 124 mm——在打印节点上拟合为无穷小刚体运动,残差 3.5e-8,即纯刚体。原因:release 的 3 点刚体锚按整件几何选取,`--max-print-layers 40` 时只有 1 个锚点落在已打印材料里(其余在 z>21 mm 的未激活空洞区),打印体保留 3 个转动自由模态,PARDISO 在零空间里给出任意解,`release_u_max`(0.9 vs 124 mm、2-slab 时 2–151 mm)因此无意义;生产全高度时锚点在打印体内,1.06 mm 可信。建议:shakedown 模式下锚点从已打印节点里选,门指标 `release_u_max` 只统计 printed 节点。
 
+### 11.8 release 锚点修复后的 40-slab 验证(2026-09-07,TAG voxel_hybrid_v3)
+
+锚点改为从"printed 且未被切"的节点里选并做秩检查(提交 ba09c49/d890e60)后,三段串行验证:
+
+| 段 | 车道 | s/步 | 门判失败项 | 锚点秩 | release u_max / 均值(保留 printed 节点) |
+|---|---|---|---|---|---|
+| A 2-slab smoke | 默认(auto) | — | 无 | 6 | 2.197 / 1.177 mm |
+| B 40-slab(第一项) | 默认(auto:热学 CG + 力学 PARDISO) | 4.27 | ledger_complete(fast 节奏固有) | 6 | **0.744 / 0.426 mm** |
+| C 40-slab | 力学 pyamg GPU | 2.39 | ledger_complete | 6 | **0.744 / 0.426 mm** |
+
+B 与 C 的 release 位移场在 105,382 个保留 printed 节点上最大差 4.9e-6 mm、相对差 9.2e-7,差值里的刚体分量 2e-7 mm / 6e-9 rad——两条车道给出同一个良态解,不再只是"差一个刚体运动"。vm 最大差 0.22 MPa(2.7e-6),eqp 8e-7;打印阶段 132 行状态相对差 ≤2.8e-7。C 段 pyamg:1,142 次求解,新建层级中位仍约 56,复用中位 64,自适应重建 10 次,零停滞回退;粗层修正后每层建层级 1–5 s。**默认车道 40-slab 的 release 数字(0.744 mm)是第一个可信的 shakedown 回弹值;此前所有 shakedown 的 release_u_max 与生产的 1.06 / 1.34 mm 对比均含自由刚体分量,不可采信。**
+
