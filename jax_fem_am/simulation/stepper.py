@@ -611,6 +611,13 @@ def main():
             ] = "release_physical_dofs_are_build_dof_subset"
         mechanics_location_fns = []
         mechanics_foundation = 0.0
+    elif args.bottom_mechanics_bc == "free_anchor":
+        # Unclamped part: 3-2-1 anchor on three extreme nodes removes the six
+        # rigid-body modes only; bending and contraction are unrestrained.
+        mechanics_bc = make_anchor_mechanics_bc(points)
+        print("free_anchor mechanics BC: 3-2-1 rigid-body anchor, no other restraint")
+        mechanics_location_fns = []
+        mechanics_foundation = 0.0
     elif args.bottom_mechanics_bc == "edge_minimal":
         edge_axis = getattr(args, "edge_minimal_axis", "auto")
         edge_axis_id = None if edge_axis == "auto" else AXIS_TO_ID[edge_axis]

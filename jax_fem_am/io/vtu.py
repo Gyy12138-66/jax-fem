@@ -64,6 +64,8 @@ def make_quad_stress_cell_infos(quad_stress):
                 value = 0.5 * (value + stress_quad[:, quad_idx, col, row])
             cell_infos.append((quad_field_name(f"stress_quad_{suffix}", quad_idx, num_quads), value))
         cell_infos.append((quad_field_name("vm_quad", quad_idx, num_quads), vm_quad[:, quad_idx]))
+    # cell-level von Mises: mean of the quadrature-point values (8 for HEX8 order 2)
+    cell_infos.append(("von_mises", vm_quad.mean(axis=1)))
     return cell_infos
 
 

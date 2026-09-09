@@ -151,13 +151,15 @@ def build_parser(config=None):
                         help="Cap on the hardened yield stress (Pa), ~UTS (Ti64: ~1.15e9). Linear isotropic hardening "
                              "extrapolated past its ~10%% strain validity produced ~2 GPa fictitious von Mises at the "
                              "bottom-clamp region; the cap saturates hardening there. None keeps unbounded legacy hardening.")
-    parser.add_argument("--bottom-mechanics-bc", choices=("fixed", "elastic", "paper_minimal", "edge_minimal"),
+    parser.add_argument("--bottom-mechanics-bc", choices=("fixed", "elastic", "paper_minimal", "edge_minimal", "free_anchor"),
                         default=cfg(config, "bottom_mechanics_bc", "fixed"),
                         help="'fixed' rigidly clamps the base nodes (legacy; models an infinitely stiff build plate and "
                              "concentrates fictitious stress at the clamp edge). 'elastic' replaces the clamp with a "
                              "Winkler elastic foundation on the base faces. 'paper_minimal' restrains every bottom node "
                              "only in the build direction and adds three deterministic in-plane scalar restraints to "
-                             "remove rigid motion while permitting thermal contraction (Kaess 2023 Section 2.3).")
+                             "remove rigid motion while permitting thermal contraction (Kaess 2023 Section 2.3). "
+                             "free_anchor applies only a 3-2-1 rigid-body anchor (three nodes, six DOF) so the whole "
+                             "part is free to bend and contract: a plate lying unclamped (no contact/gravity).")
     parser.add_argument("--edge-minimal-axis", choices=("auto", "x", "y", "z"),
                         default=cfg(config, "edge_minimal_axis", "auto"),
                         help="For --bottom-mechanics-bc edge_minimal (welding plates, Lu 2020 Fig. 2): the in-plane axis "
