@@ -2662,6 +2662,7 @@ def _history_kernel_key(
         _float_arg(args, "liquidus_temperature", 0.0),
         _float_arg(args, "stress_relaxation_temperature", 0.0),
         bool(getattr(args, "reset_plastic_on_melt", True)),
+        bool(getattr(args, "reset_plastic_on_solidify", False)),
         float(base_module.STATE_VOID),
         float(base_module.STATE_POWDER),
         float(base_module.STATE_SOLID),

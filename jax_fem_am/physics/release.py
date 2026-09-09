@@ -469,6 +469,83 @@ def make_full_bottom_mechanics_bc(bottom):
 
     return [[bottom, bottom, bottom], [0, 1, 2], [zero, zero, zero]]
 
+def make_edge_minimal_mechanics_bc(
+    points,
+    *,
+    build_axis_id,
+    plane_axis_ids,
+    base_side="min",
+    edge_axis_id=None,
+    return_metadata=False,
+):
+    """Welding-plate minimal restraint (Lu 2020, J. Manuf. Processes 50, Fig. 2).
+
+    Two edges of the bottom face are selected across ``edge_axis_id`` (default:
+    the first in-plane axis). The edge at the axis minimum is fully fixed
+    (all three DOF); the edge at the axis maximum is fixed only in the build
+    direction. This removes rigid motion without over-constraining thermal
+    contraction across the weld.
+    """
+
+    points = onp.asarray(points, dtype=onp.float64)
+    if points.ndim != 2 or points.shape[1] != 3 or not onp.all(onp.isfinite(points)):
+        raise ValueError("edge minimal BC requires finite 3D points")
+    build_axis_id = int(build_axis_id)
+    plane_axis_ids = tuple(int(axis) for axis in plane_axis_ids)
+    if set(plane_axis_ids) | {build_axis_id} != {0, 1, 2} or len(plane_axis_ids) != 2:
+        raise ValueError("build_axis_id and plane_axis_ids must partition the three axes")
+    if edge_axis_id is None:
+        edge_axis_id = plane_axis_ids[0]
+    edge_axis_id = int(edge_axis_id)
+    if edge_axis_id not in plane_axis_ids:
+        raise ValueError("edge_axis_id must be one of the in-plane axes")
+    if base_side not in ("min", "max"):
+        raise ValueError("base_side must be 'min' or 'max'")
+
+    build_coord = points[:, build_axis_id]
+    base_value = float(build_coord.min() if base_side == "min" else build_coord.max())
+    span = float(onp.max(onp.ptp(points, axis=0)))
+    tol = 1.0e-9 * max(span, 1.0)
+    bottom_mask = onp.abs(build_coord - base_value) <= tol
+    edge_coord = points[:, edge_axis_id]
+    fixed_mask = bottom_mask & (onp.abs(edge_coord - edge_coord.min()) <= tol)
+    build_only_mask = bottom_mask & (onp.abs(edge_coord - edge_coord.max()) <= tol)
+    if fixed_mask.sum() < 2 or build_only_mask.sum() < 2:
+        raise ValueError("edge minimal BC needs at least two nodes on each bottom edge")
+    if (fixed_mask & build_only_mask).any():
+        raise ValueError("edge minimal BC edges coincide; plate has no width across the edge axis")
+
+    fixed_jax = np.asarray(fixed_mask)
+    build_only_jax = np.asarray(build_only_mask)
+
+    def fixed_edge(_point, node_id):
+        return fixed_jax[node_id]
+
+    def build_only_edge(_point, node_id):
+        return build_only_jax[node_id]
+
+    def zero(_point):
+        return 0.0
+
+    bc = [
+        [fixed_edge, fixed_edge, fixed_edge, build_only_edge],
+        [0, 1, 2, build_axis_id],
+        [zero, zero, zero, zero],
+    ]
+    if not return_metadata:
+        return bc
+    metadata = {
+        "mode": "edge_minimal",
+        "edge_axis": "xyz"[edge_axis_id],
+        "build_axis": "xyz"[build_axis_id],
+        "base_side": base_side,
+        "fixed_edge_nodes": int(fixed_mask.sum()),
+        "build_only_edge_nodes": int(build_only_mask.sum()),
+        "fixed_edge_node_ids": [int(v) for v in onp.flatnonzero(fixed_mask)],
+        "build_only_edge_node_ids": [int(v) for v in onp.flatnonzero(build_only_mask)],
+    }
+    return bc, metadata
+
 
 def make_paper_minimal_bottom_mechanics_bc(
     points,

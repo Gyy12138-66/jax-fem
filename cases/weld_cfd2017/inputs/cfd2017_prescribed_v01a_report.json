@@ -1,0 +1,245 @@
+{
+ "inp": "/home/user/work/songsi_tree/cases/weld_cfd2017/inputs/cfd2017_plate_05mm.inp",
+ "v01": "/mnt/c/Users/user/Desktop/\u7194\u6c60\u6e29\u5ea6\u573aresult/output/v01",
+ "frames": [
+  0,
+  1,
+  2,
+  3,
+  4,
+  5,
+  8,
+  10,
+  12,
+  14,
+  16,
+  18,
+  20,
+  22,
+  24,
+  26,
+  27,
+  31,
+  34,
+  41,
+  62
+ ],
+ "cap_K": 1000.0,
+ "x_centre_m": 0.01,
+ "n_nodes": 35867,
+ "tsolid": 858.0,
+ "tliquid": 923.0,
+ "mapping": "cfd_x=mesh_y, cfd_y=|mesh_x-x_centre|, cfd_z=mesh_z (half-model mirrored)",
+ "per_frame": [
+  {
+   "frame": 0,
+   "time": 0.2549999952316284,
+   "Tmax_cfd": 4182.60009765625,
+   "Tmax_nodes": 3873.896694808094,
+   "Tmin_nodes": 297.99999168047475,
+   "nodes_above_liquidus": 360,
+   "cfd_nodes_above_liquidus": 8574,
+   "nodes_capped": 238
+  },
+  {
+   "frame": 1,
+   "time": 0.5049999952316284,
+   "Tmax_cfd": 4556.0,
+   "Tmax_nodes": 3904.9485552308624,
+   "Tmin_nodes": 297.9999866830208,
+   "nodes_above_liquidus": 570,
+   "cfd_nodes_above_liquidus": 13397,
+   "nodes_capped": 357
+  },
+  {
+   "frame": 2,
+   "time": 0.7549999952316284,
+   "Tmax_cfd": 4219.0,
+   "Tmax_nodes": 3897.400889072093,
+   "Tmin_nodes": 297.9999841490651,
+   "nodes_above_liquidus": 695,
+   "cfd_nodes_above_liquidus": 16664,
+   "nodes_capped": 447
+  },
+  {
+   "frame": 3,
+   "time": 1.0049999952316284,
+   "Tmax_cfd": 4487.89990234375,
+   "Tmax_nodes": 3827.093548606693,
+   "Tmin_nodes": 297.99998291209135,
+   "nodes_above_liquidus": 749,
+   "cfd_nodes_above_liquidus": 17937,
+   "nodes_capped": 486
+  },
+  {
+   "frame": 4,
+   "time": 1.2549999952316284,
+   "Tmax_cfd": 4217.0,
+   "Tmax_nodes": 3883.4953660912156,
+   "Tmin_nodes": 297.99998218139615,
+   "nodes_above_liquidus": 780,
+   "cfd_nodes_above_liquidus": 17969,
+   "nodes_capped": 487
+  },
+  {
+   "frame": 5,
+   "time": 1.5,
+   "Tmax_cfd": 4068.0,
+   "Tmax_nodes": 4060.9982126085793,
+   "Tmin_nodes": 297.99996610213304,
+   "nodes_above_liquidus": 766,
+   "cfd_nodes_above_liquidus": 17764,
+   "nodes_capped": 473
+  },
+  {
+   "frame": 8,
+   "time": 1.5149999856948853,
+   "Tmax_cfd": 1192.578369140625,
+   "Tmax_nodes": 1191.2593815682671,
+   "Tmin_nodes": 297.99997680823594,
+   "nodes_above_liquidus": 573,
+   "cfd_nodes_above_liquidus": 14161,
+   "nodes_capped": 262
+  },
+  {
+   "frame": 10,
+   "time": 1.524999976158142,
+   "Tmax_cfd": 1090.532470703125,
+   "Tmax_nodes": 1090.3331259969727,
+   "Tmin_nodes": 297.9999779273958,
+   "nodes_above_liquidus": 440,
+   "cfd_nodes_above_liquidus": 11544,
+   "nodes_capped": 115
+  },
+  {
+   "frame": 12,
+   "time": 1.5399999618530273,
+   "Tmax_cfd": 1004.1753540039062,
+   "Tmax_nodes": 1003.7423031542672,
+   "Tmin_nodes": 297.9999791143853,
+   "nodes_above_liquidus": 281,
+   "cfd_nodes_above_liquidus": 7358,
+   "nodes_capped": 4
+  },
+  {
+   "frame": 14,
+   "time": 1.559999942779541,
+   "Tmax_cfd": 944.156005859375,
+   "Tmax_nodes": 944.1454432319252,
+   "Tmin_nodes": 297.9999804662724,
+   "nodes_above_liquidus": 88,
+   "cfd_nodes_above_liquidus": 2457,
+   "nodes_capped": 0
+  },
+  {
+   "frame": 16,
+   "time": 1.5800000429153442,
+   "Tmax_cfd": 922.649169921875,
+   "Tmax_nodes": 922.5105595523414,
+   "Tmin_nodes": 297.99998165654506,
+   "nodes_above_liquidus": 0,
+   "cfd_nodes_above_liquidus": 0,
+   "nodes_capped": 0
+  },
+  {
+   "frame": 18,
+   "time": 1.600000023841858,
+   "Tmax_cfd": 917.366943359375,
+   "Tmax_nodes": 917.2659914170918,
+   "Tmin_nodes": 297.99998271413153,
+   "nodes_above_liquidus": 0,
+   "cfd_nodes_above_liquidus": 0,
+   "nodes_capped": 0
+  },
+  {
+   "frame": 20,
+   "time": 1.6200000047683716,
+   "Tmax_cfd": 910.5960083007812,
+   "Tmax_nodes": 910.4167490904982,
+   "Tmin_nodes": 297.99998365959766,
+   "nodes_above_liquidus": 0,
+   "cfd_nodes_above_liquidus": 0,
+   "nodes_capped": 0
+  },
+  {
+   "frame": 22,
+   "time": 1.6399999856948853,
+   "Tmax_cfd": 901.718994140625,
+   "Tmax_nodes": 901.5394875742805,
+   "Tmin_nodes": 297.9999842869057,
+   "nodes_above_liquidus": 0,
+   "cfd_nodes_above_liquidus": 0,
+   "nodes_capped": 0
+  },
+  {
+   "frame": 24,
+   "time": 1.659999966621399,
+   "Tmax_cfd": 890.5067138671875,
+   "Tmax_nodes": 890.251133182622,
+   "Tmin_nodes": 297.9999847516837,
+   "nodes_above_liquidus": 0,
+   "cfd_nodes_above_liquidus": 0,
+   "nodes_capped": 0
+  },
+  {
+   "frame": 26,
+   "time": 1.6799999475479126,
+   "Tmax_cfd": 870.0936889648438,
+   "Tmax_nodes": 870.0065922827345,
+   "Tmin_nodes": 297.99998520005585,
+   "nodes_above_liquidus": 0,
+   "cfd_nodes_above_liquidus": 0,
+   "nodes_capped": 0
+  },
+  {
+   "frame": 27,
+   "time": 1.6950000524520874,
+   "Tmax_cfd": 806.0507202148438,
+   "Tmax_nodes": 805.8199163398949,
+   "Tmin_nodes": 297.99998558248313,
+   "nodes_above_liquidus": 0,
+   "cfd_nodes_above_liquidus": 0,
+   "nodes_capped": 0
+  },
+  {
+   "frame": 31,
+   "time": 1.9049999713897705,
+   "Tmax_cfd": 611.6297607421875,
+   "Tmax_nodes": 611.5800778530207,
+   "Tmin_nodes": 297.9999893317651,
+   "nodes_above_liquidus": 0,
+   "cfd_nodes_above_liquidus": 0,
+   "nodes_capped": 0
+  },
+  {
+   "frame": 34,
+   "time": 2.2049999237060547,
+   "Tmax_cfd": 499.7237243652344,
+   "Tmax_nodes": 499.68013030728093,
+   "Tmin_nodes": 297.9999930004528,
+   "nodes_above_liquidus": 0,
+   "cfd_nodes_above_liquidus": 0,
+   "nodes_capped": 0
+  },
+  {
+   "frame": 41,
+   "time": 2.9049999713897705,
+   "Tmax_cfd": 376.05242919921875,
+   "Tmax_nodes": 376.0492400631472,
+   "Tmin_nodes": 297.99999728603245,
+   "nodes_above_liquidus": 0,
+   "cfd_nodes_above_liquidus": 0,
+   "nodes_capped": 0
+  },
+  {
+   "frame": 62,
+   "time": 5.005000114440918,
+   "Tmax_cfd": 303.3726806640625,
+   "Tmax_nodes": 303.37268066131213,
+   "Tmin_nodes": 297.99999981721066,
+   "nodes_above_liquidus": 0,
+   "cfd_nodes_above_liquidus": 0,
+   "nodes_capped": 0
+  }
+ ]
+}

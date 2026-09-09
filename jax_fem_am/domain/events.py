@@ -122,6 +122,14 @@ def update_phase_reference_and_eqp(T_quad, active_quad, phase_quad, T_ref_quad, 
         )
         if relax_temperature is not None and relax_temperature > 0.0:
             T_ref_value = relax_temperature * np.ones_like(T_quad)
+        elif (
+            getattr(args, "solidification_reference", "temperature") == "solidus"
+            and args.liquidus_temperature > args.solidus_temperature
+        ):
+            # Stress-free at the solidus: with coarse steps (or a prescribed
+            # temperature history) a point may first be seen solid well below
+            # Ts; its reference must not follow the step sampling.
+            T_ref_value = float(args.solidus_temperature) * np.ones_like(T_quad)
         else:
             T_ref_value = T_quad
         if getattr(args, "reset_plastic_on_melt", False):
@@ -132,5 +140,14 @@ def update_phase_reference_and_eqp(T_quad, active_quad, phase_quad, T_ref_quad, 
             )
         else:
             eqp_new = eqp_quad
+        if getattr(args, "reset_plastic_on_solidify", False):
+            # Welding semantics: solidified metal carries no plastic history.
+            # Plastic strain accumulated while liquid/mushy (near-zero yield
+            # under large thermal strain) must not harden the solid.
+            eqp_new = np.where(
+                newly_solidified,
+                np.zeros_like(eqp_quad),
+                eqp_new,
+            )
     T_ref_new = np.where(newly_solidified, T_ref_value, T_ref_quad)
     return phase_new, T_ref_new, eqp_new, newly_solidified, entered_melted_state

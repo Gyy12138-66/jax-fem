@@ -76,6 +76,7 @@ from jax_fem_am.physics.release import (
     load_release_cell_set,
     make_anchor_mechanics_bc,
     make_box_anchor_mechanics_bc,
+    make_edge_minimal_mechanics_bc,
     make_full_bottom_mechanics_bc,
     make_paper_minimal_bottom_mechanics_bc,
     make_root_minimal_release_mechanics_bc,
@@ -275,6 +276,48 @@ def make_thermal_solver_options(
             "linear": {"spsolve_solver": {}},
         }
     }
+
+
+def load_prescribed_temperature(path, points, initial_temperature):
+    """Load an external nodal temperature history (npz) and check it against the mesh."""
+    data = onp.load(path)
+    times = onp.asarray(data["time"], dtype=onp.float64).reshape(-1)
+    T = onp.asarray(data["T"], dtype=onp.float64)
+    if T.ndim != 2 or T.shape[0] != times.size or T.shape[1] != len(points):
+        raise ValueError(
+            f"prescribed temperature file {path}: T must be (n_frames={times.size}, n_nodes={len(points)}), got {T.shape}"
+        )
+    if times.size < 1 or onp.any(onp.diff(times) <= 0.0):
+        raise ValueError("prescribed temperature times must be strictly increasing")
+    if "points" in data:
+        ref = onp.asarray(data["points"], dtype=onp.float64)
+        mesh_points = onp.asarray(points, dtype=onp.float64)
+        if ref.shape != mesh_points.shape:
+            raise ValueError("prescribed temperature 'points' shape does not match the mesh")
+        scale = max(float(onp.ptp(mesh_points, axis=0).max()), 1e-12)
+        dev = float(onp.abs(ref - mesh_points).max())
+        if dev > 1e-6 * scale:
+            raise ValueError(
+                f"prescribed temperature node coordinates deviate from the mesh by {dev:.3e} m (node order mismatch?)"
+            )
+    if not onp.all(onp.isfinite(T)):
+        raise ValueError("prescribed temperature contains non-finite values")
+    return {"time": times, "T": T, "initial": float(initial_temperature)}
+
+
+def prescribed_temperature_at(prescribed, t):
+    """Nodal temperature at time t: linear in time between frames, held outside the range."""
+    times = prescribed["time"]
+    T = prescribed["T"]
+    if t <= times[0]:
+        values = T[0]
+    elif t >= times[-1]:
+        values = T[-1]
+    else:
+        k = int(onp.searchsorted(times, t, side="right") - 1)
+        w = (t - times[k]) / (times[k + 1] - times[k])
+        values = (1.0 - w) * T[k] + w * T[k + 1]
+    return np.asarray(onp.asarray(values, dtype=onp.float64).reshape(-1, 1))
 
 
 def main():
@@ -568,6 +611,25 @@ def main():
             ] = "release_physical_dofs_are_build_dof_subset"
         mechanics_location_fns = []
         mechanics_foundation = 0.0
+    elif args.bottom_mechanics_bc == "edge_minimal":
+        edge_axis = getattr(args, "edge_minimal_axis", "auto")
+        edge_axis_id = None if edge_axis == "auto" else AXIS_TO_ID[edge_axis]
+        mechanics_bc, args.edge_minimal_resolved_bc = make_edge_minimal_mechanics_bc(
+            points,
+            build_axis_id=build_axis_id,
+            plane_axis_ids=plane_axis_ids,
+            base_side=args.base_side,
+            edge_axis_id=edge_axis_id,
+            return_metadata=True,
+        )
+        print(
+            "edge_minimal mechanics BC: "
+            f"{args.edge_minimal_resolved_bc['fixed_edge_nodes']} nodes fully fixed at "
+            f"{args.edge_minimal_resolved_bc['edge_axis']}=min, "
+            f"{args.edge_minimal_resolved_bc['build_only_edge_nodes']} nodes build-direction-only at max"
+        )
+        mechanics_location_fns = []
+        mechanics_foundation = 0.0
     else:
         mechanics_bc = make_full_bottom_mechanics_bc(bottom)
         mechanics_location_fns = []
@@ -778,7 +840,20 @@ def main():
 
     highest_printed_layer = 0
 
+    prescribed_temperature = None
+    if getattr(args, "prescribed_temperature_file", None):
+        prescribed_temperature = load_prescribed_temperature(
+            args.prescribed_temperature_file, points, initial_temperature
+        )
+        print(
+            f"prescribed temperature: {prescribed_temperature['time'].size} frames "
+            f"t=[{prescribed_temperature['time'][0]:.6g}, {prescribed_temperature['time'][-1]:.6g}] s "
+            f"from {args.prescribed_temperature_file}; thermal solve skipped"
+        )
+    sim_time = 0.0
+
     for state in step_states:
+        sim_time += float(state.dt)
         if args.layer_activation_mode == "layer_on_scan":
             current_layer = int(state.layer_idx) + 1
             if should_activate_layer_for_state(state):
@@ -844,6 +919,19 @@ def main():
         # Layer activation means the quadrature point now contains powder.
         # It becomes solid only after passing through liquid/mushy and cooling.
         phase_quad = np.where((printed_quad > 0.5) & (phase_quad == STATE_VOID), STATE_POWDER, phase_quad)
+        if getattr(args, "born_phase", "powder") == "solid":
+            # Welding element-birth semantics: newly activated cells are solid
+            # metal from birth (full stiffness); a later melt still rewrites
+            # their stress-free reference through the normal lifecycle.
+            newly_born_quad = make_quad_scalar(
+                (printed_cell & (~previous_active)).astype(onp.float64),
+                thermal.fes[0].num_quads,
+            )
+            phase_quad = np.where(
+                (newly_born_quad > 0.5) & (phase_quad == STATE_POWDER),
+                STATE_SOLID,
+                phase_quad,
+            )
         if args.reset_activation_temperature:
             newly_printed_pre = printed_cell & (~previous_active)
             if newly_printed_pre.any():
@@ -929,15 +1017,20 @@ def main():
                 state.ambient_temperature,
             ]
         )
-        T_new = solver(
-            thermal,
-            solver_options=make_thermal_solver_options(
-                T_old,
-                latent_heat=args.latent_heat,
-                solidus_temperature=args.solidus_temperature,
-                liquidus_temperature=args.liquidus_temperature,
-            ),
-        )[0]
+        if prescribed_temperature is not None:
+            # External nodal temperature history (e.g. CFD): no thermal solve;
+            # the phase bookkeeping and mechanics below see the prescribed field.
+            T_new = prescribed_temperature_at(prescribed_temperature, sim_time)
+        else:
+            T_new = solver(
+                thermal,
+                solver_options=make_thermal_solver_options(
+                    T_old,
+                    latent_heat=args.latent_heat,
+                    solidus_temperature=args.solidus_temperature,
+                    liquidus_temperature=args.liquidus_temperature,
+                ),
+            )[0]
 
         cell_T = compute_cell_temperature(T_new, cells)
         newly_printed = printed_cell & (~previous_active)

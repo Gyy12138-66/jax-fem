@@ -46,6 +46,8 @@ def build_parser(config=None):
     parser.add_argument("--conductivity-liquid", type=float, default=cfg(config, "conductivity_liquid", None), help="Liquid thermal conductivity. Defaults to solid conductivity when omitted.")
     parser.add_argument("--powder-mode", choices=("powder", "void"), default=cfg(config, "powder_mode", "powder"))
     parser.add_argument("--layer-activation-mode", choices=("front", "layer_on_scan"), default=cfg(config, "layer_activation_mode", "layer_on_scan"), help="Layer activation model. 'front' keeps the old front-coordinate activation; 'layer_on_scan' activates the whole current layer when laser scanning starts, mimicking recoating/powder spreading.")
+    parser.add_argument("--born-phase", choices=("powder", "solid"), default=cfg(config, "born_phase", "powder"),
+                        help="Phase assigned to newly activated non-fixture cells. powder is the LPBF default (solid only after melting); solid is the welding element-birth semantics (plate/bead metal carries full stiffness from birth, remelt still rewrites the stress-free reference).")
     parser.add_argument("--future-layer-mode", choices=("void", "powder"), default=cfg(config, "future_layer_mode", "void"), help="Material treatment for future, not-yet-spread layers when --layer-activation-mode layer_on_scan is used. Use 'void' to make future layers inactive before spreading.")
     parser.add_argument("--layer-activation-geometry", choices=("centroid", "intersection"), default=cfg(config, "layer_activation_geometry", "intersection"), help="How cells are assigned to printed layers. 'centroid' uses cell centroid layer id; 'intersection' activates a cell if its vertex interval intersects the layer band. Use intersection for coarse tetra meshes and macro-layer runs.")
     parser.add_argument("--inactive-thermal-factor", type=float, default=cfg(config, "inactive_thermal_factor", 1e-6))
@@ -98,6 +100,18 @@ def build_parser(config=None):
             "tensor plastic history."
         ),
     )
+    parser.add_argument("--reset-plastic-on-solidify", dest="reset_plastic_on_solidify", action="store_true",
+                        default=cfg(config, "reset_plastic_on_solidify", False),
+                        help="Legacy-reset-only welding semantics: zero the equivalent plastic strain when material "
+                             "solidifies, so plasticity accumulated in the liquid/mushy state (near-zero yield under "
+                             "large thermal strain) cannot harden the solid. Off by default (LPBF contracts unchanged).")
+    parser.add_argument("--no-reset-plastic-on-solidify", dest="reset_plastic_on_solidify", action="store_false")
+    parser.add_argument("--elastic-melt", dest="elastic_melt", action="store_true",
+                        default=cfg(config, "elastic_melt", False),
+                        help="Treat liquid and mushy quadrature points as elastic (very high yield) so no plastic "
+                             "strain accumulates in the melt; their stiffness is still scaled by the liquid/mushy "
+                             "factors. Off by default (LPBF contracts unchanged).")
+    parser.add_argument("--no-elastic-melt", dest="elastic_melt", action="store_false")
     parser.add_argument("--stress-relaxation-temperature", type=float,
                         default=cfg(config, "stress_relaxation_temperature", None),
                         help="Legacy-reset-only stress-free reference temperature written when material solidifies (macro calibration knob; "
@@ -137,13 +151,19 @@ def build_parser(config=None):
                         help="Cap on the hardened yield stress (Pa), ~UTS (Ti64: ~1.15e9). Linear isotropic hardening "
                              "extrapolated past its ~10%% strain validity produced ~2 GPa fictitious von Mises at the "
                              "bottom-clamp region; the cap saturates hardening there. None keeps unbounded legacy hardening.")
-    parser.add_argument("--bottom-mechanics-bc", choices=("fixed", "elastic", "paper_minimal"),
+    parser.add_argument("--bottom-mechanics-bc", choices=("fixed", "elastic", "paper_minimal", "edge_minimal"),
                         default=cfg(config, "bottom_mechanics_bc", "fixed"),
                         help="'fixed' rigidly clamps the base nodes (legacy; models an infinitely stiff build plate and "
                              "concentrates fictitious stress at the clamp edge). 'elastic' replaces the clamp with a "
                              "Winkler elastic foundation on the base faces. 'paper_minimal' restrains every bottom node "
                              "only in the build direction and adds three deterministic in-plane scalar restraints to "
                              "remove rigid motion while permitting thermal contraction (Kaess 2023 Section 2.3).")
+    parser.add_argument("--edge-minimal-axis", choices=("auto", "x", "y", "z"),
+                        default=cfg(config, "edge_minimal_axis", "auto"),
+                        help="For --bottom-mechanics-bc edge_minimal (welding plates, Lu 2020 Fig. 2): the in-plane axis "
+                             "across which the two bottom edges are taken. The edge at that axis' minimum is fully fixed "
+                             "(all three DOF); the edge at its maximum is fixed only in the build direction. 'auto' uses "
+                             "the first in-plane axis.")
     parser.add_argument("--paper-minimal-anchor-corner",
                         choices=("min_min", "max_min", "max_max", "min_max"),
                         default=cfg(config, "paper_minimal_anchor_corner", "min_min"),
@@ -369,6 +389,22 @@ def build_parser(config=None):
                              "material tables) to at least this value in K. Guard against activation "
                              "undershoot artifacts (G1) feeding sub-physical temperatures into full-stiffness "
                              "solid; a mitigation knob, not a fix — the thermal field itself stays unclamped.")
+    parser.add_argument("--solidification-reference", choices=("temperature", "solidus"),
+                        default=cfg(config, "solidification_reference", "temperature"),
+                        help="Stress-free reference temperature assigned to newly solidified points: "
+                             "'temperature' (default, legacy) = the point's temperature at the step where it is "
+                             "first detected solid; 'solidus' = the solidus temperature. With coarse steps or "
+                             "an externally prescribed temperature history a point can be detected solid far "
+                             "below the solidus, which would drop the thermal contraction between the solidus "
+                             "and that temperature; 'solidus' keeps it. Ignored when "
+                             "--stress-relaxation-temperature is set or no phase-change interval is given.")
+    parser.add_argument("--prescribed-temperature-file",
+                        default=cfg(config, "prescribed_temperature_file", None),
+                        help="npz with 'time' (n_frames,) [s], 'T' (n_frames, n_nodes) [K] and optional "
+                             "'points' (n_nodes, 3) [m]: nodal temperature history from an external solver "
+                             "(e.g. CFD). The thermal solve is skipped; every step takes the field linearly "
+                             "interpolated at the step end time (held outside the frame range). Phase "
+                             "bookkeeping and mechanics run unchanged.")
     parser.add_argument("--powder-elset", default=cfg(config, "powder_elset", None),
                         help="Name of an inp ELSET whose cells are PERMANENT powder: excluded from "
                              "substrate/support classification and from printing, thermally active "
