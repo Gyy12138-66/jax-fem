@@ -55,6 +55,7 @@ from jax_fem_am.mesh.model import (
     resolve_axis_range,
 )
 from jax_fem_am.mesh.quadrature import apply_thermal_mass_lumping
+import jax_fem_am.io.vtu as vtu_io
 from jax_fem_am.io.vtu import (
     STRESS_COMPONENTS,
     empty_quad_stress,
@@ -858,6 +859,13 @@ def main():
             f"from {args.prescribed_temperature_file}; thermal solve skipped"
         )
     sim_time = 0.0
+    vtu_io.QUAD_ARRAYS_IN_VTU = getattr(args, "vtu_quad_arrays", "on") != "off"
+    output_times = None
+    next_output_idx = 0
+    if getattr(args, "output_times_file", None):
+        output_times = onp.sort(onp.loadtxt(args.output_times_file, ndmin=1).astype(onp.float64))
+        print(f"output times: {output_times.size} entries from {args.output_times_file} "
+              f"({output_times[0]:.4g} .. {output_times[-1]:.4g} s); step cadence flags ignored")
 
     for state in step_states:
         sim_time += float(state.dt)
@@ -1133,7 +1141,13 @@ def main():
 
         material_state_cell = material_cell_state(active_cell, substrate_cell, support_cell, args, cell_T, phase_cell=phase_cell_from_quad(phase_quad))
         mechanics_is_current = last_mechanics_step == state.global_step
-        if args.thermal_output_every == 0 and args.mechanics_output_every > 0:
+        if output_times is not None:
+            save_now = is_last
+            if next_output_idx < output_times.size and sim_time >= output_times[next_output_idx] - 1e-9:
+                save_now = True
+                while next_output_idx < output_times.size and sim_time >= output_times[next_output_idx] - 1e-9:
+                    next_output_idx += 1
+        elif args.thermal_output_every == 0 and args.mechanics_output_every > 0:
             # Mechanics-aligned outputs: event-forced mechanics solves drift the
             # cadence off any fixed modulus, so save on the first mechanics solve
             # of each mechanics_output_every-step bucket. Every VTU then carries

@@ -1,3 +1,4 @@
+import re
 """VTU/ParaView output helpers and run metadata writers.
 
 Origin: legacy/v03/am_thermal_stress_macro_intersection_mech100.py
@@ -52,6 +53,13 @@ def quad_field_name(base, quad_idx, num_quads):
     return f"{base.replace('quad', f'quad{quad_idx}', 1)}"
 
 
+# When False, save_step drops every per-quadrature-point array (stress_quad*, vm_quad*,
+# elastic_strain_quad*, eps_p_quad*, ...) and keeps only cell means; set by the runner from
+# --vtu-quad-arrays. Cuts a HEX8 order-2 VTU from ~23 MB to ~2 MB.
+QUAD_ARRAYS_IN_VTU = True
+_QUAD_ARRAY_RE = re.compile(r"(^|_)quad\d+(_|$)")
+
+
 def make_quad_stress_cell_infos(quad_stress):
     stress_quad = np.asarray(quad_stress["stress_quad"])
     vm_quad = np.asarray(quad_stress["vm_quad"])
@@ -64,7 +72,14 @@ def make_quad_stress_cell_infos(quad_stress):
                 value = 0.5 * (value + stress_quad[:, quad_idx, col, row])
             cell_infos.append((quad_field_name(f"stress_quad_{suffix}", quad_idx, num_quads), value))
         cell_infos.append((quad_field_name("vm_quad", quad_idx, num_quads), vm_quad[:, quad_idx]))
-    # cell-level von Mises: mean of the quadrature-point values (8 for HEX8 order 2)
+    # cell-level fields: mean of the quadrature-point values (8 for HEX8 order 2).
+    # sigma_xx/yy/zz are the normal components in mesh axes (weld_cfd2017: x across the weld =
+    # transverse, y along the weld = longitudinal, z through thickness); xy/yz/xz are shears.
+    for suffix, row, col in STRESS_COMPONENTS:
+        value = stress_quad[:, :, row, col]
+        if row != col:
+            value = 0.5 * (value + stress_quad[:, :, col, row])
+        cell_infos.append((f"sigma_{suffix}", value.mean(axis=1)))
     cell_infos.append(("von_mises", vm_quad.mean(axis=1)))
     return cell_infos
 
@@ -139,7 +154,10 @@ def save_step(
             point_infos.append((name, values))
     if quad_cell_info_factory is None:
         quad_cell_info_factory = make_quad_stress_cell_infos
-    cell_infos.extend(quad_cell_info_factory(quad_stress))
+    quad_infos = list(quad_cell_info_factory(quad_stress))
+    if not QUAD_ARRAYS_IN_VTU:
+        quad_infos = [item for item in quad_infos if not _QUAD_ARRAY_RE.search(item[0])]
+    cell_infos.extend(quad_infos)
     save_sol(
         fe,
         T_new,

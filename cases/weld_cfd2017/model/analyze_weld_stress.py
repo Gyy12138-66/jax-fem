@@ -23,6 +23,11 @@ import numpy as np
 
 def cell_mean_stress(cd, nq=8):
     comps = {}
+    if "sigma_xx" in cd and "von_mises" in cd:
+        for c in ("xx", "yy", "zz", "xy", "yz", "xz"):
+            comps[c] = cd[f"sigma_{c}"]
+        comps["vm"] = cd["von_mises"]
+        return comps
     for c in ("xx", "yy", "zz", "xy", "yz", "xz"):
         comps[c] = np.mean([cd[f"stress_quad{q}_{c}"] for q in range(nq)], axis=0)
     comps["vm"] = np.mean([cd[f"vm_quad{q}"] for q in range(nq)], axis=0)
@@ -43,7 +48,7 @@ def main(argv=None):
     f = os.path.join(a.run_dir, a.snapshot) if a.snapshot else files[-1]
     m = meshio.read(f)
     cd = {k: np.asarray(v[0]).ravel() for k, v in m.cell_data.items()}
-    if "stress_quad0_xx" not in cd:
+    if "stress_quad0_xx" not in cd and "sigma_xx" not in cd:
         raise SystemExit(f"{f} has no mechanics stresses")
     cells = m.cells[0].data
     verts = m.points[cells]

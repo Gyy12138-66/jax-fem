@@ -400,6 +400,15 @@ def build_parser(config=None):
                              "below the solidus, which would drop the thermal contraction between the solidus "
                              "and that temperature; 'solidus' keeps it. Ignored when "
                              "--stress-relaxation-temperature is set or no phase-change interval is given.")
+    parser.add_argument("--vtu-quad-arrays", choices=("on", "off"),
+                        default=cfg(config, "vtu_quad_arrays", "on"),
+                        help="'on' (default) writes every per-quadrature-point array to the VTU (stress_quad*, vm_quad*, "
+                             "elastic_strain_quad*, ...). 'off' keeps only the cell-mean fields (sigma_xx..xz, von_mises, "
+                             "eq_plastic_strain, ...), about 10x smaller files.")
+    parser.add_argument("--output-times-file", default=cfg(config, "output_times_file", None),
+                        help="Text file with one simulation time [s] per line: a VTU is written at the first step whose "
+                             "end time reaches each listed time (plus the last step). Overrides the "
+                             "--thermal-output-every / --mechanics-output-every cadence when given.")
     parser.add_argument("--prescribed-temperature-file",
                         default=cfg(config, "prescribed_temperature_file", None),
                         help="npz with 'time' (n_frames,) [s], 'T' (n_frames, n_nodes) [K] and optional "
