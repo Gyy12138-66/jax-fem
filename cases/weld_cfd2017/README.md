@@ -49,6 +49,32 @@ python model/post_stress_evolution.py <输出目录>
 
 大文件（`*.inp`、`*.npz`）在 `.gitignore` 里，只提交摘要与报告 JSON。
 
+### 焊道余高（v1.2）
+
+```
+# 网格带焊道层（母板几何不变，输出 PLATE / BEAD 两个 ELSET）
+python model/make_plate_mesh.py --model half --dx 0.5     --dy-fine 0.25 --y-fine 6 --dz-fine 0.25 --z-fine 3     --bead-height-file <bead_height.npz> --bead-layers 4 --bead-min-height 0.25     --out inputs/plate_half_bead_025mm.inp
+
+# 温度映射：焊道节点 z 钳到板面（--clamp-top）+ 生成分段沉积列
+python model/make_prescribed_temperature.py --v01 <v1.1 目录>     --inp inputs/plate_half_bead_025mm.inp --mapping identity --sym-centre 0.0 --cap 1000     --clamp-top --bead-elset BEAD --bead-x-range 0.0075,0.0405 --bead-segment-length 5e-4     --out-npz inputs/prescribed_bead_025.npz --out-path inputs/prescribed_bead_path.csv     --report inputs/prescribed_bead_025_report.json
+
+# 力学：焊道随热源分段出生
+INP=... TNPZ=... PATHCSV=... OUT=... bash model/runs/run_cfd2017_prescribed.sh     --solidification-reference solidus --vtu-quad-arrays off     --layer-activation-mode along_path --bead-elsets BEAD
+```
+
+VTU 里查看焊道：`bead`（1=焊道，Threshold 直接选）、`printed`（是否已出生）、`activation_step`（出生步）、
+`activation_temperature`（出生温度，焊道为 943 到 1000 K）、`stress_free_temperature`（焊道全为固相线 858 K）。
+
+结果（0.25 mm，55936 单元 = 母板 51832 + 焊道 4104）：焊道 100% 熔化过，截面纵向合力在屈服力的 0.03% 以内；
+相对无焊道，峰值 von Mises 与塑性应变不变、纵向应力 +2%、角变形 +15%（0.256 → 0.295 mm）；焊道自身纵向拉伸均值
++60 到 +70 MPa、峰值 +202 MPa。**已登记偏差**：焊道暂用母材表，实际 ER5356 稀释焊缝屈服约为母材的 0.4 到 0.6。
+
+### 后处理脚本 `model/post/`
+
+`read_field.py`（读热学二进制帧）、`export_stress_vtr.py`（张量积网格转 VTR）、`make_animation.py`（pvpython 出动画）、
+`make_bead_shell.py`（焊道灰壳）、`add_bead_field.py`（给旧 VTU 补 bead 字段）、`compare_runs.py` / `compare_history.py`。
+这些是桌面 `熔池温度场result/output/v1.1|v1.2/tools/` 里同名文件的副本，放在这里是为了版本管理，后续可择一保留。
+
 ## 求解器开关（本分支新增，全部默认关闭，不改 LPBF 行为）
 
 | 开关 | 作用 |
