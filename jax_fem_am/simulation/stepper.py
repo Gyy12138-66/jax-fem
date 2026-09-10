@@ -735,6 +735,7 @@ def main():
     bead_cells_by_elset = {}
     along_path_base_cell = onp.zeros(len(cells), dtype=bool)
     bead_printed_cell = onp.zeros(len(cells), dtype=bool)
+    bead_cell_mask = None
     if along_path:
         bead_names = parse_bead_elsets(getattr(args, "bead_elsets", None))
         if not bead_names:
@@ -749,6 +750,7 @@ def main():
             bead_cells_by_elset[name] = mask
             bead_any |= mask
         along_path_base_cell = (~bead_any) & (~permanent_powder_cell)
+        bead_cell_mask = bead_any
         print(
             f"along_path activation: bead elsets {list(bead_names)} "
             f"({int(bead_any.sum())} cells), base cells {int(along_path_base_cell.sum())}, "
@@ -1240,6 +1242,7 @@ def main():
                 float(mechanics_is_current),
                 last_mechanics_step,
                 MODE_TO_ID.get(state.mode, 0),
+                bead_cell=bead_cell_mask,
             )
         else:
             vtk_path = ""

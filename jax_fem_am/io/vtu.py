@@ -108,6 +108,7 @@ def save_step(
     release_removed_cell=None,
     release_point_fields=None,
     quad_cell_info_factory=None,
+    bead_cell=None,
 ):
     if quad_stress is None:
         quad_stress = empty_quad_stress(fe.num_cells, dT_quad.shape[1])
@@ -130,6 +131,11 @@ def save_step(
         ("mechanics_source_step", np.full(fe.num_cells, float(mechanics_source_step), dtype=np.float64)),
         ("mode_id", np.full(fe.num_cells, float(mode_id), dtype=np.float64)),
     ]
+    if bead_cell is not None:
+        # 1 for cells belonging to a --bead-elsets weld bead, 0 for base material.
+        # Together with activation_step / printed this identifies the deposited
+        # metal and when each segment was born.
+        cell_infos.append(("bead", np.asarray(bead_cell, dtype=np.float64)))
     if release_removed_cell is not None:
         cell_infos.append(
             (
