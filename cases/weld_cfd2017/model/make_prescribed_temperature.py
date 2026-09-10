@@ -70,7 +70,9 @@ def main(argv=None):
                    help='两次沉积之间热源至少前进的距离 [m]，取网格沿焊缝的单元尺寸，避免出现空区间')
     a = p.parse_args(argv)
 
+    # read_field.py 优先用数据目录里的那份（与数据同版本），否则用本案例 model/post 下的副本
     sys.path.insert(0, os.path.join(a.v01, 'tools'))
+    sys.path.insert(1, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'post'))
     from read_field import FieldReader
     from scipy.interpolate import RegularGridInterpolator
 
