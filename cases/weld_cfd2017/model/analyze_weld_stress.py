@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Top-surface residual-stress lines for the weld case (Lu 2020 Fig. 7 style; copied from cases/weld_a7n01 for the rongchi branch).
+"""Top-surface residual-stress lines for the weld case (Lu 2020 Fig. 7 style).
 
-Reads the last mechanics VTU of a run, averages the eight quadrature stresses per
-cell, keeps the top layer of cells, and extracts:
-  line A: across the weld (x) at a y-station           -> longitudinal (yy) and transverse (xx)
-  line B: along the weld (y) at an x offset from centre -> longitudinal and transverse
-Writes CSVs and a JSON summary with peak tensile / compressive values.
+Works with either axis convention:
+  --weld-axis x (default, CFD axes): longitudinal = sigma_xx, transverse = sigma_yy
+  --weld-axis y (legacy meshes):     longitudinal = sigma_yy, transverse = sigma_xx
 
-Usage: analyze_weld_stress.py RUN_DIR [--y-station 0.03] [--x-centre 0.15] [--line-b-offset 0.02]
+Reads the last mechanics VTU of a run, takes the top layer of cells and extracts:
+  line A: across the weld at a longitudinal station -> longitudinal and transverse stress
+  line B: along the weld at a transverse offset from the centreline
+Cell-mean fields (sigma_xx..xz, von_mises) are used when present, otherwise the
+per-quadrature-point arrays are averaged.
+
+Usage: analyze_weld_stress.py RUN_DIR [--weld-axis x] [--station 0.022] [--centre 0.0]
+                              [--line-b-offset 0.005] [--snapshot step_000136_cooling.vtu]
 """
 from __future__ import annotations
 
@@ -35,11 +40,12 @@ def cell_mean_stress(cd, nq=8):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__)
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("run_dir")
-    p.add_argument("--y-station", type=float, default=None)
-    p.add_argument("--x-centre", type=float, default=None)
-    p.add_argument("--line-b-offset", type=float, default=0.02, help="x offset of line B from the weld centre [m]")
+    p.add_argument("--weld-axis", choices=("x", "y"), default="x")
+    p.add_argument("--station", type=float, default=None, help="longitudinal coordinate of line A [m]; default mid-length")
+    p.add_argument("--centre", type=float, default=None, help="transverse coordinate of the weld centreline [m]; default the min face")
+    p.add_argument("--line-b-offset", type=float, default=0.005, help="transverse offset of line B from the centreline [m]")
     p.add_argument("--snapshot", default=None, help="VTU file name; default = last step_*.vtu")
     a = p.parse_args(argv)
 
@@ -54,25 +60,31 @@ def main(argv=None):
     verts = m.points[cells]
     cen = verts.mean(axis=1)
     s = cell_mean_stress(cd)
+
+    LA = 0 if a.weld_axis == "x" else 1          # longitudinal axis index
+    TA = 1 - LA                                  # transverse axis index
+    lon = "xx" if a.weld_axis == "x" else "yy"   # longitudinal stress component
+    tra = "yy" if a.weld_axis == "x" else "xx"
+
     top = float(m.points[:, 2].max())
     top_cells = verts[:, :, 2].max(axis=1) >= top - 1e-12
-    xc = a.x_centre if a.x_centre is not None else 0.5 * (m.points[:, 0].min() + m.points[:, 0].max())
-    ys = a.y_station if a.y_station is not None else 0.5 * (m.points[:, 1].min() + m.points[:, 1].max())
+    centre = a.centre if a.centre is not None else float(m.points[:, TA].min())
+    station = a.station if a.station is not None else 0.5 * (m.points[:, LA].min() + m.points[:, LA].max())
 
-    # line A: top cells whose y-extent covers the station
-    ymin, ymax = verts[:, :, 1].min(axis=1), verts[:, :, 1].max(axis=1)
-    la = top_cells & (ymin <= ys) & (ymax >= ys)
-    order = np.argsort(cen[la, 0])
-    line_a = np.column_stack([cen[la, 0][order], s["yy"][la][order], s["xx"][la][order], s["vm"][la][order],
-                              cd["material_state"][la][order]])
-    # line B: top cells whose x-extent covers xc + offset
-    xb = xc + a.line_b_offset
-    xmin, xmax = verts[:, :, 0].min(axis=1), verts[:, :, 0].max(axis=1)
-    lb = top_cells & (xmin <= xb) & (xmax >= xb)
-    order = np.argsort(cen[lb, 1])
-    line_b = np.column_stack([cen[lb, 1][order], s["yy"][lb][order], s["xx"][lb][order], s["vm"][lb][order],
-                              cd["material_state"][lb][order]])
-    hdr = "coord_m,sigma_long_yy_Pa,sigma_trans_xx_Pa,vm_Pa,material_state"
+    lo, hi = verts[:, :, LA].min(axis=1), verts[:, :, LA].max(axis=1)
+    la = top_cells & (lo <= station) & (hi >= station)
+    order = np.argsort(cen[la, TA])
+    line_a = np.column_stack([cen[la, TA][order], s[lon][la][order], s[tra][la][order],
+                              s["vm"][la][order], cd["material_state"][la][order]])
+
+    tb = centre + a.line_b_offset
+    lo, hi = verts[:, :, TA].min(axis=1), verts[:, :, TA].max(axis=1)
+    lb = top_cells & (lo <= tb) & (hi >= tb)
+    order = np.argsort(cen[lb, LA])
+    line_b = np.column_stack([cen[lb, LA][order], s[lon][lb][order], s[tra][lb][order],
+                              s["vm"][lb][order], cd["material_state"][lb][order]])
+
+    hdr = "coord_m,sigma_longitudinal_Pa,sigma_transverse_Pa,vm_Pa,material_state"
     np.savetxt(os.path.join(a.run_dir, "line_A_top.csv"), line_a, delimiter=",", header=hdr, comments="")
     np.savetxt(os.path.join(a.run_dir, "line_B_top.csv"), line_b, delimiter=",", header=hdr, comments="")
 
@@ -80,7 +92,9 @@ def main(argv=None):
         return dict(max_MPa=float(arr[:, col].max()) / 1e6, min_MPa=float(arr[:, col].min()) / 1e6,
                     at_max_m=float(arr[np.argmax(arr[:, col]), 0]), at_min_m=float(arr[np.argmin(arr[:, col]), 0]))
 
-    summary = dict(snapshot=os.path.basename(f), y_station_m=ys, x_centre_m=xc, line_b_x_m=xb,
+    summary = dict(snapshot=os.path.basename(f), weld_axis=a.weld_axis,
+                   longitudinal_component=f"sigma_{lon}", transverse_component=f"sigma_{tra}",
+                   station_m=station, centre_m=centre, line_b_transverse_m=tb,
                    top_cells=int(top_cells.sum()), vm_max_MPa=float(s["vm"].max()) / 1e6,
                    vm_max_top_MPa=float(s["vm"][top_cells].max()) / 1e6,
                    line_A=dict(points=int(la.sum()), longitudinal=peaks(line_a, 1), transverse=peaks(line_a, 2)),

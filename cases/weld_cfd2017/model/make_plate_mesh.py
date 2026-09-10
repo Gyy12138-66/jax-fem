@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 """Graded tensor-product HEX8 mesh for the 2017 CFD bead-on-plate case (weld_cfd2017).
 
-Plain rectangular plate, no groove and no bead geometry (the CFD free surface was never
-coupled, so the plate stays flat). Axes: x across the weld, y along the weld, z through
-thickness with z=0 at the bottom and the weld on the top face.
+Axes follow the CFD grid exactly, so the mechanical model and the thermal field share one
+coordinate system (no swap, no rotation when both are opened in ParaView):
 
---model half : x from 0 (weld centreline = symmetry plane) to the plate half-width.
---model full : x from 0 to the full width, weld centreline at width/2, mesh mirrored.
+    x : along the weld,      0 .. length            (heat source travels +x)
+    y : across the weld,     0 .. half-width        (y = 0 is the symmetry plane / weld centreline)
+    z : through thickness,   0 .. thickness         (z = thickness is the top face, the weld side)
 
-Grading: uniform d_fine in a zone next to the weld / top surface, then geometric growth
-capped at d_max, rescaled so the graded part lands exactly on the boundary.
+Plain rectangular plate: no groove and no reinforcement (the CFD free surface was never
+coupled, so the plate stays flat).
 
-Output: Abaqus .inp in METERS (C3D8, ELSET ALL, NSET SYMMETRY_X / TOP_SURFACE) plus a
+Grading: uniform fine spacing next to the weld centreline (y) and below the top face (z),
+geometric growth outward and downward. Along the weld (x) the gradients are mild, so the
+spacing is uniform by default.
+
+--model half : y from 0 to half-width (matches the CFD half domain, the default).
+--model full : y mirrored to the full width, weld centreline at width/2.
+
+Output: Abaqus .inp in METERS (C3D8, ELSET ALL, NSET SYMMETRY_Y / TOP_SURFACE) plus a
 summary JSON. Node ids are consecutive 1..N with i fastest, as the temperature mapper
 (make_prescribed_temperature.py) requires.
 """
@@ -26,8 +33,7 @@ import numpy as np
 
 def graded_one_sided(d_fine, fine_len, d_max, growth, total):
     """Coordinates 0..total: uniform d_fine over [0, fine_len], then geometric growth."""
-    if fine_len > total:
-        fine_len = total
+    fine_len = min(fine_len, total)
     n_fine = max(int(round(fine_len / d_fine)), 1)
     fine = np.linspace(0.0, fine_len, n_fine + 1)
     rest = total - fine[-1]
@@ -45,23 +51,23 @@ def graded_one_sided(d_fine, fine_len, d_max, growth, total):
 
 def build(a):
     half_width = a.width / 2.0
-    if a.model == "half":
-        x = graded_one_sided(a.dx_fine, a.x_fine, a.dx_max, a.growth, half_width)
-        x_centre = 0.0
+    # x: along the weld
+    if a.dx_max > a.dx and a.x_fine_start > 0.0:
+        head = a.x_fine_start - graded_one_sided(a.dx, 0.0, a.dx_max, a.growth, a.x_fine_start)[::-1]
+        mid = np.linspace(a.x_fine_start, a.x_fine_end, max(int(round((a.x_fine_end - a.x_fine_start) / a.dx)), 1) + 1)
+        tail = a.x_fine_end + graded_one_sided(a.dx, 0.0, a.dx_max, a.growth, a.length - a.x_fine_end)
+        x = np.unique(np.concatenate([head, mid, tail]))
     else:
-        right = graded_one_sided(a.dx_fine, a.x_fine, a.dx_max, a.growth, half_width)
-        x = np.concatenate([-right[:0:-1], right]) + half_width
-        x_centre = half_width
-    y = graded_one_sided(a.dy_fine, a.length, a.dy_fine, 1.0, a.length) if a.y_fine <= 0 else None
-    if y is None:
-        # fine along the weld travel, coarser before and after
-        y0, y1 = a.y_fine_start, a.y_fine_end
-        head = graded_one_sided(a.dy_fine, 0.0, a.dy_max, a.growth, y0)[::-1]
-        head = y0 - head
-        mid = np.linspace(y0, y1, max(int(round((y1 - y0) / a.dy_fine)), 1) + 1)
-        tail = y1 + graded_one_sided(a.dy_fine, 0.0, a.dy_max, a.growth, a.length - y1)
-        y = np.unique(np.concatenate([head, mid, tail]))
-    # z: fine at the TOP face, coarse toward the bottom
+        x = np.linspace(0.0, a.length, int(round(a.length / a.dx)) + 1)
+    # y: across the weld, fine at the centreline
+    yhalf = graded_one_sided(a.dy_fine, a.y_fine, a.dy_max, a.growth, half_width)
+    if a.model == "half":
+        y = yhalf
+        weld_centre_y = 0.0
+    else:
+        y = np.concatenate([-yhalf[:0:-1], yhalf]) + half_width
+        weld_centre_y = half_width
+    # z: through thickness, fine at the top face
     zt = graded_one_sided(a.dz_fine, a.z_fine, a.dz_max, a.growth, a.thickness)
     z = np.sort(a.thickness - zt)
 
@@ -79,40 +85,41 @@ def build(a):
                       nid(i, j, k + 1), nid(i + 1, j, k + 1), nid(i + 1, j + 1, k + 1), nid(i, j + 1, k + 1)], axis=1)
 
     dx, dy, dz = np.diff(x), np.diff(y), np.diff(z)
-    vol = np.min(dx) * np.min(dy) * np.min(dz)
     total_vol = float(x[-1] - x[0]) * float(y[-1] - y[0]) * float(z[-1] - z[0])
     sum_vol = float(np.sum(np.outer(np.outer(dx, dy).ravel(), dz)))
 
-    sym = np.flatnonzero(np.abs(nodes[:, 0] - x[0]) <= 1e-12) + 1
+    sym = np.flatnonzero(np.abs(nodes[:, 1] - y[0]) <= 1e-12) + 1
     top = np.flatnonzero(np.abs(nodes[:, 2] - z[-1]) <= 1e-12) + 1
 
     os.makedirs(os.path.dirname(os.path.abspath(a.out)) or ".", exist_ok=True)
     with open(a.out, "w", newline="\n") as f:
         f.write("*HEADING\n")
-        f.write(f"Bead-on-plate {a.model} model for weld_cfd2017, graded tensor-product HEX8, units METERS, "
-                f"generated by make_plate_mesh.py\n")
+        f.write(f"Bead-on-plate {a.model} model for weld_cfd2017 in CFD axes "
+                f"(x along weld, y across weld with y=0 the symmetry plane, z through thickness), "
+                f"graded tensor-product HEX8, units METERS, generated by make_plate_mesh.py\n")
         f.write("*NODE\n")
         for n, p in enumerate(nodes, start=1):
             f.write("%d, %.9e, %.9e, %.9e\n" % (n, p[0] * 1e-3, p[1] * 1e-3, p[2] * 1e-3))
         f.write("*ELEMENT, TYPE=C3D8, ELSET=ALL\n")
         for e, cc in enumerate(cells, start=1):
             f.write("%d, %s\n" % (e, ", ".join(str(v) for v in cc)))
-        for name, ids in (("SYMMETRY_X", sym), ("TOP_SURFACE", top)):
+        for name, ids in (("SYMMETRY_Y", sym), ("TOP_SURFACE", top)):
             f.write(f"*NSET, NSET={name}\n")
             for s in range(0, len(ids), 16):
                 f.write(", ".join(str(v) for v in ids[s:s + 16]) + "\n")
 
     summary = dict(
         model=a.model, units="inp in meters; this summary in mm",
-        geometry_mm=dict(width_x=a.width, length_y=a.length, thickness_z=a.thickness,
-                         x_extent=[float(x[0]), float(x[-1])], weld_centre_x=x_centre),
+        axes=dict(x="along the weld", y="across the weld (y=0 symmetry plane)", z="through thickness (top = z max)"),
+        geometry_mm=dict(length_x=a.length, width_y=a.width, thickness_z=a.thickness,
+                         y_extent=[float(y[0]), float(y[-1])], weld_centre_y=weld_centre_y),
         counts=dict(nx=nx, ny=ny, nz=nz, nodes=len(nodes), cells=len(cells), dof=3 * len(nodes),
                     symmetry_nodes=int(len(sym)), top_surface_nodes=int(len(top))),
         spacing_mm=dict(dx_min=float(dx.min()), dx_max=float(dx.max()),
                         dy_min=float(dy.min()), dy_max=float(dy.max()),
                         dz_min=float(dz.min()), dz_max=float(dz.max())),
-        checks=dict(min_cell_volume_mm3=float(vol), volume_closure=sum_vol / total_vol,
-                    node_ids_consecutive=True, all_positive_jacobian=bool(dx.min() > 0 and dy.min() > 0 and dz.min() > 0)),
+        checks=dict(volume_closure=sum_vol / total_vol, node_ids_consecutive=True,
+                    all_positive_jacobian=bool(dx.min() > 0 and dy.min() > 0 and dz.min() > 0)),
         output=os.path.abspath(a.out),
     )
     with open(os.path.splitext(a.out)[0] + "_summary.json", "w", encoding="utf-8") as f:
@@ -123,22 +130,21 @@ def build(a):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", choices=("half", "full"), default="half")
+    p.add_argument("--length", type=float, default=44.0, help="plate length along the weld, mm")
     p.add_argument("--width", type=float, default=20.0, help="full plate width across the weld, mm")
-    p.add_argument("--length", type=float, default=44.0)
     p.add_argument("--thickness", type=float, default=6.0)
-    p.add_argument("--dx-fine", type=float, default=0.25, help="transverse spacing next to the weld, mm")
-    p.add_argument("--x-fine", type=float, default=6.0, help="transverse extent of the fine zone from the weld centreline, mm")
-    p.add_argument("--dx-max", type=float, default=1.0)
+    p.add_argument("--dx", type=float, default=0.5, help="spacing along the weld, mm")
+    p.add_argument("--dx-max", type=float, default=0.5, help="coarse spacing before/after the weld travel (= dx keeps it uniform)")
+    p.add_argument("--x-fine-start", type=float, default=0.0)
+    p.add_argument("--x-fine-end", type=float, default=44.0)
+    p.add_argument("--dy-fine", type=float, default=0.25, help="transverse spacing next to the weld centreline, mm")
+    p.add_argument("--y-fine", type=float, default=6.0, help="transverse extent of the fine zone from the centreline, mm")
+    p.add_argument("--dy-max", type=float, default=1.0)
     p.add_argument("--dz-fine", type=float, default=0.25, help="through-thickness spacing at the top face, mm")
     p.add_argument("--z-fine", type=float, default=3.0, help="depth of the fine zone below the top face, mm")
     p.add_argument("--dz-max", type=float, default=0.5)
-    p.add_argument("--dy-fine", type=float, default=0.5)
-    p.add_argument("--dy-max", type=float, default=1.0)
-    p.add_argument("--y-fine", type=int, default=1, help="1 = fine dy only over [y-fine-start, y-fine-end]; 0 = uniform dy-fine")
-    p.add_argument("--y-fine-start", type=float, default=5.0)
-    p.add_argument("--y-fine-end", type=float, default=39.0)
     p.add_argument("--growth", type=float, default=1.25)
-    p.add_argument("--out", default="inputs/cfd2017_plate_half_025mm.inp")
+    p.add_argument("--out", default="inputs/plate_half_cfdaxes_025mm.inp")
     build(p.parse_args(argv))
 
 

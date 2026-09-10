@@ -2,8 +2,9 @@
 """Map the CFD temperature frames (Desktop/熔池温度场result/output/v01) onto the mechanical mesh nodes.
 
 CFD frame: x along the weld (0..44 mm), y transverse half-model (0..10 mm, symmetry y=0), z thickness (0..6 mm).
-Mechanical mesh (cfd2017_plate_05mm.inp): weld along +y at x = x_centre, x transverse (0..20 mm), z thickness.
-Mapping: cfd_x = mesh_y, cfd_y = |mesh_x - x_centre|, cfd_z = mesh_z; trilinear interpolation on the
+Mechanical mesh: --mapping identity expects the CFD axes (x along the weld, y across it with the weld
+centreline at --sym-centre, z through thickness); --mapping swap handles the legacy weld-along-y meshes.
+Trilinear interpolation on the
 rectilinear CFD node grid; temperatures capped at --cap (the CFD surface peaks reach 4000+ K, the
 mechanics only needs "above liquidus").
 
@@ -43,7 +44,13 @@ def main(argv=None):
     p.add_argument('--v01', required=True, help='directory with field_grid.bin/field_T.bin/field_index.txt and tools/')
     p.add_argument('--frames', default=None, help='subset list (frame ids in first column, # comments); default all frames')
     p.add_argument('--inp', required=True)
-    p.add_argument('--x-centre', type=float, default=0.010, help='weld centre line x in mesh coordinates [m]')
+    p.add_argument('--mapping', choices=('identity', 'swap'), default='identity',
+                   help="'identity': the mesh already uses the CFD axes (x along the weld, y across it with the "
+                        "weld centreline at --sym-centre, z through thickness). 'swap': legacy meshes whose weld "
+                        "runs along y (cfd_x = mesh_y, cfd_y = |mesh_x - --sym-centre|).")
+    p.add_argument('--sym-centre', type=float, default=0.0,
+                   help='coordinate of the weld centreline on the transverse axis, in mesh coordinates [m]')
+    p.add_argument('--x-centre', type=float, default=None, help='deprecated alias of --sym-centre')
     p.add_argument('--cap', type=float, default=1000.0, help='cap nodal temperature at this value [K]')
     p.add_argument('--out-npz', required=True)
     p.add_argument('--out-path', required=True)
@@ -62,7 +69,11 @@ def main(argv=None):
         sel = list(range(fr.nframe))
 
     pts = read_inp_nodes(a.inp)
-    cfd_pts = np.column_stack([pts[:, 1], np.abs(pts[:, 0] - a.x_centre), pts[:, 2]])
+    centre = a.sym_centre if a.x_centre is None else a.x_centre
+    if a.mapping == 'identity':
+        cfd_pts = np.column_stack([pts[:, 0], np.abs(pts[:, 1] - centre), pts[:, 2]])
+    else:
+        cfd_pts = np.column_stack([pts[:, 1], np.abs(pts[:, 0] - centre), pts[:, 2]])
     lo = np.array([fr.x[0], fr.y[0], fr.z[0]]); hi = np.array([fr.x[-1], fr.y[-1], fr.z[-1]])
     out_of_box = np.maximum(lo - cfd_pts, cfd_pts - hi).max(axis=1)
     print('mesh nodes %d; mapped coordinate range x %.4f..%.4f y %.4f..%.4f z %.4f..%.4f; max excursion beyond CFD box %.2e m'
@@ -83,9 +94,10 @@ def main(argv=None):
                            Tmin_nodes=float(Tn.min()), nodes_above_liquidus=n_liq_nodes,
                            cfd_nodes_above_liquidus=n_liq_cfd, nodes_capped=int((Tn > a.cap).sum())))
         times.append(float(t)); fields.append(Tn_capped.astype(np.float64))
-        y_src = min(0.008 + 0.018 * t, 0.008 + 0.018 * a.laser_time)
+        src = min(0.008 + 0.018 * t, 0.008 + 0.018 * a.laser_time)
         mode = 'weld' if t <= a.laser_time + 1e-9 else 'cooling'
-        rows.append([f'{t:.15g}', f'{a.x_centre:.6f}', f'{y_src:.6f}', '0.006000', '0', 0, 1, 1, mode, '0.006000', len(rows)])
+        pos = (src, centre) if a.mapping == 'identity' else (centre, src)
+        rows.append([f'{t:.15g}', f'{pos[0]:.6f}', f'{pos[1]:.6f}', '0.006000', '0', 0, 1, 1, mode, '0.006000', len(rows)])
         print('frame %3d t=%7.3f  Tmax cfd %7.1f -> nodes %7.1f  liquid nodes %6d (cfd %6d)  capped %d'
               % (k, t, T.max(), Tn.max(), n_liq_nodes, n_liq_cfd, int((Tn > a.cap).sum())))
 
@@ -98,8 +110,10 @@ def main(argv=None):
         w.writerows(rows)
     with open(a.report, 'w', encoding='utf-8') as f:
         json.dump(dict(inp=os.path.abspath(a.inp), v01=os.path.abspath(a.v01), frames=sel, cap_K=a.cap,
-                       x_centre_m=a.x_centre, n_nodes=int(len(pts)), tsolid=float(fr.tsolid), tliquid=float(fr.tliquid),
-                       mapping='cfd_x=mesh_y, cfd_y=|mesh_x-x_centre|, cfd_z=mesh_z (half-model mirrored)',
+                       sym_centre_m=centre, n_nodes=int(len(pts)), tsolid=float(fr.tsolid), tliquid=float(fr.tliquid),
+                       mapping=('cfd_x=mesh_x, cfd_y=|mesh_y-sym_centre|, cfd_z=mesh_z (CFD axes)'
+                                if a.mapping == 'identity' else
+                                'cfd_x=mesh_y, cfd_y=|mesh_x-sym_centre|, cfd_z=mesh_z (legacy swapped axes)'),
                        per_frame=report), f, indent=1)
     print('wrote %s (%d frames x %d nodes), %s, %s' % (a.out_npz, len(times), len(pts), a.out_path, a.report))
 

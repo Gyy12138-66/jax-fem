@@ -28,7 +28,7 @@ PYTHONPATH=$REPO $PY -m jax_fem_am.simulation.runner \
   --surface-selection exterior --bottom-thermal-bc convection \
   --quadrature-order 2 \
   --mechanics-every 1 --no-release-after-cooling \
-  --bottom-mechanics-bc edge_minimal --edge-minimal-axis x \
+  --bottom-mechanics-bc "${MECHBC:-symmetry_plane}" --symmetry-plane-axis "${SYMAXIS:-y}" --symmetry-plane-side min \
   --mechanics-rel-tol 5e-5 --mechanics-line-search --mechanics-max-cuts 3 \
   --reset-plastic-on-solidify --elastic-melt \
   --xla-linear-solver "${LINSOLVER:-pardiso}" --xla-pardiso-mode "${PARDISO_MODE:-phase23}" \
