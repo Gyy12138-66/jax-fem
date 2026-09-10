@@ -90,12 +90,14 @@ from jax_fem_am.physics.thermal import TransientThermal
 from jax_fem_am.process.activation import (
     contributing_cell_mask,
     compute_active_cell,
+    compute_along_path_cells,
     compute_layer_on_scan_cells,
     compute_layer_on_scan_cells_by_intersection,
     compute_moving_window_cells,
     compute_moving_window_cells_by_intersection,
     make_inactive_node_dirichlet_bc,
     merge_dirichlet_bcs,
+    parse_bead_elsets,
     physical_node_mask,
     resolve_surface_active_mask,
     should_activate_layer_for_state,
@@ -726,6 +728,32 @@ def main():
               f"{'ON, E=%g Pa' % args.powder_solid_E if args.powder_solid_E is not None else 'off'})")
     else:
         permanent_powder_cell = onp.zeros(len(cells), dtype=bool)
+    # Along-path (welding) activation: bead ELSET cells are born segment by segment
+    # as the heat source reaches them; every other cell is base material present
+    # from step 0.
+    along_path = args.layer_activation_mode == "along_path"
+    bead_cells_by_elset = {}
+    along_path_base_cell = onp.zeros(len(cells), dtype=bool)
+    bead_printed_cell = onp.zeros(len(cells), dtype=bool)
+    if along_path:
+        bead_names = parse_bead_elsets(getattr(args, "bead_elsets", None))
+        if not bead_names:
+            print("along_path activation without bead elsets: static plate, all cells present from step 0")
+        bead_any = onp.zeros(len(cells), dtype=bool)
+        for name in bead_names:
+            mask = onp.asarray(read_inp_cell_set(args.inp, name, len(cells)), dtype=bool)
+            if not mask.any():
+                raise ValueError(f"bead ELSET {name!r} is empty or missing in {args.inp}")
+            if (mask & bead_any).any():
+                raise ValueError(f"bead ELSET {name!r} overlaps another bead ELSET")
+            bead_cells_by_elset[name] = mask
+            bead_any |= mask
+        along_path_base_cell = (~bead_any) & (~permanent_powder_cell)
+        print(
+            f"along_path activation: bead elsets {list(bead_names)} "
+            f"({int(bead_any.sum())} cells), base cells {int(along_path_base_cell.sum())}, "
+            f"born phase {args.born_phase}"
+        )
     layer_id_cell = compute_layer_id(cell_build_coord, build_axis_id, part_pmin, part_pmax, args)
     # Fixture cells are not printed part layers. Keep their layer id at 0 for
     # clearer ParaView interpretation.
@@ -771,7 +799,7 @@ def main():
     u_guess = [np.zeros((len(points), 3))]
     eqp_quad = np.zeros((len(cells), thermal.fes[0].num_quads, 1))
     max_temperature_cell = initial_temperature * onp.ones(len(cells), dtype=onp.float64)
-    initially_active = substrate_cell | support_cell
+    initially_active = substrate_cell | support_cell | along_path_base_cell
     activation_temperature_cell = initial_temperature * onp.ones(len(cells), dtype=onp.float64)
     activation_step_cell = -onp.ones(len(cells), dtype=onp.float64)
     activation_step_cell[initially_active] = 0
@@ -780,6 +808,12 @@ def main():
     solidification_step_cell[initially_active] = 0
     previous_active = initially_active.copy()
     phase_cell_init = initial_phase_cell(initially_active, substrate_cell, support_cell, args)
+    if along_path:
+        # Base plate is solid metal that may melt and re-solidify (fusion zone);
+        # bead cells stay void until their segment is deposited.
+        base_non_fixture = along_path_base_cell & (~substrate_cell) & (~support_cell)
+        phase_cell_init[base_non_fixture] = STATE_SOLID
+        phase_cell_init[~initially_active & ~permanent_powder_cell] = STATE_VOID
     phase_cell_init[permanent_powder_cell] = STATE_POWDER
     phase_quad = make_quad_scalar(phase_cell_init, thermal.fes[0].num_quads)
     T_ref_quad = initial_temperature * np.ones_like(eqp_quad)
@@ -907,6 +941,14 @@ def main():
                     support_cell,
                     args,
                 )
+        elif along_path:
+            printed_cell, active_cell, cooling_only_cell, segment_cell = compute_along_path_cells(
+                state,
+                bead_cells_by_elset,
+                bead_printed_cell,
+                cell_centroids,
+                along_path_base_cell | substrate_cell | support_cell,
+            )
         elif args.active_window_below_layers > 0:
             if args.layer_activation_geometry == "intersection" and args.layer_thickness is not None and args.layer_thickness > 0.0:
                 printed_cell, active_cell, cooling_only_cell = compute_moving_window_cells_by_intersection(

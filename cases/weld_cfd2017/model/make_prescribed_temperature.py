@@ -56,6 +56,18 @@ def main(argv=None):
     p.add_argument('--out-path', required=True)
     p.add_argument('--report', required=True)
     p.add_argument('--laser-time', type=float, default=1.5)
+    p.add_argument('--weld-start', type=float, default=0.008, help='热源沿焊缝的起点 [m]')
+    p.add_argument('--speed', type=float, default=0.018, help='行进速度 [m/s]')
+    p.add_argument('--z-top', type=float, default=0.006, help='板上表面 z [m]')
+    p.add_argument('--clamp-top', action='store_true',
+                   help='把高于 CFD 顶面的节点（焊道余高）在采样时钳到顶面，'
+                        '即"把固定网格的温度配上隆起坐标"')
+    p.add_argument('--bead-elset', default=None,
+                   help='给出后路径表附带 along_path 分段沉积列（bead_elset / x_end,y_end,z_end / segment_id）')
+    p.add_argument('--bead-x-range', default=None,
+                   help='焊道足迹沿焊缝的范围 "min,max" [m]：首段起点与末段终点扩到该范围，保证焊道全部出生')
+    p.add_argument('--bead-segment-length', type=float, default=5e-4,
+                   help='两次沉积之间热源至少前进的距离 [m]，取网格沿焊缝的单元尺寸，避免出现空区间')
     a = p.parse_args(argv)
 
     sys.path.insert(0, os.path.join(a.v01, 'tools'))
@@ -74,6 +86,14 @@ def main(argv=None):
         cfd_pts = np.column_stack([pts[:, 0], np.abs(pts[:, 1] - centre), pts[:, 2]])
     else:
         cfd_pts = np.column_stack([pts[:, 1], np.abs(pts[:, 0] - centre), pts[:, 2]])
+    n_clamped = 0
+    if a.clamp_top:
+        above = cfd_pts[:, 2] > fr.z[-1]
+        n_clamped = int(above.sum())
+        if n_clamped:
+            print('bead nodes clamped to the CFD top face %.4f m: %d nodes (highest was %.4f m)'
+                  % (fr.z[-1], n_clamped, float(pts[:, 2].max())))
+            cfd_pts[above, 2] = fr.z[-1]
     lo = np.array([fr.x[0], fr.y[0], fr.z[0]]); hi = np.array([fr.x[-1], fr.y[-1], fr.z[-1]])
     out_of_box = np.maximum(lo - cfd_pts, cfd_pts - hi).max(axis=1)
     print('mesh nodes %d; mapped coordinate range x %.4f..%.4f y %.4f..%.4f z %.4f..%.4f; max excursion beyond CFD box %.2e m'
@@ -82,8 +102,13 @@ def main(argv=None):
     if out_of_box.max() > 1e-6:
         raise SystemExit('mechanical mesh extends beyond the CFD domain')
 
+    bead_range = [float(v) for v in a.bead_x_range.split(',')] if a.bead_x_range else None
+    weld_rows = [i for i, kk in enumerate(sel) if fr.frame_time[kk] <= a.laser_time + 1e-9]
+    last_weld = weld_rows[-1] if weld_rows else -1
+    seg_prev = bead_range[0] if bead_range else a.weld_start
+    seg_id = 0
     times, fields, rows, report = [], [], [], []
-    for k in sel:
+    for n_row, k in enumerate(sel):
         t, T, fl = fr.load_frame(k)
         interp = RegularGridInterpolator((fr.x, fr.y, fr.z), T, method='linear', bounds_error=False, fill_value=None)
         Tn = interp(cfd_pts)
@@ -94,23 +119,46 @@ def main(argv=None):
                            Tmin_nodes=float(Tn.min()), nodes_above_liquidus=n_liq_nodes,
                            cfd_nodes_above_liquidus=n_liq_cfd, nodes_capped=int((Tn > a.cap).sum())))
         times.append(float(t)); fields.append(Tn_capped.astype(np.float64))
-        src = min(0.008 + 0.018 * t, 0.008 + 0.018 * a.laser_time)
-        mode = 'weld' if t <= a.laser_time + 1e-9 else 'cooling'
-        pos = (src, centre) if a.mapping == 'identity' else (centre, src)
-        rows.append([f'{t:.15g}', f'{pos[0]:.6f}', f'{pos[1]:.6f}', '0.006000', '0', 0, 1, 1, mode, '0.006000', len(rows)])
+        src = min(a.weld_start + a.speed * t, a.weld_start + a.speed * a.laser_time)
+        welding = t <= a.laser_time + 1e-9
+        mode = 'weld' if welding else 'cooling'
+        seg_end = None
+        if a.bead_elset and welding:
+            cand = bead_range[1] if (n_row == last_weld and bead_range) else src
+            if cand - seg_prev >= a.bead_segment_length - 1e-12 or (n_row == last_weld and cand > seg_prev):
+                seg_end = cand
+        zt = f'{a.z_top:.6f}'
+        if seg_end is not None:
+            ctr = 0.5 * (seg_prev + seg_end)
+            pos = (ctr, centre) if a.mapping == 'identity' else (centre, ctr)
+            end = (seg_end, centre) if a.mapping == 'identity' else (centre, seg_end)
+            rows.append([f'{t:.15g}', f'{pos[0]:.6f}', f'{pos[1]:.6f}', zt, '0', 1, 1, 1, mode, zt, len(rows),
+                         a.bead_elset, f'{end[0]:.6f}', f'{end[1]:.6f}', zt, seg_id])
+            seg_prev = seg_end
+            seg_id += 1
+        else:
+            pos = (src, centre) if a.mapping == 'identity' else (centre, src)
+            rows.append([f'{t:.15g}', f'{pos[0]:.6f}', f'{pos[1]:.6f}', zt, '0', 0, 1, 1, mode, zt, len(rows)]
+                        + (['', '', '', '', ''] if a.bead_elset else []))
         print('frame %3d t=%7.3f  Tmax cfd %7.1f -> nodes %7.1f  liquid nodes %6d (cfd %6d)  capped %d'
               % (k, t, T.max(), Tn.max(), n_liq_nodes, n_liq_cfd, int((Tn > a.cap).sum())))
 
     times = np.asarray(times); Tarr = np.vstack(fields)
     np.savez(a.out_npz, time=times, T=Tarr, points=pts, cap=a.cap, x_centre=a.x_centre,
              source=os.path.abspath(a.v01), frames=np.asarray(sel))
+    hdr = ['time', 'x', 'y', 'z', 'power', 'laser_on', 'layer', 'hatch', 'mode', 'front_coord', 'scan_id']
+    if a.bead_elset:
+        hdr += ['bead_elset', 'x_end', 'y_end', 'z_end', 'segment_id']
     with open(a.out_path, 'w', newline='') as f:
         w = csv.writer(f)
-        w.writerow(['time', 'x', 'y', 'z', 'power', 'laser_on', 'layer', 'hatch', 'mode', 'front_coord', 'scan_id'])
+        w.writerow(hdr)
         w.writerows(rows)
+    if a.bead_elset:
+        print('分段沉积: %d 段，覆盖 %.4f .. %.4f m' % (seg_id, bead_range[0] if bead_range else a.weld_start, seg_prev))
     with open(a.report, 'w', encoding='utf-8') as f:
         json.dump(dict(inp=os.path.abspath(a.inp), v01=os.path.abspath(a.v01), frames=sel, cap_K=a.cap,
-                       sym_centre_m=centre, n_nodes=int(len(pts)), tsolid=float(fr.tsolid), tliquid=float(fr.tliquid),
+                       sym_centre_m=centre, n_nodes=int(len(pts)), nodes_clamped_to_top=n_clamped,
+                       bead_elset=a.bead_elset, bead_segments=seg_id, tsolid=float(fr.tsolid), tliquid=float(fr.tliquid),
                        mapping=('cfd_x=mesh_x, cfd_y=|mesh_y-sym_centre|, cfd_z=mesh_z (CFD axes)'
                                 if a.mapping == 'identity' else
                                 'cfd_x=mesh_y, cfd_y=|mesh_x-sym_centre|, cfd_z=mesh_z (legacy swapped axes)'),

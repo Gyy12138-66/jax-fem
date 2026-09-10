@@ -187,7 +187,8 @@ def append_jump_states(states, global_step, layer_idx, hatch_idx, start_center, 
     return global_step
 
 
-def make_step_state(global_step, mode, layer_idx, hatch_idx, scan_idx, laser_center, power, switch, dt, scan_frac, hatch_frac, front_coord, layer_frac):
+def make_step_state(global_step, mode, layer_idx, hatch_idx, scan_idx, laser_center, power, switch, dt, scan_frac, hatch_frac, front_coord, layer_frac,
+                    bead_elset=None, segment_start=None, segment_end=None, segment_id=None):
     return StepState(
         global_step=global_step,
         mode=mode,
@@ -202,6 +203,10 @@ def make_step_state(global_step, mode, layer_idx, hatch_idx, scan_idx, laser_cen
         hatch_frac=float(hatch_frac),
         front_coord=float(front_coord),
         layer_frac=float(layer_frac),
+        bead_elset=(str(bead_elset) if bead_elset else None),
+        segment_start=(None if segment_start is None else onp.asarray(segment_start, dtype=onp.float64)),
+        segment_end=(None if segment_end is None else onp.asarray(segment_end, dtype=onp.float64)),
+        segment_id=(None if segment_id is None else int(segment_id)),
     )
 
 
@@ -396,6 +401,12 @@ def generate_path_file_step_states(args, pmin, pmax, build_axis_id):
             raise ValueError(f"--path-file must contain columns: {sorted(required)}")
         has_front_coord = "front_coord" in fields
         has_scan_id = "scan_id" in fields
+        # Optional along-path deposition columns (weld bead segments): a row names
+        # the bead ELSET it deposits into and the segment end point; the segment
+        # start is mirrored about the laser centre (centre = midpoint).
+        has_bead_elset = "bead_elset" in fields
+        has_segment_end = {"x_end", "y_end", "z_end"}.issubset(fields)
+        has_segment_id = "segment_id" in fields
         rows = list(reader)
     if not rows:
         raise ValueError("--path-file is empty")
@@ -414,6 +425,19 @@ def generate_path_file_step_states(args, pmin, pmax, build_axis_id):
             )
         dt = args.dt if i == 0 else times[i] - times[i - 1]
         center = path_scale * onp.asarray([float(row["x"]), float(row["y"]), float(row["z"])], dtype=onp.float64)
+        bead_elset = str(row.get("bead_elset", "")).strip() if has_bead_elset else ""
+        segment_end = None
+        segment_start = None
+        if has_segment_end and all(str(row.get(k, "")).strip() != "" for k in ("x_end", "y_end", "z_end")):
+            segment_end = path_scale * onp.asarray(
+                [float(row["x_end"]), float(row["y_end"]), float(row["z_end"])], dtype=onp.float64
+            )
+            segment_start = 2.0 * center - segment_end
+        segment_id = (
+            int(row["segment_id"])
+            if has_segment_id and str(row.get("segment_id", "")).strip() != ""
+            else None
+        )
         layer_idx = max(int(row["layer"]) - 1, 0)
         # Honor --layers / --max-print-layers in path-file mode: rows beyond
         # the layer limit are dropped (matching the raster generator), instead
@@ -472,6 +496,10 @@ def generate_path_file_step_states(args, pmin, pmax, build_axis_id):
                 0.0,
                 front_coord,
                 layer_frac,
+                bead_elset=bead_elset or None,
+                segment_start=segment_start,
+                segment_end=segment_end,
+                segment_id=segment_id,
             )
         )
         global_step += 1

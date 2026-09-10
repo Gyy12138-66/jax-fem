@@ -18,6 +18,10 @@ spacing is uniform by default.
 --model half : y from 0 to half-width (matches the CFD half domain, the default).
 --model full : y mirrored to the full width, weld centreline at width/2.
 
+--bead-height-file 给出焊道余高场（bead_height.npz，来自 2017 tecfree）时，母板几何完全不变，
+只在 h 超过 --bead-min-height 的区域从 z=thickness 往上加 --bead-layers 层单元，层厚随 h(x,y) 变化，
+z=thickness 的节点与母板共用（协调网格）。单元集 PLATE / BEAD 分开输出，供 --bead-elsets BEAD 做单元生死。
+
 Output: Abaqus .inp in METERS (C3D8, ELSET ALL, NSET SYMMETRY_Y / TOP_SURFACE) plus a
 summary JSON. Node ids are consecutive 1..N with i fastest, as the temperature mapper
 (make_prescribed_temperature.py) requires.
@@ -88,6 +92,61 @@ def build(a):
     total_vol = float(x[-1] - x[0]) * float(y[-1] - y[0]) * float(z[-1] - z[0])
     sum_vol = float(np.sum(np.outer(np.outer(dx, dy).ravel(), dz)))
 
+    n_base_nodes = len(nodes)
+    n_base_cells = len(cells)
+    bead_cells = np.empty((0, 8), dtype=np.int64)
+    bead_info = None
+    if a.bead_height_file:
+        from scipy.interpolate import RegularGridInterpolator
+        d = np.load(a.bead_height_file)
+        hx, hy, hall = d["x"] * 1e3, d["y"] * 1e3, d["h"] * 1e3      # 转 mm
+        frame = a.bead_frame if a.bead_frame >= 0 else len(hall) + a.bead_frame
+        hf = RegularGridInterpolator((hx, hy), hall[frame], method="linear",
+                                     bounds_error=False, fill_value=0.0)
+        yq = np.abs(y - (0.0 if a.model == "half" else half_width))    # 半模型对称
+        HN = np.clip(hf(np.stack(np.meshgrid(x, yq, indexing="ij"), axis=-1)), 0.0, None)
+        # 保留四角 h 都超过阈值的 (i,j) 单元列
+        keep = (np.minimum.reduce([HN[:-1, :-1], HN[1:, :-1], HN[1:, 1:], HN[:-1, 1:]]) > a.bead_min_height)
+        ii, jj = np.nonzero(keep)
+        node_ij = np.unique(np.concatenate([ii + (nx + 1) * jj, ii + 1 + (nx + 1) * jj,
+                                            ii + (nx + 1) * (jj + 1), ii + 1 + (nx + 1) * (jj + 1)]))
+        # 焊道节点：每个 (i,j) 上 a.bead_layers 层，z = thickness + h*m/N
+        gi, gj = node_ij % (nx + 1), node_ij // (nx + 1)
+        hcol = np.maximum(HN[gi, gj], a.bead_min_height)
+        new_pts = []
+        for mlay in range(1, a.bead_layers + 1):
+            new_pts.append(np.stack([x[gi], y[gj], a.thickness + hcol * mlay / a.bead_layers], axis=1))
+        nodes = np.concatenate([nodes] + new_pts, axis=0)
+        # 编号：底面用母板顶层节点，上面各层依次接在后面
+        rank = -np.ones((nx + 1) * (ny + 1), dtype=np.int64)
+        rank[node_ij] = np.arange(len(node_ij))
+
+        def bead_nid(i, j, mlay):
+            if mlay == 0:
+                return nid(i, j, nz)
+            return n_base_nodes + 1 + rank[i + (nx + 1) * j] + (mlay - 1) * len(node_ij)
+
+        blocks = []
+        for mlay in range(a.bead_layers):
+            blocks.append(np.stack([bead_nid(ii, jj, mlay), bead_nid(ii + 1, jj, mlay),
+                                    bead_nid(ii + 1, jj + 1, mlay), bead_nid(ii, jj + 1, mlay),
+                                    bead_nid(ii, jj, mlay + 1), bead_nid(ii + 1, jj, mlay + 1),
+                                    bead_nid(ii + 1, jj + 1, mlay + 1), bead_nid(ii, jj + 1, mlay + 1)], axis=1))
+        bead_cells = np.concatenate(blocks, axis=0)
+        cells = np.concatenate([cells, bead_cells], axis=0)
+        cw = np.minimum.reduce([HN[:-1, :-1], HN[1:, :-1], HN[1:, 1:], HN[:-1, 1:]])[keep]
+        bvol = float(np.sum(np.maximum(cw, a.bead_min_height) * np.outer(dx, dy)[keep]))
+        bead_info = dict(source=os.path.abspath(a.bead_height_file), frame=int(frame),
+                         time_s=float(d["time"][frame]), layers=int(a.bead_layers),
+                         min_height_mm=a.bead_min_height, cells=int(len(bead_cells)),
+                         nodes_added=int(len(nodes) - n_base_nodes),
+                         height_max_mm=float(HN.max()), volume_mm3=bvol,
+                         footprint_x_mm=[float(x[ii.min()]), float(x[ii.max() + 1])],
+                         footprint_y_mm=[float(y[jj.min()]), float(y[jj.max() + 1])])
+        print("焊道: %d 单元, %d 新节点, 峰高 %.3f mm, 体积 %.2f mm3 (半模型), 足迹 x %.1f..%.1f mm, y %.1f..%.1f mm"
+              % (len(bead_cells), len(nodes) - n_base_nodes, HN.max(), bvol,
+                 x[ii.min()], x[ii.max() + 1], y[jj.min()], y[jj.max() + 1]))
+
     sym = np.flatnonzero(np.abs(nodes[:, 1] - y[0]) <= 1e-12) + 1
     top = np.flatnonzero(np.abs(nodes[:, 2] - z[-1]) <= 1e-12) + 1
 
@@ -103,6 +162,13 @@ def build(a):
         f.write("*ELEMENT, TYPE=C3D8, ELSET=ALL\n")
         for e, cc in enumerate(cells, start=1):
             f.write("%d, %s\n" % (e, ", ".join(str(v) for v in cc)))
+        for name, lo, hi in (("PLATE", 1, n_base_cells), ("BEAD", n_base_cells + 1, len(cells))):
+            if hi < lo:
+                continue
+            f.write(f"*ELSET, ELSET={name}\n")
+            ids = list(range(lo, hi + 1))
+            for sblk in range(0, len(ids), 16):
+                f.write(", ".join(str(v) for v in ids[sblk:sblk + 16]) + "\n")
         for name, ids in (("SYMMETRY_Y", sym), ("TOP_SURFACE", top)):
             f.write(f"*NSET, NSET={name}\n")
             for s in range(0, len(ids), 16):
@@ -114,7 +180,9 @@ def build(a):
         geometry_mm=dict(length_x=a.length, width_y=a.width, thickness_z=a.thickness,
                          y_extent=[float(y[0]), float(y[-1])], weld_centre_y=weld_centre_y),
         counts=dict(nx=nx, ny=ny, nz=nz, nodes=len(nodes), cells=len(cells), dof=3 * len(nodes),
+                    plate_cells=int(n_base_cells), bead_cells=int(len(bead_cells)),
                     symmetry_nodes=int(len(sym)), top_surface_nodes=int(len(top))),
+        bead=bead_info,
         spacing_mm=dict(dx_min=float(dx.min()), dx_max=float(dx.max()),
                         dy_min=float(dy.min()), dy_max=float(dy.max()),
                         dz_min=float(dz.min()), dz_max=float(dz.max())),
@@ -144,6 +212,12 @@ def main(argv=None):
     p.add_argument("--z-fine", type=float, default=3.0, help="depth of the fine zone below the top face, mm")
     p.add_argument("--dz-max", type=float, default=0.5)
     p.add_argument("--growth", type=float, default=1.25)
+    p.add_argument("--bead-height-file", default=None,
+                   help="焊道余高场 npz（time, h[t,i,j], x, y，单位 m）；给出后在板面上加焊道层")
+    p.add_argument("--bead-frame", type=int, default=-1, help="用第几帧的 h（-1 = 最后一帧）")
+    p.add_argument("--bead-layers", type=int, default=4, help="焊道厚度方向的单元层数")
+    p.add_argument("--bead-min-height", type=float, default=0.25,
+                   help="低于此高度的区域不生成焊道单元，且足迹内的层厚不低于该值 [mm]")
     p.add_argument("--out", default="inputs/plate_half_cfdaxes_025mm.inp")
     build(p.parse_args(argv))
 

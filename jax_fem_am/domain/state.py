@@ -27,6 +27,12 @@ class StepState:
     layer_frac: float
     ambient_temperature: Optional[float] = None
     bottom_temperature: Optional[float] = None
+    # Optional along-path deposition data (weld bead segments). None for the
+    # LPBF raster / point-source contracts, which leave these columns absent.
+    bead_elset: Optional[str] = None
+    segment_start: Optional[onp.ndarray] = None
+    segment_end: Optional[onp.ndarray] = None
+    segment_id: Optional[int] = None
 
 
 def reset_new_cell_nodal_temperature(T_old, cells, newly_printed_cell, previous_active_cell, value):
