@@ -1077,6 +1077,83 @@ def make_anchor_mechanics_bc(points, candidate_node_ids=None):
     ]
 
 
+def make_symmetry_plane_mechanics_bc(
+    points,
+    *,
+    plane_axis_id,
+    side="min",
+    return_metadata=False,
+):
+    """Half-model restraint: symmetry plane plus the minimal anchor for the rest.
+
+    Every node on the selected face has its displacement normal to that face fixed
+    (the symmetry condition). That leaves three rigid-body modes: translation along
+    the two in-plane axes and rotation about the plane normal. They are removed by
+    fixing both in-plane components at one corner node of the plane and one in-plane
+    component at a second node far from it, so the half model is exactly equivalent
+    to the mirrored full model without over-constraining thermal contraction.
+    """
+
+    points = onp.asarray(points, dtype=onp.float64)
+    if points.ndim != 2 or points.shape[1] != 3 or not onp.all(onp.isfinite(points)):
+        raise ValueError("symmetry plane BC requires finite 3D points")
+    plane_axis_id = int(plane_axis_id)
+    if plane_axis_id not in (0, 1, 2):
+        raise ValueError("plane_axis_id must be 0, 1 or 2")
+    if side not in ("min", "max"):
+        raise ValueError("side must be 'min' or 'max'")
+    q_axis, r_axis = [axis for axis in (0, 1, 2) if axis != plane_axis_id]
+
+    coord = points[:, plane_axis_id]
+    plane_value = float(coord.min() if side == "min" else coord.max())
+    span = float(onp.max(onp.ptp(points, axis=0)))
+    tol = 1.0e-9 * max(span, 1.0)
+    plane_mask = onp.abs(coord - plane_value) <= tol
+    plane_ids = onp.flatnonzero(plane_mask)
+    if plane_ids.size < 3:
+        raise ValueError("symmetry plane BC needs at least three nodes on the plane")
+
+    q = points[plane_ids, q_axis]
+    r = points[plane_ids, r_axis]
+    anchor_id = int(plane_ids[onp.lexsort((r, q))[0]])
+    far_id = int(plane_ids[onp.lexsort((r, -q))[0]])
+    if abs(points[far_id, q_axis] - points[anchor_id, q_axis]) <= tol:
+        raise ValueError("symmetry plane has no extent along the in-plane axis")
+
+    plane_jax = np.asarray(plane_mask)
+
+    def on_plane(_point, node_id):
+        return plane_jax[node_id]
+
+    def at_anchor(_point, node_id):
+        return node_id == anchor_id
+
+    def at_far(_point, node_id):
+        return node_id == far_id
+
+    def zero(_point):
+        return 0.0
+
+    bc = [
+        [on_plane, at_anchor, at_anchor, at_far],
+        [plane_axis_id, q_axis, r_axis, r_axis],
+        [zero, zero, zero, zero],
+    ]
+    if not return_metadata:
+        return bc
+    metadata = {
+        "mode": "symmetry_plane",
+        "plane_axis": "xyz"[plane_axis_id],
+        "side": side,
+        "plane_value": plane_value,
+        "plane_nodes": int(plane_ids.size),
+        "anchor_node_id": anchor_id,
+        "far_node_id": far_id,
+        "in_plane_axes": ["xyz"[q_axis], "xyz"[r_axis]],
+    }
+    return bc, metadata
+
+
 def make_box_anchor_mechanics_bc(points, box):
     # Partial-cut release: nodes inside the axis-aligned box stay clamped
     # (u=0, all components), modeling the un-cut root attachment that an

@@ -79,6 +79,7 @@ from jax_fem_am.physics.release import (
     make_box_anchor_mechanics_bc,
     make_edge_minimal_mechanics_bc,
     make_full_bottom_mechanics_bc,
+    make_symmetry_plane_mechanics_bc,
     make_paper_minimal_bottom_mechanics_bc,
     make_root_minimal_release_mechanics_bc,
     validate_release_anchor_protocol,
@@ -610,6 +611,22 @@ def main():
             args.paper_minimal_release_resolved_bc[
                 "constraint_continuity"
             ] = "release_physical_dofs_are_build_dof_subset"
+        mechanics_location_fns = []
+        mechanics_foundation = 0.0
+    elif args.bottom_mechanics_bc == "symmetry_plane":
+        # Half model: symmetry condition on one face + minimal in-plane anchor.
+        mechanics_bc, args.symmetry_plane_resolved_bc = make_symmetry_plane_mechanics_bc(
+            points,
+            plane_axis_id=AXIS_TO_ID[args.symmetry_plane_axis],
+            side=args.symmetry_plane_side,
+            return_metadata=True,
+        )
+        _meta = args.symmetry_plane_resolved_bc
+        print(
+            f"symmetry_plane mechanics BC: u_{_meta['plane_axis']}=0 on "
+            f"{_meta['plane_axis']}={_meta['side']} ({_meta['plane_nodes']} nodes), "
+            f"anchor node {_meta['anchor_node_id']}, far node {_meta['far_node_id']}"
+        )
         mechanics_location_fns = []
         mechanics_foundation = 0.0
     elif args.bottom_mechanics_bc == "free_anchor":
