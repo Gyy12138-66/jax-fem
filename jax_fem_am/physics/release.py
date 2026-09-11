@@ -469,6 +469,83 @@ def make_full_bottom_mechanics_bc(bottom):
 
     return [[bottom, bottom, bottom], [0, 1, 2], [zero, zero, zero]]
 
+def make_edge_minimal_mechanics_bc(
+    points,
+    *,
+    build_axis_id,
+    plane_axis_ids,
+    base_side="min",
+    edge_axis_id=None,
+    return_metadata=False,
+):
+    """Welding-plate minimal restraint (Lu 2020, J. Manuf. Processes 50, Fig. 2).
+
+    Two edges of the bottom face are selected across ``edge_axis_id`` (default:
+    the first in-plane axis). The edge at the axis minimum is fully fixed
+    (all three DOF); the edge at the axis maximum is fixed only in the build
+    direction. This removes rigid motion without over-constraining thermal
+    contraction across the weld.
+    """
+
+    points = onp.asarray(points, dtype=onp.float64)
+    if points.ndim != 2 or points.shape[1] != 3 or not onp.all(onp.isfinite(points)):
+        raise ValueError("edge minimal BC requires finite 3D points")
+    build_axis_id = int(build_axis_id)
+    plane_axis_ids = tuple(int(axis) for axis in plane_axis_ids)
+    if set(plane_axis_ids) | {build_axis_id} != {0, 1, 2} or len(plane_axis_ids) != 2:
+        raise ValueError("build_axis_id and plane_axis_ids must partition the three axes")
+    if edge_axis_id is None:
+        edge_axis_id = plane_axis_ids[0]
+    edge_axis_id = int(edge_axis_id)
+    if edge_axis_id not in plane_axis_ids:
+        raise ValueError("edge_axis_id must be one of the in-plane axes")
+    if base_side not in ("min", "max"):
+        raise ValueError("base_side must be 'min' or 'max'")
+
+    build_coord = points[:, build_axis_id]
+    base_value = float(build_coord.min() if base_side == "min" else build_coord.max())
+    span = float(onp.max(onp.ptp(points, axis=0)))
+    tol = 1.0e-9 * max(span, 1.0)
+    bottom_mask = onp.abs(build_coord - base_value) <= tol
+    edge_coord = points[:, edge_axis_id]
+    fixed_mask = bottom_mask & (onp.abs(edge_coord - edge_coord.min()) <= tol)
+    build_only_mask = bottom_mask & (onp.abs(edge_coord - edge_coord.max()) <= tol)
+    if fixed_mask.sum() < 2 or build_only_mask.sum() < 2:
+        raise ValueError("edge minimal BC needs at least two nodes on each bottom edge")
+    if (fixed_mask & build_only_mask).any():
+        raise ValueError("edge minimal BC edges coincide; plate has no width across the edge axis")
+
+    fixed_jax = np.asarray(fixed_mask)
+    build_only_jax = np.asarray(build_only_mask)
+
+    def fixed_edge(_point, node_id):
+        return fixed_jax[node_id]
+
+    def build_only_edge(_point, node_id):
+        return build_only_jax[node_id]
+
+    def zero(_point):
+        return 0.0
+
+    bc = [
+        [fixed_edge, fixed_edge, fixed_edge, build_only_edge],
+        [0, 1, 2, build_axis_id],
+        [zero, zero, zero, zero],
+    ]
+    if not return_metadata:
+        return bc
+    metadata = {
+        "mode": "edge_minimal",
+        "edge_axis": "xyz"[edge_axis_id],
+        "build_axis": "xyz"[build_axis_id],
+        "base_side": base_side,
+        "fixed_edge_nodes": int(fixed_mask.sum()),
+        "build_only_edge_nodes": int(build_only_mask.sum()),
+        "fixed_edge_node_ids": [int(v) for v in onp.flatnonzero(fixed_mask)],
+        "build_only_edge_node_ids": [int(v) for v in onp.flatnonzero(build_only_mask)],
+    }
+    return bc, metadata
+
 
 def make_paper_minimal_bottom_mechanics_bc(
     points,
@@ -1048,6 +1125,83 @@ def make_anchor_mechanics_bc(points, candidate_node_ids=None):
         [0, 1, 2, 1, 2, 2],
         [zero, zero, zero, zero, zero, zero],
     ]
+
+
+def make_symmetry_plane_mechanics_bc(
+    points,
+    *,
+    plane_axis_id,
+    side="min",
+    return_metadata=False,
+):
+    """Half-model restraint: symmetry plane plus the minimal anchor for the rest.
+
+    Every node on the selected face has its displacement normal to that face fixed
+    (the symmetry condition). That leaves three rigid-body modes: translation along
+    the two in-plane axes and rotation about the plane normal. They are removed by
+    fixing both in-plane components at one corner node of the plane and one in-plane
+    component at a second node far from it, so the half model is exactly equivalent
+    to the mirrored full model without over-constraining thermal contraction.
+    """
+
+    points = onp.asarray(points, dtype=onp.float64)
+    if points.ndim != 2 or points.shape[1] != 3 or not onp.all(onp.isfinite(points)):
+        raise ValueError("symmetry plane BC requires finite 3D points")
+    plane_axis_id = int(plane_axis_id)
+    if plane_axis_id not in (0, 1, 2):
+        raise ValueError("plane_axis_id must be 0, 1 or 2")
+    if side not in ("min", "max"):
+        raise ValueError("side must be 'min' or 'max'")
+    q_axis, r_axis = [axis for axis in (0, 1, 2) if axis != plane_axis_id]
+
+    coord = points[:, plane_axis_id]
+    plane_value = float(coord.min() if side == "min" else coord.max())
+    span = float(onp.max(onp.ptp(points, axis=0)))
+    tol = 1.0e-9 * max(span, 1.0)
+    plane_mask = onp.abs(coord - plane_value) <= tol
+    plane_ids = onp.flatnonzero(plane_mask)
+    if plane_ids.size < 3:
+        raise ValueError("symmetry plane BC needs at least three nodes on the plane")
+
+    q = points[plane_ids, q_axis]
+    r = points[plane_ids, r_axis]
+    anchor_id = int(plane_ids[onp.lexsort((r, q))[0]])
+    far_id = int(plane_ids[onp.lexsort((r, -q))[0]])
+    if abs(points[far_id, q_axis] - points[anchor_id, q_axis]) <= tol:
+        raise ValueError("symmetry plane has no extent along the in-plane axis")
+
+    plane_jax = np.asarray(plane_mask)
+
+    def on_plane(_point, node_id):
+        return plane_jax[node_id]
+
+    def at_anchor(_point, node_id):
+        return node_id == anchor_id
+
+    def at_far(_point, node_id):
+        return node_id == far_id
+
+    def zero(_point):
+        return 0.0
+
+    bc = [
+        [on_plane, at_anchor, at_anchor, at_far],
+        [plane_axis_id, q_axis, r_axis, r_axis],
+        [zero, zero, zero, zero],
+    ]
+    if not return_metadata:
+        return bc
+    metadata = {
+        "mode": "symmetry_plane",
+        "plane_axis": "xyz"[plane_axis_id],
+        "side": side,
+        "plane_value": plane_value,
+        "plane_nodes": int(plane_ids.size),
+        "anchor_node_id": anchor_id,
+        "far_node_id": far_id,
+        "in_plane_axes": ["xyz"[q_axis], "xyz"[r_axis]],
+    }
+    return bc, metadata
 
 
 def make_box_anchor_mechanics_bc(points, box):

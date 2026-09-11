@@ -55,6 +55,7 @@ from jax_fem_am.mesh.model import (
     resolve_axis_range,
 )
 from jax_fem_am.mesh.quadrature import apply_thermal_mass_lumping
+import jax_fem_am.io.vtu as vtu_io
 from jax_fem_am.io.vtu import (
     STRESS_COMPONENTS,
     empty_quad_stress,
@@ -78,7 +79,9 @@ from jax_fem_am.physics.release import (
     select_rigid_body_anchor_nodes,
     validate_rigid_body_anchor_rank,
     make_box_anchor_mechanics_bc,
+    make_edge_minimal_mechanics_bc,
     make_full_bottom_mechanics_bc,
+    make_symmetry_plane_mechanics_bc,
     make_paper_minimal_bottom_mechanics_bc,
     make_root_minimal_release_mechanics_bc,
     validate_release_anchor_protocol,
@@ -89,12 +92,14 @@ from jax_fem_am.physics.thermal import TransientThermal
 from jax_fem_am.process.activation import (
     contributing_cell_mask,
     compute_active_cell,
+    compute_along_path_cells,
     compute_layer_on_scan_cells,
     compute_layer_on_scan_cells_by_intersection,
     compute_moving_window_cells,
     compute_moving_window_cells_by_intersection,
     make_inactive_node_dirichlet_bc,
     merge_dirichlet_bcs,
+    parse_bead_elsets,
     physical_node_mask,
     resolve_surface_active_mask,
     should_activate_layer_for_state,
@@ -278,6 +283,48 @@ def make_thermal_solver_options(
             "linear": {"spsolve_solver": {}},
         }
     }
+
+
+def load_prescribed_temperature(path, points, initial_temperature):
+    """Load an external nodal temperature history (npz) and check it against the mesh."""
+    data = onp.load(path)
+    times = onp.asarray(data["time"], dtype=onp.float64).reshape(-1)
+    T = onp.asarray(data["T"], dtype=onp.float64)
+    if T.ndim != 2 or T.shape[0] != times.size or T.shape[1] != len(points):
+        raise ValueError(
+            f"prescribed temperature file {path}: T must be (n_frames={times.size}, n_nodes={len(points)}), got {T.shape}"
+        )
+    if times.size < 1 or onp.any(onp.diff(times) <= 0.0):
+        raise ValueError("prescribed temperature times must be strictly increasing")
+    if "points" in data:
+        ref = onp.asarray(data["points"], dtype=onp.float64)
+        mesh_points = onp.asarray(points, dtype=onp.float64)
+        if ref.shape != mesh_points.shape:
+            raise ValueError("prescribed temperature 'points' shape does not match the mesh")
+        scale = max(float(onp.ptp(mesh_points, axis=0).max()), 1e-12)
+        dev = float(onp.abs(ref - mesh_points).max())
+        if dev > 1e-6 * scale:
+            raise ValueError(
+                f"prescribed temperature node coordinates deviate from the mesh by {dev:.3e} m (node order mismatch?)"
+            )
+    if not onp.all(onp.isfinite(T)):
+        raise ValueError("prescribed temperature contains non-finite values")
+    return {"time": times, "T": T, "initial": float(initial_temperature)}
+
+
+def prescribed_temperature_at(prescribed, t):
+    """Nodal temperature at time t: linear in time between frames, held outside the range."""
+    times = prescribed["time"]
+    T = prescribed["T"]
+    if t <= times[0]:
+        values = T[0]
+    elif t >= times[-1]:
+        values = T[-1]
+    else:
+        k = int(onp.searchsorted(times, t, side="right") - 1)
+        w = (t - times[k]) / (times[k + 1] - times[k])
+        values = (1.0 - w) * T[k] + w * T[k + 1]
+    return np.asarray(onp.asarray(values, dtype=onp.float64).reshape(-1, 1))
 
 
 def main():
@@ -571,6 +618,48 @@ def main():
             ] = "release_physical_dofs_are_build_dof_subset"
         mechanics_location_fns = []
         mechanics_foundation = 0.0
+    elif args.bottom_mechanics_bc == "symmetry_plane":
+        # Half model: symmetry condition on one face + minimal in-plane anchor.
+        mechanics_bc, args.symmetry_plane_resolved_bc = make_symmetry_plane_mechanics_bc(
+            points,
+            plane_axis_id=AXIS_TO_ID[args.symmetry_plane_axis],
+            side=args.symmetry_plane_side,
+            return_metadata=True,
+        )
+        _meta = args.symmetry_plane_resolved_bc
+        print(
+            f"symmetry_plane mechanics BC: u_{_meta['plane_axis']}=0 on "
+            f"{_meta['plane_axis']}={_meta['side']} ({_meta['plane_nodes']} nodes), "
+            f"anchor node {_meta['anchor_node_id']}, far node {_meta['far_node_id']}"
+        )
+        mechanics_location_fns = []
+        mechanics_foundation = 0.0
+    elif args.bottom_mechanics_bc == "free_anchor":
+        # Unclamped part: 3-2-1 anchor on three extreme nodes removes the six
+        # rigid-body modes only; bending and contraction are unrestrained.
+        mechanics_bc = make_anchor_mechanics_bc(points)
+        print("free_anchor mechanics BC: 3-2-1 rigid-body anchor, no other restraint")
+        mechanics_location_fns = []
+        mechanics_foundation = 0.0
+    elif args.bottom_mechanics_bc == "edge_minimal":
+        edge_axis = getattr(args, "edge_minimal_axis", "auto")
+        edge_axis_id = None if edge_axis == "auto" else AXIS_TO_ID[edge_axis]
+        mechanics_bc, args.edge_minimal_resolved_bc = make_edge_minimal_mechanics_bc(
+            points,
+            build_axis_id=build_axis_id,
+            plane_axis_ids=plane_axis_ids,
+            base_side=args.base_side,
+            edge_axis_id=edge_axis_id,
+            return_metadata=True,
+        )
+        print(
+            "edge_minimal mechanics BC: "
+            f"{args.edge_minimal_resolved_bc['fixed_edge_nodes']} nodes fully fixed at "
+            f"{args.edge_minimal_resolved_bc['edge_axis']}=min, "
+            f"{args.edge_minimal_resolved_bc['build_only_edge_nodes']} nodes build-direction-only at max"
+        )
+        mechanics_location_fns = []
+        mechanics_foundation = 0.0
     else:
         mechanics_bc = make_full_bottom_mechanics_bc(bottom)
         mechanics_location_fns = []
@@ -649,6 +738,34 @@ def main():
               f"{'ON, E=%g Pa' % args.powder_solid_E if args.powder_solid_E is not None else 'off'})")
     else:
         permanent_powder_cell = onp.zeros(len(cells), dtype=bool)
+    # Along-path (welding) activation: bead ELSET cells are born segment by segment
+    # as the heat source reaches them; every other cell is base material present
+    # from step 0.
+    along_path = args.layer_activation_mode == "along_path"
+    bead_cells_by_elset = {}
+    along_path_base_cell = onp.zeros(len(cells), dtype=bool)
+    bead_printed_cell = onp.zeros(len(cells), dtype=bool)
+    bead_cell_mask = None
+    if along_path:
+        bead_names = parse_bead_elsets(getattr(args, "bead_elsets", None))
+        if not bead_names:
+            print("along_path activation without bead elsets: static plate, all cells present from step 0")
+        bead_any = onp.zeros(len(cells), dtype=bool)
+        for name in bead_names:
+            mask = onp.asarray(read_inp_cell_set(args.inp, name, len(cells)), dtype=bool)
+            if not mask.any():
+                raise ValueError(f"bead ELSET {name!r} is empty or missing in {args.inp}")
+            if (mask & bead_any).any():
+                raise ValueError(f"bead ELSET {name!r} overlaps another bead ELSET")
+            bead_cells_by_elset[name] = mask
+            bead_any |= mask
+        along_path_base_cell = (~bead_any) & (~permanent_powder_cell)
+        bead_cell_mask = bead_any
+        print(
+            f"along_path activation: bead elsets {list(bead_names)} "
+            f"({int(bead_any.sum())} cells), base cells {int(along_path_base_cell.sum())}, "
+            f"born phase {args.born_phase}"
+        )
     layer_id_cell = compute_layer_id(cell_build_coord, build_axis_id, part_pmin, part_pmax, args)
     # Fixture cells are not printed part layers. Keep their layer id at 0 for
     # clearer ParaView interpretation.
@@ -694,7 +811,7 @@ def main():
     u_guess = [np.zeros((len(points), 3))]
     eqp_quad = np.zeros((len(cells), thermal.fes[0].num_quads, 1))
     max_temperature_cell = initial_temperature * onp.ones(len(cells), dtype=onp.float64)
-    initially_active = substrate_cell | support_cell
+    initially_active = substrate_cell | support_cell | along_path_base_cell
     activation_temperature_cell = initial_temperature * onp.ones(len(cells), dtype=onp.float64)
     activation_step_cell = -onp.ones(len(cells), dtype=onp.float64)
     activation_step_cell[initially_active] = 0
@@ -703,6 +820,12 @@ def main():
     solidification_step_cell[initially_active] = 0
     previous_active = initially_active.copy()
     phase_cell_init = initial_phase_cell(initially_active, substrate_cell, support_cell, args)
+    if along_path:
+        # Base plate is solid metal that may melt and re-solidify (fusion zone);
+        # bead cells stay void until their segment is deposited.
+        base_non_fixture = along_path_base_cell & (~substrate_cell) & (~support_cell)
+        phase_cell_init[base_non_fixture] = STATE_SOLID
+        phase_cell_init[~initially_active & ~permanent_powder_cell] = STATE_VOID
     phase_cell_init[permanent_powder_cell] = STATE_POWDER
     phase_quad = make_quad_scalar(phase_cell_init, thermal.fes[0].num_quads)
     T_ref_quad = initial_temperature * np.ones_like(eqp_quad)
@@ -788,7 +911,27 @@ def main():
 
     highest_printed_layer = 0
 
+    prescribed_temperature = None
+    if getattr(args, "prescribed_temperature_file", None):
+        prescribed_temperature = load_prescribed_temperature(
+            args.prescribed_temperature_file, points, initial_temperature
+        )
+        print(
+            f"prescribed temperature: {prescribed_temperature['time'].size} frames "
+            f"t=[{prescribed_temperature['time'][0]:.6g}, {prescribed_temperature['time'][-1]:.6g}] s "
+            f"from {args.prescribed_temperature_file}; thermal solve skipped"
+        )
+    sim_time = 0.0
+    vtu_io.QUAD_ARRAYS_IN_VTU = getattr(args, "vtu_quad_arrays", "on") != "off"
+    output_times = None
+    next_output_idx = 0
+    if getattr(args, "output_times_file", None):
+        output_times = onp.sort(onp.loadtxt(args.output_times_file, ndmin=1).astype(onp.float64))
+        print(f"output times: {output_times.size} entries from {args.output_times_file} "
+              f"({output_times[0]:.4g} .. {output_times[-1]:.4g} s); step cadence flags ignored")
+
     for state in step_states:
+        sim_time += float(state.dt)
         _jax_fem_solver.DUMP_CONTEXT.update(
             layer=int(state.layer_idx) + 1, step=int(state.global_step),
             mode=str(state.mode), num_nodes=len(points),
@@ -814,6 +957,14 @@ def main():
                     support_cell,
                     args,
                 )
+        elif along_path:
+            printed_cell, active_cell, cooling_only_cell, segment_cell = compute_along_path_cells(
+                state,
+                bead_cells_by_elset,
+                bead_printed_cell,
+                cell_centroids,
+                along_path_base_cell | substrate_cell | support_cell,
+            )
         elif args.active_window_below_layers > 0:
             if args.layer_activation_geometry == "intersection" and args.layer_thickness is not None and args.layer_thickness > 0.0:
                 printed_cell, active_cell, cooling_only_cell = compute_moving_window_cells_by_intersection(
@@ -858,6 +1009,19 @@ def main():
         # Layer activation means the quadrature point now contains powder.
         # It becomes solid only after passing through liquid/mushy and cooling.
         phase_quad = np.where((printed_quad > 0.5) & (phase_quad == STATE_VOID), STATE_POWDER, phase_quad)
+        if getattr(args, "born_phase", "powder") == "solid":
+            # Welding element-birth semantics: newly activated cells are solid
+            # metal from birth (full stiffness); a later melt still rewrites
+            # their stress-free reference through the normal lifecycle.
+            newly_born_quad = make_quad_scalar(
+                (printed_cell & (~previous_active)).astype(onp.float64),
+                thermal.fes[0].num_quads,
+            )
+            phase_quad = np.where(
+                (newly_born_quad > 0.5) & (phase_quad == STATE_POWDER),
+                STATE_SOLID,
+                phase_quad,
+            )
         if args.reset_activation_temperature:
             newly_printed_pre = printed_cell & (~previous_active)
             if newly_printed_pre.any():
@@ -943,15 +1107,20 @@ def main():
                 state.ambient_temperature,
             ]
         )
-        T_new = solver(
-            thermal,
-            solver_options=make_thermal_solver_options(
-                T_old,
-                latent_heat=args.latent_heat,
-                solidus_temperature=args.solidus_temperature,
-                liquidus_temperature=args.liquidus_temperature,
-            ),
-        )[0]
+        if prescribed_temperature is not None:
+            # External nodal temperature history (e.g. CFD): no thermal solve;
+            # the phase bookkeeping and mechanics below see the prescribed field.
+            T_new = prescribed_temperature_at(prescribed_temperature, sim_time)
+        else:
+            T_new = solver(
+                thermal,
+                solver_options=make_thermal_solver_options(
+                    T_old,
+                    latent_heat=args.latent_heat,
+                    solidus_temperature=args.solidus_temperature,
+                    liquidus_temperature=args.liquidus_temperature,
+                ),
+            )[0]
 
         cell_T = compute_cell_temperature(T_new, cells)
         newly_printed = printed_cell & (~previous_active)
@@ -1047,7 +1216,13 @@ def main():
 
         material_state_cell = material_cell_state(active_cell, substrate_cell, support_cell, args, cell_T, phase_cell=phase_cell_from_quad(phase_quad))
         mechanics_is_current = last_mechanics_step == state.global_step
-        if args.thermal_output_every == 0 and args.mechanics_output_every > 0:
+        if output_times is not None:
+            save_now = is_last
+            if next_output_idx < output_times.size and sim_time >= output_times[next_output_idx] - 1e-9:
+                save_now = True
+                while next_output_idx < output_times.size and sim_time >= output_times[next_output_idx] - 1e-9:
+                    next_output_idx += 1
+        elif args.thermal_output_every == 0 and args.mechanics_output_every > 0:
             # Mechanics-aligned outputs: event-forced mechanics solves drift the
             # cadence off any fixed modulus, so save on the first mechanics solve
             # of each mechanics_output_every-step bucket. Every VTU then carries
@@ -1081,6 +1256,7 @@ def main():
                 float(mechanics_is_current),
                 last_mechanics_step,
                 MODE_TO_ID.get(state.mode, 0),
+                bead_cell=bead_cell_mask,
             )
         else:
             vtk_path = ""

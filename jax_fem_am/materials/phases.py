@@ -368,6 +368,13 @@ def mechanics_material_quads(T_quad, active_quad, phase_quad, args, tables):
     is_solid_like = (phase_quad == STATE_SOLID) | (phase_quad == STATE_SUBSTRATE) | (phase_quad == STATE_SUPPORT)
     is_mushy = phase_quad == STATE_MUSHY
     is_liquid = phase_quad == STATE_LIQUID
+    if getattr(args, "elastic_melt", False):
+        # Welding semantics: the melt carries no plastic history. Liquid and
+        # mushy points stay elastic (their stiffness is still scaled by the
+        # liquid/mushy factors below); the solid tables are untouched.
+        is_melt = is_mushy | is_liquid
+        yield_quad = np.where(is_melt, 1.0e12, yield_quad)
+        hardening_quad = np.where(is_melt, 0.0, hardening_quad)
     inactive_factor = (
         0.0
         if uses_strict_active_domain(args)

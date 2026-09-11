@@ -1,0 +1,58 @@
+{
+ "geometry_mm": {
+  "width_x": 20.0,
+  "length_y": 44.0,
+  "thickness_z": 6.0,
+  "groove_angle_deg": 70.0,
+  "root_face": 6.0,
+  "gap": 0.0,
+  "pass1_top_z": 3.0,
+  "groove_top_width": 0.0
+ },
+ "spacing_mm": {
+  "dx_fine": 0.5,
+  "dx_max": 1.0,
+  "fine_halfwidth": 4.0,
+  "dx_min_actual": 0.5,
+  "dx_max_actual": 0.9237875288683632,
+  "dy": 0.5,
+  "dz": 0.5
+ },
+ "counts": {
+  "nx": 30,
+  "ny": 88,
+  "nz": 12,
+  "nodes": 35867,
+  "cells": 31680,
+  "PLATE_L": 15840,
+  "PLATE_R": 15840,
+  "BEAD1": 0,
+  "BEAD2": 0,
+  "EDGE_FIX_nodes": 89,
+  "EDGE_UZ_nodes": 89,
+  "TOP_SURFACE_nodes": 2759
+ },
+ "volumes_mm3": {
+  "total": 5280.0,
+  "BEAD1": 0.0,
+  "BEAD2": 0.0,
+  "groove_stairstep": 0.0,
+  "groove_exact": 0.0,
+  "groove_area_stairstep_mm2": 0.0,
+  "groove_area_exact_mm2": 0.0,
+  "pass1_area_exact_mm2": 6.301867843887388,
+  "pass1_area_stairstep_mm2": 0.0
+ },
+ "checks": {
+  "min_cell_volume_mm3": 0.125,
+  "all_positive_jacobian": true,
+  "box_volume_mm3": 5280.0,
+  "volume_closure": 1.0
+ },
+ "units": "inp in meters; this summary in mm",
+ "deviations": [
+  "groove slope stair-stepped at dx_fine/dz",
+  "pass split at z=3.0 mm assumed (paper does not state bead areas)"
+ ],
+ "output": "C:\\Users\\user\\Desktop\\AM-Sim\\mesh\\out\\cfd2017_plate_05mm.inp"
+}

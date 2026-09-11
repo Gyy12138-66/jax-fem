@@ -17,11 +17,93 @@ def uses_strict_active_domain(args):
     physically. Other activation modes retain the historical ersatz behavior.
     """
 
+    mode = getattr(args, "layer_activation_mode", "front")
+    if mode == "along_path":
+        # Weld-bead cells do not exist before the heat source reaches them.
+        return True
     return (
-        getattr(args, "layer_activation_mode", "front") == "layer_on_scan"
+        mode == "layer_on_scan"
         and getattr(args, "future_layer_mode", "void") == "void"
     )
 
+
+def parse_bead_elsets(value):
+    """Split the --bead-elsets option into a tuple of ELSET names."""
+    if value is None:
+        return ()
+    if isinstance(value, (list, tuple)):
+        names = [str(v).strip() for v in value]
+    else:
+        names = [v.strip() for v in str(value).split(",")]
+    names = [n for n in names if n]
+    if len(set(names)) != len(names):
+        raise ValueError(f"--bead-elsets contains duplicate names: {names}")
+    return tuple(names)
+
+
+_EMPTY_SEGMENT_WARNED = []
+
+
+def compute_along_path_cells(state, bead_cells_by_elset, bead_printed, cell_centroids, base_cell, tol=None):
+    """Segment-by-segment bead activation for welding (element birth along the path).
+
+    Base cells (every cell outside the bead ELSETs, plus fixtures) are present from
+    step 0. When a step deposits (laser on) into ``state.bead_elset`` over the
+    segment ``[segment_start, segment_end]``, the cells of that ELSET whose centroid
+    lies inside the segment interval along the dominant segment axis are born and
+    stay printed for the rest of the run.
+
+    Returns ``(printed_cell, active_cell, cooling_only_cell, segment_cell)`` and
+    updates ``bead_printed`` in place. ``segment_cell`` marks the cells that
+    receive this step's deposition (the uniform_segment source volume).
+    """
+    cell_centroids = onp.asarray(cell_centroids, dtype=onp.float64)
+    segment_cell = onp.zeros(len(cell_centroids), dtype=bool)
+    deposits = (
+        float(state.laser_switch) > 0.5
+        and bool(getattr(state, "bead_elset", None))
+        and getattr(state, "segment_start", None) is not None
+        and getattr(state, "segment_end", None) is not None
+    )
+    if deposits:
+        name = state.bead_elset
+        if name not in bead_cells_by_elset:
+            raise ValueError(
+                f"path row {state.global_step} deposits into bead ELSET {name!r} "
+                f"which is not in --bead-elsets {sorted(bead_cells_by_elset)}"
+            )
+        start = onp.asarray(state.segment_start, dtype=onp.float64)
+        end = onp.asarray(state.segment_end, dtype=onp.float64)
+        delta = end - start
+        axis = int(onp.argmax(onp.abs(delta)))
+        length = float(abs(delta[axis]))
+        if length <= 0.0:
+            raise ValueError(f"path row {state.global_step}: zero-length segment")
+        if tol is None:
+            tol = 1e-9 * max(length, 1.0)
+        lo, hi = sorted((float(start[axis]), float(end[axis])))
+        coord = cell_centroids[:, axis]
+        segment_cell = (
+            bead_cells_by_elset[name]
+            & (coord >= lo - tol)
+            & (coord <= hi + tol)
+        )
+        if not segment_cell.any():
+            # Contiguous segments cover the whole bead, so a segment shorter than
+            # one cell simply deposits nothing this step; no cell is skipped. Only
+            # warn (once), because a path that never deposits is a real mismatch.
+            if not _EMPTY_SEGMENT_WARNED:
+                _EMPTY_SEGMENT_WARNED.append(True)
+                print(
+                    f"along_path: path row {state.global_step} deposits into {name!r} over "
+                    f"[{lo:.6g}, {hi:.6g}] but no cell centroid falls inside; the path is finer "
+                    f"than the mesh along axis {axis}, such steps deposit nothing (warned once)."
+                )
+        bead_printed |= segment_cell
+    printed_cell = base_cell | bead_printed
+    active_cell = printed_cell.copy()
+    cooling_only_cell = onp.zeros_like(printed_cell, dtype=bool)
+    return printed_cell, active_cell, cooling_only_cell, segment_cell
 
 def resolve_surface_active_mask(args):
     """Resolve face masking without allowing flux on strict-domain voids."""
