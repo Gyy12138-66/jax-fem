@@ -115,7 +115,8 @@ _ALLOWED_KEYS: Dict[str, frozenset] = {
     "pyamg": frozenset(
         {"backend", "method", "near_nullspace", "scaled", "tol", "maxiter",
          "max_coarse", "rebuild", "fallback", "verbose", "device", "smoother",
-         "smoother_sweeps", "smoother_omega", "rebuild_iter_factor"}
+         "smoother_sweeps", "smoother_omega", "rebuild_iter_factor",
+         "clear_jax_caches_on_pattern"}
     ),
 }
 
@@ -204,6 +205,9 @@ def normalize_linear_solver_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
         out["rebuild"] = _check_choice(out.get("rebuild", "pattern"), PYAMG_REBUILD, "rebuild")
         out["fallback"] = _check_choice(out.get("fallback", "pardiso"), ("pardiso", "none"), "fallback")
         out["verbose"] = _as_bool(out.get("verbose", False), "verbose")
+        out["clear_jax_caches_on_pattern"] = _as_bool(
+            out.get("clear_jax_caches_on_pattern", False), "clear_jax_caches_on_pattern"
+        )
         out["device"] = _check_choice(out.get("device", "cpu"), ("cpu", "gpu", "jax"), "device")
         out["smoother"] = _check_choice(
             out.get("smoother", "jacobi"), ("jacobi", "block_gauss_seidel"), "smoother"

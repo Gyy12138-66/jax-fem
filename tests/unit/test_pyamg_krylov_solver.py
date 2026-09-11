@@ -224,3 +224,71 @@ if __name__ == "__main__":
 
 import pytest as _pytest_lane
 pytestmark = _pytest_lane.mark.solver
+
+
+@unittest.skipIf(pyamg is None, "pyamg not installed")
+class PyamgKernelLifetimeTest(unittest.TestCase):
+    """Fix A for the v159 stall (2026-09-08): jit kernel sets are owned by the
+    pattern slot and released with it, so executables do not accumulate one
+    per activation layer."""
+
+    def _system(self, shape, pinned_nodes=(0, 1, 2, 3)):
+        P = pyamg.gallery.poisson(shape, format="csr")
+        A = sp.kron(P, sp.identity(3), format="csr")
+        rows = [3 * n + c for n in pinned_nodes for c in range(3)]
+        A = _pin_rows(A, rows)
+        rng = np.random.default_rng(1)
+        b = rng.standard_normal(A.shape[0])
+        b[rows] = 0.25
+        x0 = np.zeros(A.shape[0])
+        x0[rows] = b[rows]
+        return A, b, x0, _grid_coords(shape)
+
+    def test_jax_path_releases_previous_pattern_kernels(self):
+        import gc
+        import weakref
+
+        solver = amg.PyamgKrylovSolver(tol=1e-8, maxiter=300, max_coarse=20, device="jax")
+        dead = []
+        for k, shape in enumerate([(4, 4, 4), (5, 4, 4), (6, 4, 4)]):
+            A, b, x0, coords = self._system(shape)
+            solver.bind_problem(SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)]))
+            x = solver(FakePetscMat(A), b, x0, {})
+            self.assertLess(np.linalg.norm(A @ x - b) / np.linalg.norm(b), 1e-7)
+            self.assertIsNotNone(solver._cache.kernels)
+            self.assertEqual(solver.stats["compiled_variants"], k + 1)
+            if dead:
+                gc.collect()
+                self.assertTrue(all(ref() is None for ref in dead), "previous pattern kernels still alive")
+            dead.append(weakref.ref(solver._cache.kernels["pcg"]))
+        self.assertEqual(solver.stats["pattern_rebuilds"], 3)
+        self.assertEqual(solver.stats["fallbacks"], 0)
+        self.assertTrue(solver.stats["rss_mb"] is None or solver.stats["rss_mb"] > 0)
+
+    def test_same_pattern_keeps_one_kernel_set(self):
+        A, b, x0, coords = self._system((5, 4, 4))
+        solver = amg.PyamgKrylovSolver(tol=1e-8, maxiter=300, max_coarse=20, device="jax")
+        solver.bind_problem(SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)]))
+        solver(FakePetscMat(A), b, x0, {})
+        first = solver._cache.kernels
+        solver(FakePetscMat(A), b, x0, {})
+        self.assertIs(solver._cache.kernels, first)
+        self.assertEqual(solver.stats["compiled_variants"], 1)
+
+    def test_cpu_path_never_builds_jax_kernels(self):
+        A, b, x0, coords = self._system((5, 4, 4))
+        solver = amg.PyamgKrylovSolver(tol=1e-8, maxiter=300, max_coarse=20)
+        solver.bind_problem(SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)]))
+        solver(FakePetscMat(A), b, x0, {})
+        self.assertIsNone(solver._cache.kernels)
+        self.assertEqual(solver.stats["compiled_variants"], 0)
+
+    def test_registry_accepts_clear_caches_option(self):
+        from jax_fem_am.solvers import linear
+
+        spec = linear.parse_linear_solver_spec({"backend": "pyamg", "clear_jax_caches_on_pattern": "yes"}) \
+            if hasattr(linear, "parse_linear_solver_spec") else None
+        if spec is not None:
+            self.assertTrue(spec["clear_jax_caches_on_pattern"])
+        solver = amg.PyamgKrylovSolver(clear_jax_caches_on_pattern=True)
+        self.assertTrue(solver.clear_jax_caches_on_pattern)

@@ -139,13 +139,21 @@ def _krylov_cpu(method, S, rhs, y0, M, tol, maxiter):
 # ---------------------------------------------------------------------------
 # jax V-cycle + PCG (built lazily so the CPU path never imports jax)
 # ---------------------------------------------------------------------------
-_JAX = None  # module-level cache: dict with jit-compiled kernels and helpers
+_JAX = None  # module-level default kernel set (compat only; the solver uses per-pattern sets)
 
 
-def _jax_kernels():
-    global _JAX
-    if _JAX is not None:
-        return _JAX
+def _make_jax_kernels():
+    """Build a FRESH set of jit-compiled kernels.
+
+    ``jax.jit`` caches one compiled executable per input-shape signature and
+    never evicts. In an AM/weld run the free block changes size on every
+    activation layer, so a module-level jit object accumulates one executable
+    per layer (v159 pyamg production: 153 distinct free-block sizes, 1042
+    hierarchy builds, RSS 15 -> 29 GB, then a D-state stall in the WSL memory
+    manager, 2026-09-08). Each ``_PatternCache`` therefore owns its own set
+    (see ``PyamgKrylovSolver._kernels_for``) and drops it with the pattern, so
+    at most one pattern's executables are alive.
+    """
     import jax
     import jax.numpy as jnp
     from jax import lax
@@ -225,11 +233,37 @@ def _jax_kernels():
     def residual_norm(S, y, rhs):
         return jnp.linalg.norm(rhs - S @ y)
 
-    _JAX = {
+    return {
         "jax": jax, "jnp": jnp, "csr": csr, "CSR": jsparse.CSR,
         "pcg": pcg_jit, "scale_data": scale_data, "residual_norm": residual_norm,
     }
+
+
+def _jax_kernels():
+    """Module-level default kernel set (backward compatibility for callers
+    outside the solver). The solver itself never uses it."""
+    global _JAX
+    if _JAX is None:
+        _JAX = _make_jax_kernels()
     return _JAX
+
+
+def _jax_base_module():
+    import jax
+
+    return jax
+
+
+def _process_rss_mb() -> Optional[float]:
+    """Resident set size of this process in MB (Linux /proc), else None."""
+    try:
+        with open("/proc/self/statm") as fh:
+            pages = int(fh.read().split()[1])
+        import os
+
+        return pages * os.sysconf("SC_PAGE_SIZE") / 1048576.0
+    except Exception:  # pragma: no cover - non-Linux or restricted /proc
+        return None
 
 
 class _PatternCache:
@@ -239,6 +273,7 @@ class _PatternCache:
         "signature", "n", "free", "pin", "keep", "ff_indptr", "ff_indices", "ff_rows",
         "ff_diag_pos", "hierarchy", "hierarchy_info", "jax_levels", "jax_coarse_pinv",
         "jax_omega0", "dev_rows", "dev_cols", "dev_indptr", "dev_diag_pos", "fresh_iterations",
+        "kernels",
     )
 
     def __init__(self, signature, n, free, pin, keep, ff_indptr, ff_indices, ff_rows, ff_diag_pos):
@@ -261,6 +296,20 @@ class _PatternCache:
         self.dev_indptr = None
         self.dev_diag_pos = None
         self.fresh_iterations = None
+        # Per-pattern jit kernel set (device path only); released with the pattern.
+        self.kernels = None
+
+    def release(self) -> None:
+        """Drop device buffers and the jit kernel set so their executables can be freed."""
+        self.kernels = None
+        self.jax_levels = None
+        self.jax_coarse_pinv = None
+        self.jax_omega0 = None
+        self.dev_rows = None
+        self.dev_cols = None
+        self.dev_indptr = None
+        self.dev_diag_pos = None
+        self.hierarchy = None
 
 
 class PyamgKrylovSolver:
@@ -286,6 +335,7 @@ class PyamgKrylovSolver:
         smoother_omega: float = 4.0 / 3.0,
         rebuild_iter_factor: float = 3.0,
         verbose: bool = False,
+        clear_jax_caches_on_pattern: bool = False,
     ) -> None:
         if method not in ("cg", "bicgstab"):
             raise ValueError(f"pyamg method must be cg or bicgstab, got {method!r}")
@@ -326,6 +376,11 @@ class PyamgKrylovSolver:
         # cooling): reused/fresh median 1.4, 90% 2.4, a few solves hit maxiter.
         self.rebuild_iter_factor = float(rebuild_iter_factor)
         self.verbose = bool(verbose)
+        # Last-resort switch: also wipe JAX's global compilation caches on every
+        # pattern change. Frees everything (including the assembly kernels of the
+        # acceleration wrapper, which then recompile), so it is off by default;
+        # per-pattern kernel sets already bound the memory.
+        self.clear_jax_caches_on_pattern = bool(clear_jax_caches_on_pattern)
         smoother_label = (
             f"{smoother}x{self.smoother_sweeps}" if smoother == "jacobi" else "block_gs(sym)"
         )
@@ -353,6 +408,8 @@ class PyamgKrylovSolver:
             "last_solve_s": None,
             "last_levels": None,
             "last_operator_complexity": None,
+            "compiled_variants": 0,
+            "rss_mb": _process_rss_mb(),
         }
 
     def __deepcopy__(self, memo):
@@ -371,6 +428,28 @@ class PyamgKrylovSolver:
 
     def stats_snapshot(self) -> Dict[str, Any]:
         return dict(self.stats)
+
+    # -- per-pattern kernel lifetime ----------------------------------------------
+    def _kernels_for(self, cache: _PatternCache):
+        """Jit kernel set owned by ``cache``; created on first use per pattern."""
+        if cache.kernels is None:
+            cache.kernels = _make_jax_kernels()
+            self.stats["compiled_variants"] += 1
+        return cache.kernels
+
+    def _replace_cache(self, new_cache: _PatternCache) -> None:
+        """Install a new pattern slot and free the previous one's executables."""
+        old = self._cache
+        self._cache = new_cache
+        if old is not None:
+            old.release()
+            del old
+            import gc
+
+            gc.collect()
+            if self.clear_jax_caches_on_pattern and self.use_jax:
+                _jax_base_module().clear_caches()
+        self.stats["rss_mb"] = _process_rss_mb()
 
     # -- pattern bookkeeping ------------------------------------------------------
     @staticmethod
@@ -471,7 +550,7 @@ class PyamgKrylovSolver:
     def _to_jax_hierarchy(self, cache: _PatternCache, ml) -> None:
         from pyamg.relaxation.smoothing import rho_D_inv_A
 
-        K = _jax_kernels()
+        K = self._kernels_for(cache)
         jnp = K["jnp"]
         levels = []
         for l, lvl in enumerate(ml.levels[:-1]):
@@ -522,7 +601,7 @@ class PyamgKrylovSolver:
         return y, iters, rel, info
 
     def _solve_jax(self, cache, data_ff, scale, d, rhs, y0, rhs_norm):
-        K = _jax_kernels()
+        K = self._kernels_for(cache)
         jnp = K["jnp"]
         nf = cache.free.size
         data_dev = jnp.asarray(data_ff)
@@ -564,7 +643,7 @@ class PyamgKrylovSolver:
         cache = self._cache
         if cache is None or cache.signature != signature:
             cache = self._build_pattern(signature, n, indptr, indices, pinned)
-            self._cache = cache
+            self._replace_cache(cache)
             self.stats["pattern_rebuilds"] += 1
         elif self.rebuild == "always":
             cache.hierarchy = None
