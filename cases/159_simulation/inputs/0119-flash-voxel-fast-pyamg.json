@@ -113,11 +113,13 @@
       "mechanics": {
         "backend": "pyamg",
         "device": "gpu",
+        "shape_mode": "full",
+        "fixed_levels": 4,
         "maxiter": 300,
         "verbose": true
       },
       "fallback": "pardiso",
-      "note": "MODE=5 pyamg-gpu lane. Thermal: jax CG + Jacobi with the relative residual guard (as hybrid). Mechanics: pyamg smoothed aggregation on the Jacobi-scaled free block with rigid-body near-nullspace (hierarchy built on the CPU once per activation pattern, max_coarse in dofs, adaptive rebuild when a reused hierarchy needs >3x the fresh iteration count), V-cycle + PCG on the GPU; rebuild-once then PARDISO fallback on a stall; raft-release solve routed to PARDISO by the prefer_direct marker. verbose=true logs every solve (iterations, residual, hierarchy fresh/reused) for the full-height audit."
+      "note": "MODE=5 pyamg-gpu lane. Thermal: jax CG + Jacobi with the relative residual guard (as hybrid). Mechanics: pyamg smoothed aggregation on the Jacobi-scaled free block with rigid-body near-nullspace (hierarchy built on the CPU once per activation pattern, max_coarse in dofs, adaptive rebuild when a reused hierarchy needs >3x the fresh iteration count), V-cycle + PCG on the GPU; rebuild-once then PARDISO fallback on a stall; raft-release solve routed to PARDISO by the prefer_direct marker. verbose=true logs every solve (iterations, residual, hierarchy fresh/reused) for the full-height audit. shape_mode=full (BUG_FIX.md 2026-09-14): the jit shapes are the whole mesh for the entire build -- the 2026-09-07 run used the free-block shapes, accumulated ~186 MB host RSS per new activation shape (153 shapes ~ 28 GB) and froze against the 40 GB WSL cap at step 9907; full shape costs ~+24% CG time and compiles once. Build stresses are no longer bit-identical to the PARDISO lane (same equations, different rounding): re-baseline the 40-slab shakedown before comparing."
     }
   }
 }

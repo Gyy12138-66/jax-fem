@@ -116,9 +116,11 @@ _ALLOWED_KEYS: Dict[str, frozenset] = {
         {"backend", "method", "near_nullspace", "scaled", "tol", "maxiter",
          "max_coarse", "rebuild", "fallback", "verbose", "device", "smoother",
          "smoother_sweeps", "smoother_omega", "rebuild_iter_factor",
-         "clear_jax_caches_on_pattern"}
+         "clear_jax_caches_on_pattern", "shape_mode", "fixed_levels", "bucket_ratio"}
     ),
 }
+
+PYAMG_SHAPE_MODES = ("auto", "free", "full", "bucket")
 
 
 def _as_bool(value: Any, key: str) -> bool:
@@ -215,6 +217,10 @@ def normalize_linear_solver_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
         out["smoother_sweeps"] = int(out.get("smoother_sweeps", 2))
         out["smoother_omega"] = float(out.get("smoother_omega", 4.0 / 3.0))
         out["rebuild_iter_factor"] = float(out.get("rebuild_iter_factor", 3.0))
+        # Shape policy of the jit path: "auto" = full on gpu/jax, free on cpu.
+        out["shape_mode"] = _check_choice(out.get("shape_mode", "auto"), PYAMG_SHAPE_MODES, "shape_mode")
+        out["fixed_levels"] = int(out.get("fixed_levels", 4))
+        out["bucket_ratio"] = float(out.get("bucket_ratio", 1.25))
     return out
 
 
