@@ -509,7 +509,7 @@ class PyamgKrylovSolver:
         scaled: bool = True,
         tol: float = 1e-6,
         maxiter: int = 500,
-        max_coarse: int = 1000,
+        max_coarse: int = 3000,
         rebuild: str = "pattern",
         fallback: str = "pardiso",
         pardiso_mode: str = "phase23",
@@ -631,6 +631,27 @@ class PyamgKrylovSolver:
 
     def stats_snapshot(self) -> Dict[str, Any]:
         return dict(self.stats)
+
+    def release_device(self) -> None:
+        """Drop every device buffer and jit kernel set (pattern and structure
+        slots). The next solve rebuilds them -- pattern, hierarchy, one
+        recompilation -- so call this only before a solve that is routed away
+        from this solver (the raft release goes to PARDISO). Until then the
+        full-shape structure, the padded hierarchy and the scaled data
+        (~2.4 GB on v159) would sit on the device next to the second
+        mechanics problem's assembly, which is what ran the 2026-09-15
+        shakedown out of device memory at the release step."""
+        if self._cache is not None:
+            self._cache.release()
+            self._cache = None
+        if self._struct is not None:
+            self._struct.release()
+            self._struct = None
+        import gc
+
+        gc.collect()
+        self.stats["device_releases"] = int(self.stats.get("device_releases", 0)) + 1
+        self.stats["rss_mb"] = _process_rss_mb()
 
     # -- kernel lifetime ---------------------------------------------------------------
     @property
@@ -931,13 +952,31 @@ class PyamgKrylovSolver:
 
     # -- fallback -------------------------------------------------------------------
     def _direct_fallback(self, A, b, x0, linear_options, reason: str):
+        """Hand one system to PARDISO and keep nothing.
+
+        The shared phase23 adapter (``shared_pardiso_solver``) retains the
+        symbolic+numeric factorisation per sparsity pattern for reuse. On the
+        0.94 M-dof v159 mechanics system that is ~8 GB of host memory, and two
+        consecutive fallbacks at layer 120 of the 2026-09-14 full-height run
+        pushed the WSL guest over its 40 GB cap and froze the process
+        (BUG_FIX.md section 8). The fallback here is a one-shot phase-13
+        solve followed by phase -1 (release), so the only cost is time.
+        """
         self.stats["fallbacks"] += 1
         if self.fallback != "pardiso":
             raise RuntimeError(f"pyamg solver failed: {reason}")
-        print(f"WARNING: pyamg solver {reason}; solving this system with PARDISO", flush=True)
-        from jax_fem_am.solvers.linear import shared_pardiso_solver
+        print(
+            f"WARNING: pyamg solver {reason}; solving this system with PARDISO "
+            "(one-shot, factorisation released afterwards)",
+            flush=True,
+        )
+        from jax_fem_am.solvers.pardiso import pardiso_solve_once
 
-        return shared_pardiso_solver(self.pardiso_mode)(A, b, x0, linear_options)
+        t0 = time.perf_counter()
+        x = pardiso_solve_once(A, b)
+        self.stats["fallback_s"] = self.stats.get("fallback_s", 0.0) + (time.perf_counter() - t0)
+        self.stats["rss_mb"] = _process_rss_mb()
+        return x
 
     # -- krylov drivers ---------------------------------------------------------------
     def _solve_cpu(self, cache, S, rhs, y0, rhs_norm):

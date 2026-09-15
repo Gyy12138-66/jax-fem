@@ -115,7 +115,8 @@
         "device": "gpu",
         "shape_mode": "full",
         "fixed_levels": 4,
-        "maxiter": 300,
+        "max_coarse": 3000,
+        "maxiter": 600,
         "verbose": true
       },
       "fallback": "pardiso",

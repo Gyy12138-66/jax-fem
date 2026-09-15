@@ -424,6 +424,30 @@ class PyamgFixedShapeTest(unittest.TestCase):
         self.assertGreater(solver._struct.caps["P0"], 8)
         self.assertEqual(solver.stats["compiled_variants"], 2)
 
+    def test_release_device_drops_buffers_and_next_solve_rebuilds(self):
+        # the wrapper calls this before routing the raft release to PARDISO
+        A, b, x0, rows, coords = self._system((5, 5, 5))
+        solver = amg.PyamgKrylovSolver(tol=1e-8, maxiter=300, max_coarse=20, device="jax", shape_mode="full")
+        solver.bind_problem(SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)]))
+        solver(FakePetscMat(A), b, x0, {})
+        self.assertIsNotNone(solver._struct)
+        solver.release_device()
+        self.assertIsNone(solver._cache)
+        self.assertIsNone(solver._struct)
+        self.assertEqual(solver.stats["device_releases"], 1)
+        x = solver(FakePetscMat(A), b, x0, {})
+        self.assertLess(np.linalg.norm(A @ x - b) / np.linalg.norm(b), 1e-7)
+        self.assertEqual(solver.stats["structure_rebuilds"], 2)
+        self.assertEqual(solver.stats["compiled_variants"], 2)
+        # free mode: same call, nothing to drop on the structure side
+        free_solver = amg.PyamgKrylovSolver(tol=1e-8, maxiter=300, max_coarse=20, device="jax", shape_mode="free")
+        free_solver.bind_problem(SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)]))
+        free_solver(FakePetscMat(A), b, x0, {})
+        free_solver.release_device()
+        self.assertIsNone(free_solver._cache)
+        free_solver(FakePetscMat(A), b, x0, {})
+        self.assertEqual(free_solver.stats["pattern_rebuilds"], 2)
+
     def test_bucket_mode_is_a_template(self):
         A, b, x0, rows, coords = self._system((4, 4, 4))
         solver = amg.PyamgKrylovSolver(device="jax", shape_mode="bucket")
@@ -449,6 +473,17 @@ class PyamgFixedShapeTest(unittest.TestCase):
         self.assertGreaterEqual(caps["P1"], 1178964)
         self.assertGreaterEqual(caps["A2"], 170820)
 
+    def test_default_max_coarse_keeps_three_levels(self):
+        # BUG_FIX.md section 7: 1000 dofs produced a 4th level from layer 71 on
+        # (level 2 grows to 1746 dofs on v159) and tripled the CG count.
+        from jax_fem_am.solvers import linear
+
+        self.assertEqual(amg.PyamgKrylovSolver().max_coarse, 3000)
+        self.assertEqual(linear.normalize_linear_solver_spec({"backend": "pyamg"})["max_coarse"], 3000)
+        caps = amg.default_capacities(904368, 4, max_coarse=3000)
+        self.assertEqual(caps["rows3"], 3840)
+        self.assertGreaterEqual(caps["rows2"], 1746)
+
     def test_registry_accepts_shape_keys(self):
         from jax_fem_am.solvers import linear
 
@@ -461,3 +496,61 @@ class PyamgFixedShapeTest(unittest.TestCase):
         self.assertEqual(linear.normalize_linear_solver_spec({"backend": "pyamg"})["shape_mode"], "auto")
         with self.assertRaises(ValueError):
             linear.normalize_linear_solver_spec({"backend": "pyamg", "shape_mode": "padded"})
+
+
+@unittest.skipIf(pyamg is None, "pyamg not installed")
+class PyamgFallbackRetentionTest(unittest.TestCase):
+    """BUG_FIX.md section 8: the PARDISO fallback must not keep a factorisation
+    alive. The shared phase23 adapter held ~8 GB on the v159 system and froze
+    the 2026-09-14 full-height run; the fallback is now a one-shot solve."""
+
+    def _system(self):
+        P = pyamg.gallery.poisson((6, 6, 6), format="csr")
+        A = sp.kron(P, sp.identity(3), format="csr")
+        rows = [3 * n + c for n in range(4) for c in range(3)]
+        A = _pin_rows(A, rows)
+        b = np.random.default_rng(3).standard_normal(A.shape[0])
+        b[rows] = 0.5
+        return A, b, rows, _grid_coords((6, 6, 6))
+
+    def test_fallback_solves_without_touching_the_shared_pardiso_registry(self):
+        try:
+            import pypardiso  # noqa: F401
+        except ImportError:  # pragma: no cover - depends on the environment
+            self.skipTest("pypardiso not installed")
+        from jax_fem_am.solvers import linear
+
+        linear.reset_shared_solvers()
+        A, b, rows, coords = self._system()
+        # maxiter=1 at tol 1e-12 cannot converge: rebuild-once, then fallback
+        solver = amg.PyamgKrylovSolver(tol=1e-12, maxiter=1, max_coarse=20, fallback="pardiso")
+        solver.bind_problem(SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)]))
+        x = solver(FakePetscMat(A), b, None, {})
+        self.assertLess(np.linalg.norm(A @ x - b) / np.linalg.norm(b), 1e-10)
+        np.testing.assert_allclose(x[rows], b[rows])
+        self.assertEqual(solver.stats["fallbacks"], 1)
+        self.assertGreater(solver.stats["fallback_s"], 0.0)
+        # one-shot path: no shared adapter was created, nothing is retained
+        self.assertEqual(linear._SHARED_PARDISO, {})
+
+    def test_pardiso_solve_once_and_release(self):
+        try:
+            import pypardiso  # noqa: F401
+        except ImportError:  # pragma: no cover - depends on the environment
+            self.skipTest("pypardiso not installed")
+        from jax_fem_am.solvers import linear, pardiso
+
+        A, b, rows, _ = self._system()
+        x = pardiso.pardiso_solve_once(FakePetscMat(A), b)
+        self.assertLess(np.linalg.norm(A @ x - b) / np.linalg.norm(b), 1e-10)
+        # the shared phase23 adapter retains a handle per pattern; release()
+        # drops it (count 1) and the adapter keeps working afterwards
+        linear.reset_shared_solvers()
+        shared = linear.shared_pardiso_solver("phase23")
+        shared(FakePetscMat(A), b, None, {})
+        self.assertEqual(linear.release_shared_solvers(), 1)
+        self.assertEqual(linear.release_shared_solvers(), 0)
+        x2 = shared(FakePetscMat(A), b, None, {})
+        self.assertLess(np.linalg.norm(A @ x2 - b) / np.linalg.norm(b), 1e-10)
+        self.assertIs(linear.shared_pardiso_solver("phase23"), shared)
+        linear.reset_shared_solvers()

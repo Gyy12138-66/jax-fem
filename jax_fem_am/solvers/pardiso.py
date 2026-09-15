@@ -129,6 +129,29 @@ class _RawPardiso:
             pass
 
 
+def pardiso_solve_once(A, b, single_precision: bool = False):
+    """Factorise, solve and release in one go (phase 13, then phase -1).
+
+    For fallback paths that must not keep a factorisation alive: the shared
+    phase23 adapters retain ~8 GB on the v159 mechanics system, which is what
+    froze the 2026-09-14 MODE=5 run (BUG_FIX.md section 8). Nothing is cached
+    across calls, so the only cost is the analysis time of one solve.
+    """
+    indptr, indices, data = A.getValuesCSR()
+    n = int(indptr.shape[0] - 1)
+    ia = np.asarray(indptr).astype(np.int32)
+    ia += 1
+    ja = np.asarray(indices).astype(np.int32)
+    ja += 1
+    values = np.ascontiguousarray(np.asarray(data, dtype=np.float64))
+    rhs = np.ascontiguousarray(np.asarray(b, dtype=np.float64).ravel())
+    raw = _RawPardiso(single_precision=single_precision)
+    try:
+        return raw.call(n, values, ia, ja, rhs, phase=13)
+    finally:
+        raw.release()
+
+
 class _PatternState:
     """Cached per-sparsity-pattern data: index arrays + PARDISO handle."""
 
@@ -346,6 +369,18 @@ class VariantSolver:
             self._states["nocmp"] = st
         return st
 
+    def release_states(self) -> int:
+        """Release every cached PARDISO handle (phase -1) and forget the
+        factorisations; the next solve of any pattern re-analyses. Returns the
+        number of handles released."""
+        count = 0
+        for st in list(self._states.values()):
+            raw = st.raw if isinstance(st, _PatternState) else st
+            raw.release()
+            count += 1
+        self._states.clear()
+        return count
+
 
 class PardisoCustomSolver:
     """jax-fem ``custom_solver`` adapter: PETSc AIJ -> SciPy CSR -> MKL PARDISO.
@@ -402,6 +437,23 @@ class PardisoCustomSolver:
         if variant is False:
             return None
         return dict(variant.stats_snapshot())
+
+    def release(self) -> int:
+        """Drop every retained factorisation (handles released with phase -1).
+        The adapter stays usable; the next solve pays a fresh analysis."""
+        variant = self._maybe_v07_variant()
+        if variant is not False:
+            return variant.release_states()
+        solver, self._solver = self._solver, None
+        if solver is not None:
+            free = getattr(solver, "free_memory", None)
+            if free is not None:
+                try:
+                    free(everything=True)
+                except TypeError:
+                    free()
+            return 1
+        return 0
 
     def __call__(self, A, b, x0, linear_options):
         import pypardiso

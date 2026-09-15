@@ -51,6 +51,7 @@ from jax_fem_am.solvers.linear import (
     is_iterative_linear_block,
     json_safe_spec,
     linear_block_label,
+    release_shared_solvers,
     same_linear_backend,
     scoped_linear_options_from_args,
     scoped_specs_from_args,
@@ -1198,6 +1199,23 @@ def install_solver_patch(
             getattr(problem, "prefer_direct_linear_solver", False)
             and is_iterative_linear_block(active_options)
         ):
+            # The iterative solver's device buffers are dead weight during a
+            # routed direct solve (v159 full shape: ~2.4 GB of structure,
+            # padded hierarchy and scaled data), and the direct problem is a
+            # second mechanics Problem whose assembly needs the device: the
+            # 2026-09-15 fix2 shakedown ran out of device memory exactly here.
+            # Drop them first; the iterative solver rebuilds on its next call.
+            release_device = getattr(active_options.get("custom_solver"), "release_device", None)
+            if release_device is not None:
+                try:
+                    release_device()
+                    print(
+                        "iterative lane: released the iterative solver's device buffers "
+                        "before the routed direct solve",
+                        flush=True,
+                    )
+                except Exception as rel_exc:  # pragma: no cover - defensive
+                    print(f"WARNING: iterative solver release_device failed: {rel_exc}", flush=True)
             active_options = direct_preference_options
         _bind_custom_solver(active_options, problem)
         patched_options = (
@@ -1224,8 +1242,31 @@ def install_solver_patch(
                 patched_options,
                 profiler,
             )
+        # Under an ITERATIVE lane the direct solver is a guest: a routed
+        # release solve or a stall retry must not leave its factorisation
+        # resident next to the iterative working set (~8 GB on v159 -- the
+        # 2026-09-14 MODE=5 run froze on exactly that, BUG_FIX.md section 8).
+        # The direct lanes never take these paths, so they are untouched.
+        routed_direct = active_options is direct_preference_options
+
+        def _release_direct_factorisations(where):
+            try:
+                released = release_shared_solvers()
+            except Exception as rel_exc:  # pragma: no cover - defensive
+                print(f"WARNING: PARDISO release after {where} failed: {rel_exc}", flush=True)
+                return
+            if released and profiler is not None:
+                profiler.meta["direct_factorisations_released"] = (
+                    int(profiler.meta.get("direct_factorisations_released", 0)) + released
+                )
+            if released:
+                print(f"iterative lane: released {released} PARDISO factorisation(s) after {where}", flush=True)
+
         try:
-            return run_original_solver(problem, patched_options, active_options)
+            result = run_original_solver(problem, patched_options, active_options)
+            if routed_direct:
+                _release_direct_factorisations("the routed direct solve")
+            return result
         except Exception as exc:
             # A Newton stall under a DIRECT linear solver is a property of the
             # nonlinear problem (spsolve and PARDISO reproduce each other's
@@ -1287,7 +1328,10 @@ def install_solver_patch(
                     retry_options,
                     profiler,
                 )
-            return run_original_solver(problem, retry_options, fallback_block)
+            result = run_original_solver(problem, retry_options, fallback_block)
+            if iterative_active:
+                _release_direct_factorisations("the direct retry")
+            return result
 
     base_module.solver = accelerated_solver
 

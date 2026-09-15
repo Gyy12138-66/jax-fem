@@ -203,7 +203,10 @@ def normalize_linear_solver_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
         out["scaled"] = _as_bool(out.get("scaled", True), "scaled")
         out["tol"] = float(out.get("tol", 1e-6))
         out["maxiter"] = int(out.get("maxiter", 500))
-        out["max_coarse"] = int(out.get("max_coarse", 1000))
+        # dofs of the coarsest level; 3000 keeps the v159 hierarchy at 3 levels
+        # (level 2 tops out at 1746 dofs), 1000 produced a 4th level from layer
+        # 71 on and tripled the CG iteration count (BUG_FIX.md section 7).
+        out["max_coarse"] = int(out.get("max_coarse", 3000))
         out["rebuild"] = _check_choice(out.get("rebuild", "pattern"), PYAMG_REBUILD, "rebuild")
         out["fallback"] = _check_choice(out.get("fallback", "pardiso"), ("pardiso", "none"), "fallback")
         out["verbose"] = _as_bool(out.get("verbose", False), "verbose")
@@ -296,6 +299,15 @@ def shared_pardiso_solver(mode: Optional[str] = None):
 
 def reset_shared_solvers() -> None:
     _SHARED_PARDISO.clear()
+
+
+def release_shared_solvers() -> int:
+    """Release the factorisations held by every shared PARDISO adapter without
+    forgetting the adapters (the next solve re-analyses). Returns the number
+    of PARDISO handles released. Used after a solve that is known to be the
+    last one on its pattern (the raft release) so an ~8 GB factorisation does
+    not stay resident next to the iterative lane's working set."""
+    return sum(solver.release() for solver in _SHARED_PARDISO.values())
 
 
 # ---------------------------------------------------------------------------

@@ -207,3 +207,23 @@ Cholesky 1746 阶 < 0.1 s，建层级时间不变；CG 迭代少三倍、每次�
 2. **兜底不许驻留**：pyamg 车道的 PARDISO 兜底改为一次性求解（用完释放，不走 `shared_pardiso_solver` 的 phase23 复用），或 `maxiter` 300 → 600 让重建后的求解有余量。
 3. **内存预算**：40 GB 上限下，runner 稳态 17–20 GB + 兜底一次 +8 GB 已无余量；兜底必须释放，或把页缓存压下去（`autoMemoryReclaim` 因 D 状态问题已禁用，不能靠它）。
 4. 恢复：D 状态进程 `kill -9` 无效，只能 `wsl --shutdown`；30 帧、`run.log`、能量台账已落盘可用。
+
+---
+
+## 9. 第二轮修法：`max_coarse` 静态修正 + 兜底/释放不驻留（2026-09-15，提交见 git log）
+
+针对 §8 的冻结链条，三处改动（全部只在迭代车道生效，PARDISO 车道不经过）：
+
+| 改动 | 位置 | 验证 |
+|---|---|---|
+| `max_coarse` 缺省 1000 → **3000**（§7.4 静态修法）；MODE=5 配置显式 `max_coarse: 3000`、`maxiter: 600` | `amg.py`、`linear.py`、`0119-flash-voxel-fast-pyamg.json` | 真实矩阵 24 模式（`~/work/159/amgbench/V13.json`）：**全程 3 层**，迭代 15 → 76（同尺寸 4 层为 201），兜底 0，变体 1，容量增长 0，末位容量 3840，818k 复用求解 1.20 s（4 层 1.78 s） |
+| pyamg 兜底改为**一次性 PARDISO**：phase 13 解完立即 phase −1 释放，不再经过 `shared_pardiso_solver` 的 phase23 复用句柄 | `amg.py::_direct_fallback`、`pardiso.py::pardiso_solve_once` | 单测：兜底后 `_SHARED_PARDISO` 为空、残差 1e-10、钉住行精确 |
+| 路由到直接解（raft 释放、Newton 停滞重试）**之前**释放 pyamg 的全部设备缓冲（`release_device`），**之后**释放共享 PARDISO 的分解（`release_shared_solvers`） | `acceleration.py::accelerated_solver`、`amg.py::release_device`、`pardiso.py::release_states/release`、`linear.py::release_shared_solvers` | 2-slab shakedown 日志 214–215 行：`released the iterative solver's device buffers before the routed direct solve` / `released 1 PARDISO factorisation(s) after the routed direct solve`；`profile.meta.direct_factorisations_released = 1` |
+
+**shakedown 验收**（`v159_voxel_pyamg_fix2`，2026-09-15 01:53–01:58Z）：`SHAKEDOWN_GATE_RC=0`，`all_checks_passed`，136 步 2.28 s/步，释放解 `release_u_max=2.20e-3`，CG 最大 45 次、`NOT converged` 0、PARDISO 警告 0，层级全程 3 个数、`padded to [904368, 113152, 4864, 3840]`。
+
+**第一次 shakedown（01:40–01:45Z）失败的教训**：在 raft 释放解的装配阶段 `CUDA_ERROR_OUT_OF_MEMORY`（PARDISO 一次未跑）。释放解走 PARDISO，此时 pyamg 的整体固定结构 + 补零层级 + 缩放数据（~2.4 GB）是设备上的死重量，加上第二个力学 Problem 的装配临时量，贴着 JAX 默认 75%（12.2 GB）上限；`max_coarse=3000` 使粗层稠密逆多占 105 MB，正好推过线。修法即上表第三行的"路由前 `release_device`"，外加启动器导出 `XLA_PYTHON_CLIENT_MEM_FRACTION=0.85`（`~/work/159/launch_v159_fix2_gates.sh`，仓库外）。开头那条 "Failed to allocate device memory of 4.00GiB" 在成功的跑里同样存在，是分配器探测，不是故障。
+
+单测：pyamg 27 passed，`-m solver` 94 passed，`tests/unit` 342 passed，`tests/contract` 362 passed。
+
+**待办**：[x] §7.4 静态修法；[ ] 全高重跑（新 TAG）；[ ] MODE=5 40-slab 逐位基线重立；[ ] §7 动态深度选择；[ ] `bucket` 自适应。
