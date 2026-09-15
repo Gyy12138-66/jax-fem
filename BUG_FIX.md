@@ -227,3 +227,14 @@ Cholesky 1746 阶 < 0.1 s，建层级时间不变；CG 迭代少三倍、每次�
 单测：pyamg 27 passed，`-m solver` 94 passed，`tests/unit` 342 passed，`tests/contract` 362 passed。
 
 **待办**：[x] §7.4 静态修法；[ ] 全高重跑（新 TAG）；[ ] MODE=5 40-slab 逐位基线重立；[ ] §7 动态深度选择；[ ] `bucket` 自适应。
+
+### 9.1 第二次全高（`v159_voxel_pyamg_fix2` stage 3，2026-09-15 02:11Z 起）
+
+跑到 **step 6340 / 11885（layer 98 / 182，25 帧，5.6 h）** 时整个 WSL VM 被 Windows 更新重建：15:45:56–15:46:01 本地 Microsoft Store 自动安装
+`WindowsSubsystemforLinux 2.7.14.0`，SCM 7040/7045 重装 WSL 服务、RestartManager 重启 `wsl.exe`，`uptime -s` = 15:46:51。
+runner / `v_159.sh` / 采样器同时消失，无 OOM（`oom_kill 0`）、无 Traceback、无 `end rc=`。**与求解器无关。**
+
+到中断为止的指标全部符合预期：层数全程 3（`{2,3}`）、`capacity_growths` 0、PARDISO 兜底 0、RSS 底线 17.9 GB 平台（峰 20.7 GB）、进程始终 R/S 态。
+成本项：复用层级在 slab 内过期快——层 71–98 复用中位 ~95、P90 ~350、顶到 600 次上限累计 79（全部重建重试收敛），末段 5.2 s/步；这就是 §7 "动态过期判据 / 深度选择"要做的。
+
+运维规则（已入记忆）：长跑前 `wsl --update` 并暂停 Windows 更新与 Store 应用更新；事后判断进程消失先查 `uptime -s` 与 System 日志。
