@@ -238,3 +238,49 @@ runner / `v_159.sh` / 采样器同时消失，无 OOM（`oom_kill 0`）、无 Tr
 成本项：复用层级在 slab 内过期快——层 71–98 复用中位 ~95、P90 ~350、顶到 600 次上限累计 79（全部重建重试收敛），末段 5.2 s/步；这就是 §7 "动态过期判据 / 深度选择"要做的。
 
 运维规则（已入记忆）：长跑前 `wsl --update` 并暂停 Windows 更新与 Store 应用更新；事后判断进程消失先查 `uptime -s` 与 System 日志。
+
+### 9.2 第三次全高（同 TAG stage 3 重启，2026-09-15 09:00Z 起）：重建风暴 + 显存顶格 → dxg 分配路径 D 态冻结
+
+跑到 **step 8380 / 11885（layer 129 / 182，33 帧，8.7 h）** 在 17:44Z 冻结：runner（pid 501）`State D`、`wchan=__vma_start_write`（WSL dxg 显存分配路径的 VMA 写锁），
+RSS 20.2 GB（HWM 21.8）、主机 `MemAvailable` 19 GB、`oom_kill 0`、无 Traceback；最后一行日志 `cg iters 600 rel_res 2.59e-05 (NOT converged, hierarchy reused)`，
+即卡在**非收敛后的层级重建**里。与 §8 的主机 RSS 冻结不同：这次主机内存宽裕，卡的是**设备侧**。
+
+**账本**（`output/v159_voxel_pyamg_fix2/production_run3_frozen_layer129.log`，采样表 `rss_samples_run3_frozen_layer129.csv`）：
+
+| 项 | 值 |
+|---|---|
+| 层级重建 `hierarchy built` | **745**（8380 步 ≈ 645 次力学解） = 130 模式变化 + 170 非收敛后重建 + **445 过期标记**（`marked for rebuild`：3 × fresh 规则，fresh 中位 77 次、触发中位 284 次） |
+| 重建间隔 | 中位 **4 次求解**一重建，29% 间隔 ≤ 2；按 10 层分箱：layer 0–29 每箱 ~10 次，40s 44，60s 57，80s 68，**90s 121**，110s 82，**120–129 已 140** |
+| 复用解迭代 | 中位 106、P90 311、顶到 600 上限 171 次（全部重建后收敛，PARDISO 兜底 0） |
+| 显存 | 21:36Z（layer ~80）三条 `Failed to allocate device memory of 5.43 / 4.89 / 4.40 GiB`（log 5442–5444 行），此后 `nvidia-smi` 恒 13.7 GB = 0.85 上限（13.9 GB） |
+| 层数 / 容量 | 全程 3 个数、`padded to [904368, 113152, 4864, 3840]`、`capacity_growths 0`（§9 的静态修法本身成立） |
+
+**链条**：每次重建 `_to_jax_hierarchy_full` 先在旧层级仍被 `cache.jax_levels` 引用的情况下构造并上传新的一整套补零算子（P0 24n + 各层 A/P/R + 稠密粗逆 ≈ 1 GB），
+再加上 `decouple` → `scale_data` 两个 kernel 之间的 nnz 长度中间量（57.5 M × 8 B = 460 MB）和常驻的 `dev_rows`（230 MB）。
+分配器从 layer 80 起贴着 0.85 上限，每次重建都要先在池内腾挪；重建频率又随过期规则在高层爆涨（层级越大 fresh 迭代越小，3 × fresh 越容易触发），
+最终一次腾挪在 WSL 的 dxg 分配路径上拿 VMA 写锁时卡死——不可中断、不能 kill，只能 `wsl --shutdown`。
+
+**第三轮修法**（代码 `amg.py`，配置 `0119-flash-voxel-fast-pyamg.json`）：
+
+| 改动 | 目的 |
+|---|---|
+| 配置 `rebuild_iter_factor: 0`（关闭 3 × fresh 过期规则），`maxiter` 600 → **800** | 去掉 445/745 的重建；复用解 P90 311、只有 2% 到 600，放宽上限让它们收敛而不是重建（重建 9.5 s ≈ 1500 次 CG 迭代的代价） |
+| `_to_jax_hierarchy_full` 构造新层级**之前**先置空 `cache.jax_levels / jax_coarse_pinv / jax_omega0` | 新旧两套补零算子不再同时在设备上，重建的瞬时显存需求减一套（~1 GB） |
+| `decouple` 与 `scale_data` 两个 kernel 都 `donate_argnums=(0,)`：where / 对角 scatter 就地写在传输缓冲上，缩放就地写在解耦后的缓冲上 | prepare 阶段从两份 nnz 长度拷贝（2 × 460 MB）压到一份。先试的「融合成一个 kernel、在设备上用 `jnp.repeat` 重生成行号、删掉常驻 `dev_rows`」实测峰值反而 **+560 MB**（repeat 的三个 nnz 级 int32 临时量，scatter 又迫使中间量落盘），已弃用 |
+| `hierarchy built` 日志行追加 `device in_use / pool / peak / limit MB`（`jax.devices()[0].memory_stats()`，同时进 `hierarchy_info["device_mb"]`） | 全高跑里直接看分配器是否再次顶格，不必靠 `nvidia-smi` 推断 |
+
+未动的保护：非收敛后重建一次再 PARDISO 兜底、路由直接解前 `release_device`、`XLA_PYTHON_CLIENT_MEM_FRACTION=0.85`。
+
+**验证**（`~/work/159/bench_amg.py`，L150 真实矩阵 24 模式，每模式 4 次求解：新建 / 复用 ×2 / **同模式强制重建**；`amgbench/V14old.json` = aa45876 代码、`V14.json` = 融合 kernel、`V15.json` = 本轮采用）：
+
+| 变体 | 分配器峰值 MB | 稳态 in_use MB | 迭代数 / 真残差 / 钉住行 | 用时 新建 / 复用 / 重建 |
+|---|---|---|---|---|
+| aa45876（旧） | 2980–2997 | 1491–1566 | 15 → 76 / ≤ 1.2e-6 / 精确 | 4.6–15.0 s / 0.52–1.00 s / 3.5–12.4 s |
+| 融合 kernel（弃） | **3541–3779** | 1344–1488 | 同 | 同 |
+| 两 kernel 捐赠（采用） | **2552–2872** | 1508–1792 | 同 | 4.4–15.0 s / 0.45–1.13 s / 3.2–13.4 s |
+
+三者迭代数逐点相同、编译变体 1、容量增长 0、兜底 0；池大小都是 4098 MB（BFC 池不回缩，峰值才是生产里决定是否顶格的量）。
+单测：pyamg 28 passed（新增「重建先放旧层级 + 记录 `device_mb`」用例）、`-m solver` 95 passed。
+
+第四次跑：同 TAG，33 帧删除（`production_run3_frozen_layer129.log` / `rss_samples_run3_frozen_layer129.csv` 改名保留），先在新 kernel 上重跑 2-slab shakedown（旧目录改名 `shakedown_2slabs_run1_code5400d58`），过门后起 stage 3。
+

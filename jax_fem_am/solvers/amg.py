@@ -364,27 +364,54 @@ def _make_jax_kernels():
 
     pcg_jit = jax.jit(pcg, static_argnames=("maxiter", "sweeps"))
 
-    @jax.jit
     def scale_data(data, scale, rows, cols):
+        # ``data`` is donated: the scaled operator is written into the buffer
+        # of the transferred (free mode) / decoupled (full mode) data, so the
+        # prepare stage never holds two nnz-length copies (57.5 M x 8 B = 460 MB
+        # each on v159). A fused decouple+scale kernel that regenerated the row
+        # index from indptr on the device was measured 560 MB WORSE at peak
+        # (three nnz-length int32 temporaries of jnp.repeat), see BUG_FIX 9.2.
         return data * scale[rows] * scale[cols]
+
+    scale_data_jit = jax.jit(scale_data, donate_argnums=(0,))
 
     @jax.jit
     def residual_norm(S, y, rhs):
         return jnp.linalg.norm(rhs - S @ y)
 
-    @jax.jit
     def decouple(data, diag_pos, kill, pin_mask):
         # Full-shape system: zero every entry in a pinned row or column, then
         # put 1 on the diagonal of the pinned rows. All shapes fixed per mesh.
+        # ``data`` (the fresh host->device transfer) is donated: the where and
+        # the diagonal scatter run in place, no second nnz-length buffer.
         data = jnp.where(kill, 0.0, data)
         diag_vals = jnp.where(pin_mask, 1.0, data[diag_pos])
         return data.at[diag_pos].set(diag_vals)
 
+    decouple_jit = jax.jit(decouple, donate_argnums=(0,))
+
     return {
         "jax": jax, "jnp": jnp, "csr": csr, "CSR": jsparse.CSR,
-        "pcg": pcg_jit, "scale_data": scale_data, "residual_norm": residual_norm,
-        "decouple": decouple,
+        "pcg": pcg_jit, "scale_data": scale_data_jit, "residual_norm": residual_norm,
+        "decouple": decouple_jit,
     }
+
+
+def _device_memory_mb() -> Optional[Dict[str, float]]:
+    """JAX device allocator figures (MB) for the run log: bytes in use, pool
+    size and peak. None when jax/GPU are unavailable."""
+    try:
+        import jax
+
+        ms = jax.devices()[0].memory_stats() or {}
+        return {
+            "in_use": ms.get("bytes_in_use", 0) / 1048576.0,
+            "pool": ms.get("pool_bytes", 0) / 1048576.0,
+            "peak": ms.get("peak_bytes_in_use", 0) / 1048576.0,
+            "limit": ms.get("bytes_limit", 0) / 1048576.0,
+        }
+    except Exception:  # pragma: no cover - CPU-only environments
+        return None
 
 
 def _jax_kernels():
@@ -806,6 +833,9 @@ class PyamgKrylovSolver:
         cache.hierarchy_info["level_sizes"] = [int(lvl.A.shape[0]) for lvl in ml.levels]
         cache.hierarchy_info["setup_pyamg_s"] = t_pyamg
         cache.hierarchy_info["setup_device_s"] = setup - t_pyamg
+        dev = _device_memory_mb() if self.use_jax else None
+        if dev is not None:
+            cache.hierarchy_info["device_mb"] = dev
         if self.verbose:
             padded = cache.hierarchy_info.get("padded_levels")
             print(
@@ -814,7 +844,9 @@ class PyamgKrylovSolver:
                 f"levels {cache.hierarchy_info['level_sizes']}"
                 + (f" padded to {padded}" if padded else "")
                 + f", operator complexity {ml.operator_complexity():.3f}, "
-                f"near-nullspace {cache.hierarchy_info['near_nullspace']}, smoother {sm[0]}",
+                f"near-nullspace {cache.hierarchy_info['near_nullspace']}, smoother {sm[0]}"
+                + (f", device in_use {dev['in_use']:.0f} / pool {dev['pool']:.0f} / peak {dev['peak']:.0f} "
+                   f"/ limit {dev['limit']:.0f} MB" if dev else ""),
                 flush=True,
             )
         return ml
@@ -870,6 +902,15 @@ class PyamgKrylovSolver:
         n = st.n
         L = self.fixed_levels
         free = cache.free
+        # Drop the previous device hierarchy BEFORE building the new one: the
+        # padded operators are ~1 GB on v159 and a hierarchy is rebuilt every
+        # few solves, so holding old and new at once doubles the transient
+        # device demand. The 3rd full-height run (2026-09-15) sat at the JAX
+        # device limit from layer ~80 on and froze in the WSL dxg allocation
+        # path during exactly such a rebuild (BUG_FIX.md section 9.2).
+        cache.jax_levels = None
+        cache.jax_coarse_pinv = None
+        cache.jax_omega0 = None
         As: List[sp.csr_matrix] = [lvl.A.tocsr() for lvl in ml.levels]
         Ps: List[sp.csr_matrix] = [lvl.P.tocsr() for lvl in ml.levels[:-1]]
         Rs: List[sp.csr_matrix] = [lvl.R.tocsr() for lvl in ml.levels[:-1]]
@@ -1021,6 +1062,8 @@ class PyamgKrylovSolver:
         if cache.dev_kill is None:
             cache.dev_kill = jnp.asarray(~cache.keep)
             cache.dev_pin_mask = jnp.asarray(cache.pin_mask)
+        # both kernels donate their data argument: decouple runs in place on
+        # the transfer buffer, scale_data in place on the decoupled buffer
         data_dev = K["decouple"](jnp.asarray(data), st.dev_diag_pos, cache.dev_kill, cache.dev_pin_mask)
         if scale_full is not None:
             data_dev = K["scale_data"](data_dev, jnp.asarray(scale_full), st.dev_rows, st.dev_cols)

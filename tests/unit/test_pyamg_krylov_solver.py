@@ -424,6 +424,25 @@ class PyamgFixedShapeTest(unittest.TestCase):
         self.assertGreater(solver._struct.caps["P0"], 8)
         self.assertEqual(solver.stats["compiled_variants"], 2)
 
+    def test_full_mode_rebuild_drops_old_hierarchy_and_logs_device_memory(self):
+        # section 9.2: a hierarchy rebuild never holds the previous padded device
+        # operators alongside the new ones; the donated decouple/scale kernels
+        # still give an exact pinned solve; device memory figures are recorded
+        A, b, x0, rows, coords = self._system((5, 5, 5))
+        solver = amg.PyamgKrylovSolver(tol=1e-8, maxiter=300, max_coarse=20, device="jax", shape_mode="full")
+        solver.bind_problem(SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)]))
+        x = solver(FakePetscMat(A), b, x0, {})
+        self.assertLess(np.linalg.norm(A @ x - b) / np.linalg.norm(b), 1e-7)
+        self.assertIsNotNone(solver._struct.dev_rows)
+        self.assertIsNotNone(solver._struct.dev_cols)
+        self.assertIn("device_mb", solver._cache.hierarchy_info)
+        old_levels = solver._cache.jax_levels
+        solver._cache.hierarchy = None  # force a rebuild on the same pattern
+        x2 = solver(FakePetscMat(A), b, x0, {})
+        self.assertLess(np.linalg.norm(A @ x2 - b) / np.linalg.norm(b), 1e-7)
+        self.assertIsNot(solver._cache.jax_levels, old_levels)
+        self.assertEqual(solver.stats["compiled_variants"], 1)
+
     def test_release_device_drops_buffers_and_next_solve_rebuilds(self):
         # the wrapper calls this before routing the raft release to PARDISO
         A, b, x0, rows, coords = self._system((5, 5, 5))
