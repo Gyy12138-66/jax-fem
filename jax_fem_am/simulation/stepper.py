@@ -82,6 +82,9 @@ from jax_fem_am.physics.release import (
     make_edge_minimal_mechanics_bc,
     make_full_bottom_mechanics_bc,
     make_symmetry_plane_mechanics_bc,
+    make_symmetry_plane_only_bc,
+    select_symmetry_plane_nodes,
+    validate_symmetry_plane_release_rank,
     make_paper_minimal_bottom_mechanics_bc,
     make_root_minimal_release_mechanics_bc,
     validate_release_anchor_protocol,
@@ -451,6 +454,21 @@ def main():
         exterior_above_base.active_domain_top_only = True
         exterior_above_base.active_domain_build_axis = build_axis_id
         exterior_above_base.active_domain_build_sign = build_sign
+        if getattr(args, "thermal_symmetry_plane", False):
+            # Half model: the cut face is a symmetry plane, hence adiabatic.
+            # Faces LYING IN the plane are dropped by face centroid (fe.py
+            # ``exclude_plane``); faces merely touching the plane stay.
+            _sym_axis_id = AXIS_TO_ID[args.symmetry_plane_axis]
+            _sym_coord = onp.asarray(points)[:, _sym_axis_id]
+            _sym_value = float(
+                _sym_coord.min() if args.symmetry_plane_side == "min" else _sym_coord.max()
+            )
+            exterior_above_base.exclude_plane = (_sym_axis_id, _sym_value, base_tol)
+            print(
+                f"thermal: symmetry plane {args.symmetry_plane_axis}={args.symmetry_plane_side} "
+                f"({args.symmetry_plane_axis}={_sym_value:.9g}) is adiabatic: faces with centroid on the "
+                "plane are excluded from convection/radiation"
+            )
         location_fns = [exterior_above_base]
 
         def exterior_bottom(point):
@@ -616,6 +634,25 @@ def main():
             args.paper_minimal_release_resolved_bc[
                 "constraint_continuity"
             ] = "release_physical_dofs_are_build_dof_subset"
+        mechanics_location_fns = []
+        mechanics_foundation = 0.0
+    elif args.bottom_mechanics_bc == "fixed_symmetry":
+        # Half model on a build plate: base clamped (as 'fixed') plus u_n = 0
+        # on the symmetry plane. Dirichlet lists are additive; a node on the
+        # base/plane edge appears in both with the same zero value.
+        base_bc = make_full_bottom_mechanics_bc(bottom)
+        plane_bc, args.symmetry_plane_resolved_bc = make_symmetry_plane_only_bc(
+            points,
+            plane_axis_id=AXIS_TO_ID[args.symmetry_plane_axis],
+            side=args.symmetry_plane_side,
+        )
+        mechanics_bc = [base_bc[0] + plane_bc[0], base_bc[1] + plane_bc[1], base_bc[2] + plane_bc[2]]
+        _meta = args.symmetry_plane_resolved_bc
+        print(
+            "fixed_symmetry mechanics BC: base nodes clamped + "
+            f"u_{_meta['plane_axis']}=0 on {_meta['plane_axis']}={_meta['side']} "
+            f"({_meta['plane_axis']}={_meta['plane_value']:.9g}, {_meta['plane_nodes']} nodes)"
+        )
         mechanics_location_fns = []
         mechanics_foundation = 0.0
     elif args.bottom_mechanics_bc == "symmetry_plane":
@@ -1318,6 +1355,37 @@ def main():
             if args.release_anchor_box is None:
                 raise ValueError("--release-anchor-mode box requires --release-anchor-box")
             release_bc = make_box_anchor_mechanics_bc(points, args.release_anchor_box)
+        elif args.release_anchor_mode == "symmetry_plane":
+            # Half model: u_n = 0 on the symmetry plane (three rigid modes) plus
+            # two in-plane anchors chosen on retained printed plane nodes (the
+            # other three). Same log prefix as rigid_body so the gate's
+            # "constraint rank N/6" check applies unchanged.
+            _sym_axis_id = AXIS_TO_ID[args.symmetry_plane_axis]
+            release_bc, sym_meta = make_symmetry_plane_mechanics_bc(
+                points,
+                plane_axis_id=_sym_axis_id,
+                side=args.symmetry_plane_side,
+                return_metadata=True,
+                anchor_candidate_node_ids=printed_node_ids,
+            )
+            _plane_mask, _, _ = select_symmetry_plane_nodes(points, _sym_axis_id, args.symmetry_plane_side)
+            sym_rank = validate_symmetry_plane_release_rank(
+                points,
+                onp.flatnonzero(_plane_mask),
+                _sym_axis_id,
+                sym_meta["anchor_dof_pairs"],
+                printed_node_ids,
+            )
+            sym_meta["constraint_rank"] = int(sym_rank)
+            args.symmetry_plane_release_resolved_bc = sym_meta
+            print(
+                "release rigid-body anchors: symmetry plane "
+                f"{sym_meta['plane_axis']}={sym_meta['side']} ({sym_meta['plane_nodes']} nodes, "
+                f"u_{sym_meta['plane_axis']}=0) + nodes [{sym_meta['anchor_node_id']}, {sym_meta['far_node_id']}] at "
+                f"{onp.asarray(points)[[sym_meta['anchor_node_id'], sym_meta['far_node_id']]].tolist()} m, "
+                f"constraint rank {sym_rank}/6 on retained printed material "
+                f"({len(printed_node_ids)} candidate nodes, {int(release_cut_cell.sum())} cut cells excluded)"
+            )
         else:
             rigid_anchor_ids = select_rigid_body_anchor_nodes(points, printed_node_ids)
             rigid_anchor_rank = validate_rigid_body_anchor_rank(

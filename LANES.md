@@ -60,3 +60,14 @@
 4. 缩小版 V1 单道回归进 `-m meltpool`。
 5. Goldak、蒸发热沉、液相各向异性 k，各自附能量台账与 V1 三角复跑。
 6. 张量积渐变 HEX8 试样生成器（AM-Sim/mesh），多道多层熔池算例。
+
+## 支线 C：半模算例（`halfmodel-0911`，2026-09-17 从 `precond-optimization` 185041c 分出）
+
+- 目标：对称零件只算一半（0911 喷管件，STL 镜像面 z=0 → 网格 X'=0），求解器车道沿用主线 A 的 MODE=5。
+- 分支 / worktree：`halfmodel-0911` @ `~/work/halfmodel_tree`。案例输入在仓库外 `~/work/159/0911/`。
+- 归属文件：`jax_fem_am/physics/release.py`（`select_symmetry_plane_nodes` / `make_symmetry_plane_only_bc` / `validate_symmetry_plane_release_rank`）、
+  `jax_fem/fe.py` 的面级 `exclude_plane` 属性、`cases/159_simulation/model/make_159_preflight.py` 的 `mesh.symmetry.represented_fraction` 与半模 argv。
+- 共享文件按加法规则：`stepper.py` 新增 `--bottom-mechanics-bc fixed_symmetry`、`--release-anchor-mode symmetry_plane`、`--thermal-symmetry-plane` 三条分支；
+  `schema.py` 只加选项值与开关；默认值与默认行为不变。
+- 合入顺序：先合回 `precond-optimization`（0911 运行需要 MODE=5 代码），随主线 A 一起进 test。
+- 输出目录：`~/work/159/output/0911_*`。

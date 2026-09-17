@@ -453,6 +453,20 @@ class FiniteElement:
                         np.asarray(boundary_flags)
                         & np.asarray(upward_flags)
                     )
+                # ``exclude_plane = (axis, value, tol)`` drops faces whose
+                # centroid lies on that plane (a half model's symmetry cut is
+                # adiabatic). Per-node predicates cannot express this without
+                # also dropping faces that merely touch the plane at an edge.
+                exclude_plane = getattr(location_fns[i], 'exclude_plane', None)
+                if exclude_plane is not None:
+                    plane_axis, plane_value, plane_tol = exclude_plane
+                    face_centroid = np.mean(
+                        cell_face_points[..., int(plane_axis)], axis=2
+                    )  # (num_cells, num_faces)
+                    boundary_flags = (
+                        np.asarray(boundary_flags)
+                        & (np.abs(face_centroid - float(plane_value)) > float(plane_tol))
+                    )
                 # ``active_domain_exterior`` selects a fixed directed-face
                 # superset.  Its per-step owner/neighbor mask is applied by
                 # the thermal problem, so full-mesh exterior filtering here
