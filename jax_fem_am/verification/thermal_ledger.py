@@ -415,6 +415,27 @@ def _surface_exchange_from_problem(problem, temperature_new, dt_s):
     return float(total)
 
 
+def assembly_identity_tolerance_j(explicit_total, residual_total, term_magnitudes_j=()):
+    """Tolerance for |explicit_total - residual_total|, the identity between the
+    NumPy re-assembly of the weak form and the solver residual.
+
+    The two totals are small differences of large terms (storage minus laser
+    deposition on a flash step), so the floating-point noise of the identity
+    scales with the LARGEST term, not with the net total. Scaling only by the
+    net total (the pre-2026-09-17 rule) flagged a 3.9e-12 J roundoff on a
+    66,769 J flash step (0911 half model, 2.5 mm cells) while passing the same
+    identity on 1,220 J flash steps (0119). The relative factor 1e-10 stays
+    six orders above double-precision roundoff of the largest term.
+    """
+    scale = max(
+        abs(float(explicit_total)),
+        abs(float(residual_total)),
+        *[abs(float(v)) for v in term_magnitudes_j],
+        float(np.finfo(np.float64).tiny),
+    )
+    return 1.0e-12 + 1.0e-10 * scale
+
+
 def _dirichlet_mask_and_values(fe, num_nodes):
     mask = np.zeros(num_nodes, dtype=bool)
     values = []
@@ -633,12 +654,17 @@ def extract_solver_step(
         <= absolute_balance_tolerance
         + relative_balance_tolerance * balance_scale
     )
-    assembly_scale = max(
-        abs(explicit_total),
-        abs(residual_total),
-        np.finfo(np.float64).tiny,
+    assembly_tolerance = assembly_identity_tolerance_j(
+        explicit_total,
+        residual_total,
+        term_magnitudes_j=(
+            volume["storage_j"],
+            volume["laser_deposited_j"],
+            volume["front_loss_j"],
+            volume["old_layer_loss_j"],
+            surface_loss,
+        ),
     )
-    assembly_tolerance = 1.0e-12 + 1.0e-10 * assembly_scale
     assembly_within_tolerance = bool(
         abs(assembly_identity_signed) <= assembly_tolerance
     )
