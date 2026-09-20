@@ -93,6 +93,7 @@ import scipy.sparse.linalg as spla
 SMOOTHERS = ("jacobi", "block_gauss_seidel")
 DEVICES = ("cpu", "gpu", "jax")
 SCALE_POLICIES = ("current", "frozen")
+RECOVERIES = ("rebuild", "refresh")
 SHAPE_MODES = ("auto", "free", "full", "bucket")
 
 
@@ -479,7 +480,7 @@ class _PatternCache:
         "signature", "n", "free", "pin", "keep", "ff_indptr", "ff_indices", "ff_rows",
         "ff_diag_pos", "hierarchy", "hierarchy_info", "jax_levels", "jax_coarse_pinv",
         "jax_omega0", "dev_rows", "dev_cols", "dev_indptr", "dev_diag_pos", "fresh_iterations",
-        "kernels", "pin_mask", "dev_kill", "dev_pin_mask", "scale_build",
+        "kernels", "pin_mask", "dev_kill", "dev_pin_mask", "scale_build", "reused_since_refresh",
     )
 
     def __init__(self, signature, n, free, pin, keep, ff_indptr, ff_indices, ff_rows, ff_diag_pos):
@@ -510,6 +511,8 @@ class _PatternCache:
         self.dev_pin_mask = None
         # Jacobi scaling the current hierarchy was built with (scale_policy="frozen").
         self.scale_build = None
+        # reused solves since the hierarchy was built or refreshed (refresh_every)
+        self.reused_since_refresh = 0
 
     def release(self) -> None:
         """Drop device buffers and the jit kernel set so their executables can be freed."""
@@ -554,6 +557,8 @@ class PyamgKrylovSolver:
         fixed_levels: int = 4,
         bucket_ratio: float = 1.25,
         scale_policy: str = "current",
+        recovery: str = "rebuild",
+        refresh_every: int = 0,
     ) -> None:
         if method not in ("cg", "bicgstab"):
             raise ValueError(f"pyamg method must be cg or bicgstab, got {method!r}")
@@ -582,6 +587,10 @@ class PyamgKrylovSolver:
             raise ValueError("bucket_ratio must be > 1")
         if scale_policy not in SCALE_POLICIES:
             raise ValueError(f"scale_policy must be one of {SCALE_POLICIES}, got {scale_policy!r}")
+        if recovery not in RECOVERIES:
+            raise ValueError(f"recovery must be one of {RECOVERIES}, got {recovery!r}")
+        if int(refresh_every) < 0:
+            raise ValueError("refresh_every must be >= 0")
         self.method = method
         self.near_nullspace = near_nullspace
         self.scaled = bool(scaled)
@@ -622,6 +631,20 @@ class PyamgKrylovSolver:
         # reused solves 128 -> 77 iterations for 0.025 s, a full rebuild gives 73-84
         # (BUG_FIX.md section 11).
         self.scale_policy = scale_policy
+        # Galerkin refresh: keep the aggregation and the transfer operators of the
+        # reused hierarchy and recompute A_{l+1} = R_l A_l P_l, the coarse inverse
+        # and the smoother dampings on the current tangent. The aggregation does
+        # not depend on the tangent values (identical on the first and the last
+        # tangent of a drift series) and the span of P keeps capturing the low
+        # modes; what a drifting tangent breaks is the variational consistency
+        # between the stale coarse operators and the fine one (lambda_max > 1, an
+        # indefinite V-cycle for large stiffness changes). A refresh restores it
+        # for the cost of the RAP products: 42-48% of a full setup.
+        #   recovery="refresh": a reused solve that does not converge refreshes
+        #       first and only rebuilds from scratch if that fails too.
+        #   refresh_every=N: refresh before every N-th reused solve (0 = never).
+        self.recovery = recovery
+        self.refresh_every = int(refresh_every)
         smoother_label = (
             f"{smoother}x{self.smoother_sweeps}" if smoother == "jacobi" else "block_gs(sym)"
         )
@@ -649,6 +672,8 @@ class PyamgKrylovSolver:
             "hierarchy_rebuilds": 0,
             "adaptive_rebuilds": 0,
             "frozen_scale_solves": 0,
+            "hierarchy_refreshes": 0,
+            "refresh_s": 0.0,
             "capacity_growths": 0,
             "fallbacks": 0,
             "last_iterations": 0,
@@ -1009,6 +1034,90 @@ class PyamgKrylovSolver:
             st.dev_indptr = jnp.asarray(onp.asarray(self._last_indptr, dtype=onp.int32))
             st.dev_diag_pos = jnp.asarray(st.diag_pos)
 
+    # -- Galerkin refresh ----------------------------------------------------------
+    def _refresh_hierarchy(self, cache: _PatternCache, S) -> None:
+        """Recompute the coarse operators of the cached hierarchy for ``S`` (the
+        current tangent in the scaling the hierarchy is used with), keeping the
+        aggregation and the transfer operators."""
+        from pyamg.relaxation.smoothing import change_smoothers, rho_D_inv_A
+
+        t0 = time.perf_counter()
+        ml = cache.hierarchy
+        A = S.tocsr()
+        ml.levels[0].A = A
+        for l in range(len(ml.levels) - 1):
+            lvl = ml.levels[l]
+            A = (lvl.R @ (A @ lvl.P)).tocsr()
+            ml.levels[l + 1].A = A
+        t_rap = time.perf_counter() - t0
+        if self.use_jax:
+            if not self._refresh_device(cache, ml):
+                # capacities no longer fit (should not happen: same patterns): full conversion
+                (self._to_jax_hierarchy_full if self._full else self._to_jax_hierarchy)(cache, ml)
+        else:
+            import pyamg
+
+            sm = self._smoother_spec()
+            change_smoothers(ml, sm, sm)  # dampings from the refreshed operators
+            # a fresh coarse solver: pyamg caches the factorisation of the old operator
+            # ("pinv" is what smoothed_aggregation_solver uses and what we never override)
+            ml.coarse_solver = pyamg.multilevel.coarse_grid_solver("pinv")
+        dt = time.perf_counter() - t0
+        cache.reused_since_refresh = 0
+        self.stats["hierarchy_refreshes"] += 1
+        self.stats["refresh_s"] += dt
+        if self.verbose:
+            dev = _device_memory_mb() if self.use_jax else None
+            print(
+                f"pyamg[{self.device}]: hierarchy refreshed in {dt:.2f}s (RAP {t_rap:.2f}s, "
+                f"device/coarse {dt - t_rap:.2f}s) -- same aggregation and transfer operators"
+                + (f", device in_use {dev['in_use']:.0f} / peak {dev['peak']:.0f} MB" if dev else ""),
+                flush=True,
+            )
+
+    def _refresh_device(self, cache: _PatternCache, ml) -> bool:
+        """Replace the coarse operators, their inverse diagonals, the dampings and
+        the coarse inverse on the device; P and R stay where they are."""
+        from pyamg.relaxation.smoothing import rho_D_inv_A
+
+        old = cache.jax_levels
+        if old is None:
+            return False
+        K = self._kernels_for(self._struct if self._full else cache)
+        jnp = K["jnp"]
+        As = [lvl.A.tocsr() for lvl in ml.levels]
+        if self._full:
+            L = self.fixed_levels
+            while len(As) < L:
+                As.append(As[-1])
+            caps = self._struct.caps
+        else:
+            L = len(As)
+        omegas = [self.smoother_omega / float(rho_D_inv_A(As[l])) for l in range(L - 1)]
+        try:
+            levels = list(old)
+            levels[0] = (None, None, jnp.float64(omegas[0]), old[0][3], old[0][4])
+            for l in range(1, L - 1):
+                diag = As[l].diagonal()
+                safe = onp.where(diag != 0.0, diag, 1.0)
+                if self._full:
+                    rc = caps[f"rows{l}"]
+                    A_dev = K["csr"](_pad_csr(As[l], rc, rc, caps[f"A{l}"], f"A{l}", identity_pad=True))
+                    dinv = onp.ones(rc)
+                    dinv[: diag.size] = onp.where(diag != 0.0, 1.0 / safe, 0.0)
+                else:
+                    A_dev = K["csr"](As[l])
+                    dinv = onp.where(diag != 0.0, 1.0 / safe, 0.0)
+                levels[l] = (A_dev, jnp.asarray(dinv), jnp.float64(omegas[l]), old[l][3], old[l][4])
+            inv = _dense_inverse(As[-1].toarray())
+            coarse = jnp.asarray(_pad_dense_inverse(inv, caps[f"rows{L - 1}"]) if self._full else inv)
+        except _CapacityError:
+            return False
+        cache.jax_omega0 = levels[0][2]
+        cache.jax_levels = levels
+        cache.jax_coarse_pinv = coarse
+        return True
+
     # -- fallback -------------------------------------------------------------------
     def _direct_fallback(self, A, b, x0, linear_options, reason: str):
         """Hand one system to PARDISO and keep nothing.
@@ -1194,12 +1303,29 @@ class PyamgKrylovSolver:
         if rhs_norm == 0.0:
             return x_full
 
+        def scaled_operator():
+            return (sp.diags(scale) @ Aff @ sp.diags(scale)).tocsr() if scale is not None else Aff
+
+        state = "reused"
         if not reused:
             self._build_hierarchy(cache, S, scale)
             cache.scale_build = scale
+            cache.reused_since_refresh = 0
+            state = "fresh"
+        elif self.refresh_every > 0 and cache.reused_since_refresh + 1 >= self.refresh_every:
+            self._refresh_hierarchy(cache, S if S is not None else scaled_operator())
+            state = "refreshed"
+        else:
+            cache.reused_since_refresh += 1
+        # what to try when a REUSED hierarchy does not converge
+        recoveries = []
+        if state != "fresh":
+            if self.recovery == "refresh" and state == "reused":
+                recoveries.append("refresh")
+            recoveries.append("rebuild")
         converged = False
         y = y0
-        for attempt in range(2):
+        while True:
             t0 = time.perf_counter()
             if full:
                 y, iters, rel, info = self._solve_jax_full(cache, data, scale_full, rhs_full, y0_full, rhs_norm)
@@ -1218,11 +1344,11 @@ class PyamgKrylovSolver:
                 print(
                     f"pyamg[{self.device}]: {self.method} iters {iters} rel_res {rel:.2e} "
                     f"in {solve_s:.2f}s ({'converged' if converged else 'NOT converged'}, "
-                    f"hierarchy {'reused' if reused and attempt == 0 else 'fresh'})",
+                    f"hierarchy {state})",
                     flush=True,
                 )
             if converged:
-                if not reused or attempt == 1:
+                if state != "reused":
                     cache.fresh_iterations = iters
                 elif (
                     self.rebuild_iter_factor > 0
@@ -1240,9 +1366,16 @@ class PyamgKrylovSolver:
                             flush=True,
                         )
                 break
-            if not reused or attempt == 1:
+            if not recoveries:
                 break
-            # The cached hierarchy no longer matches the tangent: rebuild once.
+            if recoveries.pop(0) == "refresh":
+                # cheapest consistent repair: same aggregation and P, Galerkin
+                # coarse operators of the current tangent
+                self._refresh_hierarchy(cache, S if S is not None else scaled_operator())
+                state = "refreshed"
+                continue
+            # The cached hierarchy no longer matches the tangent: rebuild it.
+            state = "fresh"
             self.stats["hierarchy_rebuilds"] += 1
             if self.scaled and self.scale_policy == "frozen":
                 # a rebuild re-freezes the scaling on the current diagonal
@@ -1254,6 +1387,7 @@ class PyamgKrylovSolver:
                 S = (sp.diags(scale) @ Aff @ sp.diags(scale)).tocsr()
             self._build_hierarchy(cache, S, scale)
             cache.scale_build = scale
+            cache.reused_since_refresh = 0
         if not converged:
             return self._direct_fallback(
                 A, b, x0, linear_options,

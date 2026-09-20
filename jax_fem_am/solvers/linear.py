@@ -117,7 +117,7 @@ _ALLOWED_KEYS: Dict[str, frozenset] = {
          "max_coarse", "rebuild", "fallback", "verbose", "device", "smoother",
          "smoother_sweeps", "smoother_omega", "rebuild_iter_factor",
          "clear_jax_caches_on_pattern", "shape_mode", "fixed_levels", "bucket_ratio",
-         "scale_policy"}
+         "scale_policy", "recovery", "refresh_every"}
     ),
 }
 
@@ -232,6 +232,13 @@ def normalize_linear_solver_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
         out["scale_policy"] = _check_choice(
             out.get("scale_policy", "current"), PYAMG_SCALE_POLICIES, "scale_policy"
         )
+        # Galerkin refresh of a reused hierarchy (same aggregation and P, coarse
+        # operators of the current tangent): as the first recovery after a
+        # non-converged reused solve, and/or before every N-th reused solve.
+        out["recovery"] = _check_choice(out.get("recovery", "rebuild"), ("rebuild", "refresh"), "recovery")
+        out["refresh_every"] = int(out.get("refresh_every", 0))
+        if out["refresh_every"] < 0:
+            raise ValueError("pyamg refresh_every must be >= 0")
     return out
 
 

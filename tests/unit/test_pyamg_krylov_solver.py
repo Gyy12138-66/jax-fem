@@ -611,6 +611,99 @@ class PyamgScalePolicyTest(unittest.TestCase):
             normalize_linear_solver_spec({"backend": "pyamg", "scale_policy": "sometimes"})
 
 
+class _BrokenCoarseSolver:
+    """Stand-in for pyamg's coarse solver that ruins the coarse correction."""
+    name = "pinv"
+
+    def __call__(self, A, b):
+        return b * float("nan")
+
+
+class PyamgRefreshTest(unittest.TestCase):
+    """Galerkin refresh: same aggregation and transfer operators, coarse operators
+    of the current tangent (BUG_FIX.md section 11.9)."""
+
+    def _drift(self):
+        seq, rows, coords = PyamgScalePolicyTest()._drift_sequence()
+        return seq, rows, SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)])
+
+    def test_unknown_recovery_and_negative_period_are_rejected(self):
+        with self.assertRaises(ValueError):
+            amg.PyamgKrylovSolver(recovery="pray")
+        with self.assertRaises(ValueError):
+            amg.PyamgKrylovSolver(refresh_every=-1)
+
+    def test_refresh_recomputes_the_galerkin_operators_and_keeps_the_transfer_operators(self):
+        seq, rows, problem = self._drift()
+        for device, mode in (("jax", "full"), ("jax", "free"), ("cpu", "auto")):
+            solver = amg.PyamgKrylovSolver(tol=1e-8, maxiter=400, max_coarse=20, device=device, shape_mode=mode,
+                                           scale_policy="frozen", rebuild_iter_factor=0, refresh_every=2)
+            solver.bind_problem(problem)
+            variants = []
+            for A, b, x0 in seq:
+                x = solver(FakePetscMat(A), b, x0, {})
+                self.assertLess(np.linalg.norm(A @ x - b) / np.linalg.norm(b), 1e-6)
+                np.testing.assert_array_equal(x[rows], b[rows])
+                variants.append(solver.stats.get("compiled_variants"))
+            # 4 solves: build, reused, refreshed, reused
+            self.assertEqual(solver.stats["hierarchy_refreshes"], 1, (device, mode))
+            self.assertEqual(solver.stats["pattern_rebuilds"], 1)
+            self.assertEqual(solver.stats["hierarchy_rebuilds"], 0)
+            self.assertGreater(solver.stats["refresh_s"], 0.0)
+            ml = solver._cache.hierarchy
+            P0 = ml.levels[0].P.tocsr()
+            # the coarse operator is the Galerkin product of the tangent it was refreshed on (3rd solve)
+            A3 = seq[2][0]; free = np.flatnonzero(~amg.pinned_rows(A3))
+            sc = solver._cache.scale_build
+            S3 = sp.diags(sc) @ A3[free][:, free] @ sp.diags(sc)
+            ref = (P0.T @ (S3 @ P0)).toarray()
+            np.testing.assert_allclose(ml.levels[1].A.toarray(), ref, rtol=1e-10, atol=1e-12)
+            if device == "jax" and mode == "full":
+                # a refresh keeps every shape: no kernel set beyond the ones of the first build
+                self.assertEqual(variants[-1], variants[0])
+
+    def test_recovery_refresh_repairs_a_broken_coarse_level_without_a_rebuild(self):
+        seq, rows, problem = self._drift()
+        A, b, x0 = seq[0]
+        for device in ("jax", "cpu"):
+            solver = amg.PyamgKrylovSolver(tol=1e-8, maxiter=60, max_coarse=20, device=device,
+                                           scale_policy="frozen", rebuild_iter_factor=0, recovery="refresh")
+            solver.bind_problem(problem)
+            solver(FakePetscMat(A), b, x0, {})
+            if device == "jax":
+                solver._cache.jax_coarse_pinv = solver._cache.jax_coarse_pinv * float("nan")
+            else:
+                solver._cache.hierarchy.coarse_solver = _BrokenCoarseSolver()
+            x = solver(FakePetscMat(A), b, x0, {})
+            self.assertLess(np.linalg.norm(A @ x - b) / np.linalg.norm(b), 1e-6)
+            self.assertEqual(solver.stats["hierarchy_refreshes"], 1, device)
+            self.assertEqual(solver.stats["hierarchy_rebuilds"], 0, device)
+            self.assertEqual(solver.stats["fallbacks"], 0, device)
+
+    def test_default_recovery_still_rebuilds(self):
+        seq, rows, problem = self._drift()
+        A, b, x0 = seq[0]
+        solver = amg.PyamgKrylovSolver(tol=1e-8, maxiter=60, max_coarse=20, device="jax", rebuild_iter_factor=0)
+        solver.bind_problem(problem)
+        solver(FakePetscMat(A), b, x0, {})
+        solver._cache.jax_coarse_pinv = solver._cache.jax_coarse_pinv * float("nan")
+        x = solver(FakePetscMat(A), b, x0, {})
+        self.assertLess(np.linalg.norm(A @ x - b) / np.linalg.norm(b), 1e-6)
+        self.assertEqual(solver.stats["hierarchy_refreshes"], 0)
+        self.assertEqual(solver.stats["hierarchy_rebuilds"], 1)
+
+    def test_registry_accepts_refresh_keys(self):
+        from jax_fem_am.solvers.linear import normalize_linear_solver_spec
+        spec = normalize_linear_solver_spec({"backend": "pyamg"})
+        self.assertEqual((spec["recovery"], spec["refresh_every"]), ("rebuild", 0))
+        spec = normalize_linear_solver_spec({"backend": "pyamg", "recovery": "refresh", "refresh_every": 4})
+        self.assertEqual((spec["recovery"], spec["refresh_every"]), ("refresh", 4))
+        with self.assertRaises(ValueError):
+            normalize_linear_solver_spec({"backend": "pyamg", "recovery": "restart"})
+        with self.assertRaises(ValueError):
+            normalize_linear_solver_spec({"backend": "pyamg", "refresh_every": -2})
+
+
 class PyamgFallbackRetentionTest(unittest.TestCase):
     """BUG_FIX.md section 8: the PARDISO fallback must not keep a factorisation
     alive. The shared phase23 adapter held ~8 GB on the v159 system and froze

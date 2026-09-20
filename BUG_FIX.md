@@ -605,3 +605,30 @@ current 一栏与生产日志一致；两种策略的真残差都 ≤ 1.35e-6，
   编译超过 1 s 的函数会以「函数名-哈希」落盘，文件时间戳即编译时刻，对照 run.log 的步号即可定位是谁在层中途重编。
 - 查看：`bash ~/work/159/status_S2.sh`（逐 10 层的平均迭代 / 未收敛 / 建层级，与上表并排）。
 - 结果：（跑完后填）
+
+### 11.9 步骤 S3a：Galerkin 刷新路径（实现 + 在真实序列上的结论）
+
+**实现**（`amg.py`，缺省全部关闭）：
+- `_refresh_hierarchy(cache, S)`：保留聚合与 P/R，重算 `A_{l+1} = R_l·A_l·P_l`、粗层稠密逆、各层 ω。GPU 侧 `_refresh_device` 只替换粗层算子 / 对角逆 / ω / 粗层逆，**P、R 留在设备上不重传**，形状与容量不变（full 模式不触发重编译）；CPU 侧 `change_smoothers` + 新的 `pinv` 粗层求解器（pyamg 会缓存旧算子的分解）。
+- `recovery="rebuild"|"refresh"`：复用解不收敛时，`refresh` 先做刷新、仍不收敛才整套重建，再不行才 PARDISO。
+- `refresh_every=N`：每 N 次复用解前刷新一次（0 = 关）。
+- 统计量 `hierarchy_refreshes`、`refresh_s`；日志 `hierarchy refreshed in … (RAP …, device/coarse …)`，求解行的状态变为 `reused / fresh / refreshed`。
+- `linear.py` 注册 `recovery`、`refresh_every`。
+
+**单测**：pyamg 38 passed（新增 5 条：参数校验；full/free/cpu 三条路径上刷新后的 `levels[1].A` 等于 `P₀ᵀ·S₃·P₀`（1e-10）且 full 模式编译变体数不变；
+把粗层逆弄成 NaN 后 `recovery="refresh"` 只刷新不重建就修复；缺省 `rebuild` 行为不变；注册表键）。
+
+**生产求解器回放**（`s1e_refresh_replay.py`，层 30，JAX CPU 后端 + free 形状；GPU 被 S2 占用）：
+
+| 策略 | 逐次迭代（k=0…11） | k≥1 平均 | 刷新 |
+|---|---|---|---|
+| frozen | 69, 81, 82, 80, 70, 77, 77, 63, 80, 87, 84, 78 | **78** | 0 |
+| frozen + `refresh_every=4`（每个力学步首次解前刷新） | 69, 81, 82, 80, **68**, 84, 82, 67, **71**, 92, 120, 109 | **85** | 2 次 / 4.2 s |
+| frozen + `refresh_every=1` | 69, 80, 83, 82, 68, 76, 76, 62, 71, 78, 77, 74 | 75 | 11 次 / 21.9 s |
+| current + `refresh_every=1` | 69, 89, 91, 90, 77, 93, 95, 80, 71, 97, 100, 85 | 88 | 11 次 / 21.5 s |
+
+- 与 S1 的离线策略逐次吻合（frozen+every1 ↔ S1 的 c 列，current+every1 ↔ c2 列，相差 ≤ 2 次）：实现正确。
+- **周期性刷新不划算**：每次都刷新只比 frozen 少 3 次迭代（−4%），而一次刷新 ≈ 2 s ≈ 270 次迭代的时间。
+- **按步刷新反而更差**（85 vs 78）：刷新落在每步的第一次 Newton 迭代上，那是刚被闪热的瞬态切线（r_min 0.16、r_max 1.88），
+  用它算出的粗层算子对随后几次解没有代表性（k=9–11 从 87/84/78 恶化到 92/120/109）。层级建在 k=0 时同理——但 k=0 是新层激活后的第一次解，整层后续的解都相对它漂移，没有更好的选择。
+- 结论：在层 20–30，**frozen 缩放已经拿到了可拿的几乎全部收益**，刷新的价值只在于「保证预条件算子正定」的兜底修复（`recovery="refresh"`），不应作为周期性动作。高层是否不同，看 S2 的数据。
