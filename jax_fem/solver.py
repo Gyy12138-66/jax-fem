@@ -23,8 +23,17 @@ import os as _os
 _DUMP_DIR = _os.environ.get("V159_DUMP_DIR") or None
 _DUMP_LAYERS = {int(v) for v in _os.environ.get("V159_DUMP_LAYERS", "").split(",") if v.strip()}
 _DUMP_MECH_LAYERS = {int(v) for v in _os.environ.get("V159_DUMP_MECH_LAYERS", "").split(",") if v.strip()}
+# Tangent-drift series (BUG_FIX.md section 10.6): dump the first N mechanics solves of a
+# layer instead of just the first one, so the offline study sees the SAME sparsity pattern
+# with the tangent drifting across Newton iterations and increments. With
+# V159_DUMP_COMPACT the repeats store values only (indptr/indices are identical within a
+# layer and are read from the first file of that layer), which saves ~40% of the disk.
+_DUMP_MECH_PER_LAYER = max(1, int(_os.environ.get("V159_DUMP_MECH_PER_LAYER", "1") or 1))
+_DUMP_COMPACT = str(_os.environ.get("V159_DUMP_COMPACT", "")).lower() not in ("", "0", "false", "no")
 DUMP_CONTEXT = {}  # stepper sets {"layer", "step", "mode", "num_nodes"} each step
 _DUMPED = set()
+_DUMP_COUNTS = {}   # (layer, scope) -> dumps already written for that layer
+_DUMP_FIRST = {}    # (layer, scope) -> (file name holding the pattern, its nnz)
 
 
 def _maybe_dump_linear_system(A, b, x0):
@@ -42,21 +51,39 @@ def _maybe_dump_linear_system(A, b, x0):
         else:
             return
         key = (layer, scope)
-        if not wanted or key in _DUMPED:
+        limit = _DUMP_MECH_PER_LAYER if scope == "mechanics" else 1
+        seq = _DUMP_COUNTS.get(key, 0)
+        if not wanted or seq >= limit:
             return
+        _DUMP_COUNTS[key] = seq + 1
         _DUMPED.add(key)
         _os.makedirs(_DUMP_DIR, exist_ok=True)
         step = int(DUMP_CONTEXT.get("step", -1))
         indptr, indices, data = A.getValuesCSR()
-        path = _os.path.join(_DUMP_DIR, f"{scope}_L{layer:03d}_s{step:06d}.npz")
+        suffix = "" if limit == 1 else f"_i{seq:02d}"
+        name = f"{scope}_L{layer:03d}_s{step:06d}{suffix}.npz"
+        path = _os.path.join(_DUMP_DIR, name)
         t0 = time.perf_counter()
-        onp.savez(
-            path,
-            indptr=onp.asarray(indptr), indices=onp.asarray(indices), data=onp.asarray(data),
+        fields = dict(
+            data=onp.asarray(data),
             b=onp.asarray(b), x0=(onp.asarray(x0) if x0 is not None else onp.zeros(0)),
-            n=n, layer=layer, step=step, mode=mode, scope=scope,
+            n=n, layer=layer, step=step, mode=mode, scope=scope, seq=seq,
         )
-        print(f"matrix_dump: {path} n={n} nnz={len(data)} ({time.perf_counter() - t0:.1f}s)", flush=True)
+        first_name, first_nnz = _DUMP_FIRST.get(key, ("", -1))
+        # values only when the pattern is provably the one already on disk
+        if seq == 0 or not _DUMP_COMPACT or len(data) != first_nnz:
+            fields["indptr"] = onp.asarray(indptr)
+            fields["indices"] = onp.asarray(indices)
+        else:
+            fields["pattern_from"] = first_name
+        if seq == 0:
+            _DUMP_FIRST[key] = (name, len(data))
+        onp.savez(path, **fields)
+        print(
+            f"matrix_dump: {path} n={n} nnz={len(data)} seq={seq}/{limit}"
+            f"{' values-only' if 'indptr' not in fields else ''} ({time.perf_counter() - t0:.1f}s)",
+            flush=True,
+        )
     except Exception as exc:  # the probe must never take down a production run
         print(f"WARNING: matrix_dump failed: {type(exc).__name__}: {exc}", flush=True)
 config.update("jax_enable_x64", True)
