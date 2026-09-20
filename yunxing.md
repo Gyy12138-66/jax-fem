@@ -3,6 +3,7 @@
 > 运行编号：第四次全高（run-4）　TAG：`voxel_pyamg_fix2`　代码：`precond-optimization @ d8927e3`
 > 生产段：2026-09-16 12:54 → 2026-09-17 03:02（北京时间；UTC 04:54:16Z → 19:02:34Z）
 > 记录日期：2026-09-17。问题排查与修法见 `BUG_FIX.md` §8–§10。
+> **缩放策略标注（2026-09-20 补）**：本次运行 `scale_policy = current`——层级复用期间每次求解都按当前切线的对角线重算 Jacobi 缩放，而层级（P、A₁）是按建层级时的缩放构造的。这是当时代码唯一的行为（该键 2026-09-20 才引入，缺省 `current`，E0 的配置文件现已显式写出）。§6.3 的 303 次不收敛后重建、485 次建层级即由此而来，机理与修法见 `BUG_FIX.md` §11；修正后的对照运行为 E0f（`scale_policy = frozen`）。
 
 ---
 
@@ -108,6 +109,7 @@ fallback_solver       = pardiso_v07(phase23)
 | 　V-cycle | GPU（cuSPARSE SpMV） | 每层前/后各 2 次阻尼 Jacobi，ω = (4/3)/ρ(D⁻¹A)；最粗层稠密伪逆（3840² ≈ 118 MB） |
 | 　Krylov | PCG，整段在一个 `jax.jit` 内 | 缩放系统上 ‖r‖/‖b‖ ≤ 1e-6，最多 800 次 |
 | 　层级复用 | `rebuild="pattern"`，`rebuild_iter_factor=0` | 激活状态不变即复用；3×fresh 过期规则关闭；复用失败 → 重建一次重解 → 仍失败则一次性 PARDISO |
+| 　缩放策略 | `scale_policy = current`（2026-09-20 补注） | 每次求解按当前对角线重算缩放；层级仍是旧缩放系的量 → 复用解退化（BUG_FIX §11）。E0f 起改为 `frozen` |
 | 　显存管理 | d8927e3 | 重建前先释放旧层级；解耦/缩放 kernel `donate_argnums`；`hierarchy built` 日志带 `device in_use/pool/peak/limit` |
 | 释放解 | 共享 PARDISO phase23（CPU MKL） | `prefer_direct_linear_solver` 路由；路由前 `release_device()`，解完 `release_shared_solvers()` |
 | Newton 停滞兜底 | PARDISO 重跑该次 Newton | 本次未触发 |
