@@ -518,6 +518,99 @@ class PyamgFixedShapeTest(unittest.TestCase):
 
 
 @unittest.skipIf(pyamg is None, "pyamg not installed")
+class PyamgScalePolicyTest(unittest.TestCase):
+    """scale_policy="frozen": a reused hierarchy keeps the Jacobi scaling it was
+    built with (BUG_FIX.md section 11)."""
+
+    def _drift_sequence(self, shape=(6, 6, 6), steps=4):
+        """Same sparsity pattern, stiffness of the top region dropping step by step
+        (element-wise softening: A_k = A_0 - (1 - alpha_k) R A_0 R on the region)."""
+        P = pyamg.gallery.poisson(shape, format="csr")
+        A0 = sp.kron(P, sp.identity(3), format="csr")
+        coords = _grid_coords(shape)
+        rows = [3 * n + c for n in (0, 1, 2, 3) for c in range(3)]
+        top = np.repeat(coords[:, 2] >= coords[:, 2].max() - 1.0, 3).astype(float)
+        R = sp.diags(top)
+        core = (R @ A0 @ R).tocsr()
+        rng = np.random.default_rng(3)
+        seq = []
+        for k in range(steps):
+            alpha = [1.0, 0.8, 0.6, 0.45][k]   # mild: the reused hierarchy must keep converging
+            A = _pin_rows_keep_structure((A0 - (1.0 - alpha) * core).tocsr(), rows)
+            b = rng.standard_normal(A.shape[0]); b[rows] = 0.25
+            x0 = np.zeros(A.shape[0]); x0[rows] = b[rows]
+            seq.append((A, b, x0))
+        return seq, rows, coords
+
+    def _solver(self, policy, device="jax"):
+        solver = amg.PyamgKrylovSolver(tol=1e-8, maxiter=400, max_coarse=20, device=device,
+                                       scale_policy=policy, rebuild_iter_factor=0)
+        return solver
+
+    def test_unknown_policy_is_rejected_and_label_names_frozen(self):
+        with self.assertRaises(ValueError):
+            amg.PyamgKrylovSolver(scale_policy="lagged")
+        self.assertIn("(frozen)", amg.PyamgKrylovSolver(scale_policy="frozen").label)
+        self.assertNotIn("(frozen)", amg.PyamgKrylovSolver().label)
+
+    def test_frozen_scale_is_kept_while_reused_and_solution_is_exact(self):
+        seq, rows, coords = self._drift_sequence()
+        for device in ("jax", "cpu"):
+            solver = self._solver("frozen", device)
+            solver.bind_problem(SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)]))
+            scales = []
+            for A, b, x0 in seq:
+                x = solver(FakePetscMat(A), b, x0, {})
+                self.assertLess(np.linalg.norm(A @ x - b) / np.linalg.norm(b), 1e-6)
+                np.testing.assert_array_equal(x[rows], b[rows])
+                scales.append(solver._cache.scale_build)
+            # one hierarchy for the whole sequence, the scaling object never replaced
+            self.assertEqual(solver.stats["pattern_rebuilds"], 1)
+            self.assertEqual(solver.stats["hierarchy_rebuilds"], 0)
+            self.assertTrue(all(sc is scales[0] for sc in scales))
+            self.assertEqual(solver.stats["frozen_scale_solves"], len(seq) - 1)
+            # and it is the scaling of the FIRST tangent, not of the current one
+            A_last = seq[-1][0]
+            free = np.flatnonzero(~amg.pinned_rows(A_last))
+            np.testing.assert_allclose(scales[0], 1.0 / np.sqrt(seq[0][0].diagonal()[free]))
+            self.assertFalse(np.allclose(scales[0], 1.0 / np.sqrt(A_last.diagonal()[free])))
+
+    def test_current_policy_is_unchanged_and_both_policies_agree_on_the_solution(self):
+        seq, rows, coords = self._drift_sequence()
+        problem = SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)])
+        cur, fro = self._solver("current"), self._solver("frozen")
+        cur.bind_problem(problem); fro.bind_problem(problem)
+        it_cur, it_fro = [], []
+        for A, b, x0 in seq:
+            xc = cur(FakePetscMat(A), b, x0, {}); xf = fro(FakePetscMat(A), b, x0, {})
+            np.testing.assert_allclose(xc, xf, rtol=0, atol=1e-5 * np.abs(xc).max())
+            it_cur.append(cur.stats["last_iterations"]); it_fro.append(fro.stats["last_iterations"])
+        self.assertEqual(cur.stats["frozen_scale_solves"], 0)
+        # the first solve is a fresh hierarchy under both policies: identical work
+        self.assertEqual(it_cur[0], it_fro[0])
+
+    def test_rebuild_refreezes_on_the_current_diagonal(self):
+        seq, rows, coords = self._drift_sequence()
+        solver = self._solver("frozen")
+        solver.bind_problem(SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)]))
+        A0, b0, x00 = seq[0]; A3, b3, x03 = seq[-1]
+        solver(FakePetscMat(A0), b0, x00, {})
+        first = solver._cache.scale_build
+        solver._cache.hierarchy = None            # what a failure / stale mark does
+        x = solver(FakePetscMat(A3), b3, x03, {})
+        self.assertLess(np.linalg.norm(A3 @ x - b3) / np.linalg.norm(b3), 1e-6)
+        free = np.flatnonzero(~amg.pinned_rows(A3))
+        self.assertIsNot(solver._cache.scale_build, first)
+        np.testing.assert_allclose(solver._cache.scale_build, 1.0 / np.sqrt(A3.diagonal()[free]))
+
+    def test_registry_accepts_and_validates_scale_policy(self):
+        from jax_fem_am.solvers.linear import normalize_linear_solver_spec
+        self.assertEqual(normalize_linear_solver_spec({"backend": "pyamg"})["scale_policy"], "current")
+        self.assertEqual(normalize_linear_solver_spec({"backend": "pyamg", "scale_policy": "frozen"})["scale_policy"], "frozen")
+        with self.assertRaises(ValueError):
+            normalize_linear_solver_spec({"backend": "pyamg", "scale_policy": "sometimes"})
+
+
 class PyamgFallbackRetentionTest(unittest.TestCase):
     """BUG_FIX.md section 8: the PARDISO fallback must not keep a factorisation
     alive. The shared phase23 adapter held ~8 GB on the v159 system and froze

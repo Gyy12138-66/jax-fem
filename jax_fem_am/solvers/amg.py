@@ -92,6 +92,7 @@ import scipy.sparse.linalg as spla
 
 SMOOTHERS = ("jacobi", "block_gauss_seidel")
 DEVICES = ("cpu", "gpu", "jax")
+SCALE_POLICIES = ("current", "frozen")
 SHAPE_MODES = ("auto", "free", "full", "bucket")
 
 
@@ -478,7 +479,7 @@ class _PatternCache:
         "signature", "n", "free", "pin", "keep", "ff_indptr", "ff_indices", "ff_rows",
         "ff_diag_pos", "hierarchy", "hierarchy_info", "jax_levels", "jax_coarse_pinv",
         "jax_omega0", "dev_rows", "dev_cols", "dev_indptr", "dev_diag_pos", "fresh_iterations",
-        "kernels", "pin_mask", "dev_kill", "dev_pin_mask",
+        "kernels", "pin_mask", "dev_kill", "dev_pin_mask", "scale_build",
     )
 
     def __init__(self, signature, n, free, pin, keep, ff_indptr, ff_indices, ff_rows, ff_diag_pos):
@@ -507,6 +508,8 @@ class _PatternCache:
         self.pin_mask = None
         self.dev_kill = None
         self.dev_pin_mask = None
+        # Jacobi scaling the current hierarchy was built with (scale_policy="frozen").
+        self.scale_build = None
 
     def release(self) -> None:
         """Drop device buffers and the jit kernel set so their executables can be freed."""
@@ -550,6 +553,7 @@ class PyamgKrylovSolver:
         shape_mode: str = "auto",
         fixed_levels: int = 4,
         bucket_ratio: float = 1.25,
+        scale_policy: str = "current",
     ) -> None:
         if method not in ("cg", "bicgstab"):
             raise ValueError(f"pyamg method must be cg or bicgstab, got {method!r}")
@@ -576,6 +580,8 @@ class PyamgKrylovSolver:
             raise ValueError("fixed_levels must be >= 2")
         if float(bucket_ratio) <= 1.0:
             raise ValueError("bucket_ratio must be > 1")
+        if scale_policy not in SCALE_POLICIES:
+            raise ValueError(f"scale_policy must be one of {SCALE_POLICIES}, got {scale_policy!r}")
         self.method = method
         self.near_nullspace = near_nullspace
         self.scaled = bool(scaled)
@@ -606,12 +612,23 @@ class PyamgKrylovSolver:
         self.shape_mode = shape_mode if self.use_jax else "free"
         self.fixed_levels = int(fixed_levels)
         self.bucket_ratio = float(bucket_ratio)
+        # Jacobi scaling while a hierarchy is REUSED. The prolongator interpolates
+        # the near-nullspace in the scaling it was built with (B / s_build); with
+        # "current" the system is rescaled by the diagonal of every new tangent, so
+        # after plastic softening the coarse correction no longer carries the
+        # rigid-body modes of the softened region. "frozen" keeps s_build until the
+        # hierarchy is rebuilt (equivalent to scaling the rows of P by
+        # s_build / s_current). Measured on the v159 tangent-drift series: layer 30
+        # reused solves 128 -> 77 iterations for 0.025 s, a full rebuild gives 73-84
+        # (BUG_FIX.md section 11).
+        self.scale_policy = scale_policy
         smoother_label = (
             f"{smoother}x{self.smoother_sweeps}" if smoother == "jacobi" else "block_gs(sym)"
         )
         shape_label = f", shape={self.shape_mode}" if self.use_jax else ""
         self.label = (
-            f"pyamg_solver(sa+{near_nullspace}{'+scaled' if self.scaled else ''}, "
+            f"pyamg_solver(sa+{near_nullspace}{'+scaled' if self.scaled else ''}"
+            f"{'(frozen)' if self.scaled and scale_policy == 'frozen' else ''}, "
             f"{method}, {smoother_label}, {self.device}{shape_label}, tol={self.tol:g}, "
             f"maxiter={self.maxiter}, fallback={fallback})"
         )
@@ -631,6 +648,7 @@ class PyamgKrylovSolver:
             "structure_rebuilds": 0,
             "hierarchy_rebuilds": 0,
             "adaptive_rebuilds": 0,
+            "frozen_scale_solves": 0,
             "capacity_growths": 0,
             "fallbacks": 0,
             "last_iterations": 0,
@@ -1143,21 +1161,11 @@ class PyamgKrylovSolver:
             return self._direct_fallback(
                 A, b, x0, linear_options, "free block has a non-positive diagonal"
             )
-        if self.scaled:
-            scale = 1.0 / onp.sqrt(d)
-            D = sp.diags(scale)
-            S = (D @ Aff @ D).tocsr() if (not self.use_jax or cache.hierarchy is None) else None
-            rhs = scale * bf
-            y0 = x0[free] / scale
-        else:
-            scale = None
-            S = Aff
-            rhs = bf
-            y0 = x0[free]
-        rhs_norm = float(onp.linalg.norm(rhs))
-        if rhs_norm == 0.0:
-            return x_full
-        if full:
+        def scaled_vectors(scale):
+            rhs = scale * bf if scale is not None else bf
+            y0 = x0[free] / scale if scale is not None else x0[free]
+            if not full:
+                return rhs, y0, None, None, None
             # whole-mesh vectors: pinned rows carry zero residual and a zero
             # unknown (their prescribed values are added back at the end).
             scale_full = onp.ones(n) if scale is not None else None
@@ -1167,10 +1175,28 @@ class PyamgKrylovSolver:
             rhs_full[free] = rhs
             y0_full = onp.zeros(n)
             y0_full[free] = y0
+            return rhs, y0, scale_full, rhs_full, y0_full
 
         reused = cache.hierarchy is not None
+        if self.scaled:
+            scale = 1.0 / onp.sqrt(d)
+            if self.scale_policy == "frozen" and reused and cache.scale_build is not None:
+                # the hierarchy interpolates B / scale_build: keep that scaling
+                scale = cache.scale_build
+                self.stats["frozen_scale_solves"] += 1
+            D = sp.diags(scale)
+            S = (D @ Aff @ D).tocsr() if (not self.use_jax or not reused) else None
+        else:
+            scale = None
+            S = Aff
+        rhs, y0, scale_full, rhs_full, y0_full = scaled_vectors(scale)
+        rhs_norm = float(onp.linalg.norm(rhs))
+        if rhs_norm == 0.0:
+            return x_full
+
         if not reused:
             self._build_hierarchy(cache, S, scale)
+            cache.scale_build = scale
         converged = False
         y = y0
         for attempt in range(2):
@@ -1218,9 +1244,16 @@ class PyamgKrylovSolver:
                 break
             # The cached hierarchy no longer matches the tangent: rebuild once.
             self.stats["hierarchy_rebuilds"] += 1
+            if self.scaled and self.scale_policy == "frozen":
+                # a rebuild re-freezes the scaling on the current diagonal
+                scale = 1.0 / onp.sqrt(d)
+                rhs, y0, scale_full, rhs_full, y0_full = scaled_vectors(scale)
+                rhs_norm = float(onp.linalg.norm(rhs))
+                S = None
             if S is None:
                 S = (sp.diags(scale) @ Aff @ sp.diags(scale)).tocsr()
             self._build_hierarchy(cache, S, scale)
+            cache.scale_build = scale
         if not converged:
             return self._direct_fallback(
                 A, b, x0, linear_options,
