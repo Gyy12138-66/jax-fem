@@ -739,4 +739,5 @@ R3 兜底     第 40 次迭代的走廊探测（§10.1.1）→ recovery="refresh
 - **代码缺省值暂不改**：等 E0f 通过后再翻转（同时要改两处断言缺省为 `current` 的单测）。
 - E0f：配置 `0119-flash-voxel-fast-pyamg-frozen.json`（与 E0 只差这一个键；刷新相关选项保持缺省关闭），新 TAG `voxel_pyamg_frozen_E0f`，`STAGES="1 2 S 3"`，环境与 E0 相同（`XLA_PYTHON_CLIENT_MEM_FRACTION=0.85`，不开持久编译缓存、不采 dump），运行期间不在本机跑其他占 CPU 的任务。
   验收：未收敛 ≈ 0（E0 303）、建层级 ≈ 182（E0 485）、PARDISO 兜底 0、与 E1b 的一致性不劣于 E0（u_max ≤ 1e-5、vm_max ≤ 1e-7、释放解 ≤ 1e-6）、总墙钟明显低于 14.13 h；重点看 S2 没覆盖的层 91–182。
+- 起跑：2026-09-20 18:04:39 启动（07e5cd2，dirty=0），能量门 RC=0、2-slab 门 RC=0，**生产段 18:10:24 开始**；run.log 回显 `scaled(frozen)`，contract 含 `"scale_policy":"frozen"`。运行记录：桌面 `运行日志6-09-20_1810_MODE5_..._frozen_07e5cd2_voxel_pyamg_frozen_E0f.md`；查看 `bash ~/work/159/status_E0f.sh`。
 - 结果：（跑完后填）
