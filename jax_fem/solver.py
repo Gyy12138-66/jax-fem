@@ -315,6 +315,39 @@ def _check_linear_residual(err, b, tol, atol, check_factor, method):
     return err_value
 
 
+def _krylov_core(data, indices, b, x0, jacobi, tol, atol, *, shape, method,
+                 maxiter, restart, solve_method, precond):
+    """The Krylov solve of ``jax_solve`` as a pure function of arrays.
+
+    ``jax.scipy.sparse.linalg.cg`` run OUTSIDE jit traces its ``lax.while_loop``
+    with fresh closures on every call (the BCOO matvec, the Jacobi lambda), so
+    none of JAX's function-keyed caches hit and every solve pays a complete XLA
+    compile of the same kernel: 300 byte-identical ``jit_while`` modules in a
+    197-step run, about 2e4 per full-height v159 build. Besides ~0.065 s per
+    call, each compile can spawn ``ptxas`` from a 17 GB / 250-thread process,
+    which occasionally deadlocks under WSL (``__vma_start_write``): three of six
+    long runs froze there (BUG_FIX.md section 11.13). Jitted once at module
+    level with the matrix as ARRAY arguments, the sparsity structure being fixed
+    for a whole build, it compiles once per (shape, method, x0 given or not).
+    """
+    A = BCOO((data, indices), shape=shape, indices_sorted=False, unique_indices=False)
+    pc = (lambda x: x * (1. / jacobi)) if precond else None
+    kwargs = {'x0': x0, 'M': pc, 'tol': tol, 'atol': atol, 'maxiter': maxiter}
+    if method == 'bicgstab':
+        return jax.scipy.sparse.linalg.bicgstab(A, b, **kwargs)
+    if method == 'cg':
+        return jax.scipy.sparse.linalg.cg(A, b, **kwargs)
+    kwargs['restart'] = restart
+    kwargs['solve_method'] = solve_method
+    return jax.scipy.sparse.linalg.gmres(A, b, **kwargs)
+
+
+_jitted_krylov = jax.jit(
+    _krylov_core,
+    static_argnames=('shape', 'method', 'maxiter', 'restart', 'solve_method', 'precond'),
+)
+
+
 def jax_solve(
     A,
     b,
@@ -329,6 +362,7 @@ def jax_solve(
     timing=None,
     check_residual=True,
     check_factor=100.0,
+    jit_solve=False,
 ):
     logger.debug(f"JAX Solver - Solving linear system")
     conversion_t0 = time.perf_counter()
@@ -415,7 +449,20 @@ def jax_solve(
         'maxiter': maxiter,
     }
     solve_t0 = time.perf_counter()
-    if method == 'bicgstab':
+    if method not in ('bicgstab', 'cg', 'gmres'):
+        raise ValueError(
+            f"unknown JAX linear solver method {method!r}; "
+            "expected 'bicgstab', 'cg', 'gmres', or 'spsolve'"
+        )
+    if jit_solve and not issubclass(PETSc.ScalarType, np.complexfloating):
+        # one compiled executable for the whole build instead of one per call
+        _counter_record(timing, 'jax_jit_solves')
+        x, info = _jitted_krylov(
+            A.data, A.indices, np.asarray(b), x0, jacobi, tol, atol,
+            shape=tuple(int(v) for v in A.shape), method=method, maxiter=int(maxiter),
+            restart=int(restart), solve_method=solve_method, precond=bool(precond),
+        )
+    elif method == 'bicgstab':
         x, info = jax.scipy.sparse.linalg.bicgstab(A, b, **solve_kwargs)
     elif method == 'cg':
         x, info = jax.scipy.sparse.linalg.cg(A, b, **solve_kwargs)
@@ -642,6 +689,7 @@ def linear_solver(A, b, x0, linear_options, timing=None):
             timing=timing,
             check_residual=jax_options.get('check_residual', True),
             check_factor=jax_options.get('check_factor', 100.0),
+            jit_solve=bool(jax_options.get('jit', False)),
         )
     elif 'amgx_solver' in linear_options:
         cfg_path = linear_options['amgx_solver']['cfg_path'] if 'cfg_path' in linear_options['amgx_solver'] else None

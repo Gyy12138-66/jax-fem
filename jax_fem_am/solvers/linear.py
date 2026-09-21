@@ -106,7 +106,7 @@ _KEEP_WORDS = frozenset({"", "keep", "preserve", "none", "null", "base"})
 _ALLOWED_KEYS: Dict[str, frozenset] = {
     "jax": frozenset(
         {"backend", "method", "precond", "tol", "atol", "maxiter", "restart",
-         "solve_method", "check_residual", "check_factor"}
+         "solve_method", "check_residual", "check_factor", "jit"}
     ),
     "pardiso": frozenset({"backend", "mode"}),
     "spsolve": frozenset({"backend"}),
@@ -186,6 +186,10 @@ def normalize_linear_solver_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
             out["check_residual"] = _as_bool(out["check_residual"], "check_residual")
         if out.get("check_factor") is not None:
             out["check_factor"] = float(out["check_factor"])
+        # Compile the Krylov solve once instead of on every call (BUG_FIX.md
+        # section 11.13/11.14). Off by default: results move at the 1e-16 level.
+        if "jit" in out and out["jit"] is not None:
+            out["jit"] = _as_bool(out["jit"], "jit")
     elif backend == "pardiso":
         mode = out.get("mode")
         if mode is not None:
@@ -356,6 +360,8 @@ def build_linear_block(
             inner["check_residual"] = False
         if spec.get("check_factor") is not None:
             inner["check_factor"] = spec["check_factor"]
+        if spec.get("jit"):
+            inner["jit"] = True
         return {"jax_solver": inner}
     if backend == "pardiso":
         mode = spec.get("mode", pardiso_mode_default)
@@ -460,6 +466,8 @@ def linear_block_label(linear_options: Optional[Mapping[str, Any]]) -> str:
             parts.append(f"maxiter={opts['maxiter']}")
         if opts.get("check_residual") is False:
             parts.append("check_residual=False")
+        if opts.get("jit"):
+            parts.append("jit=True")
         return f"jax_solver({', '.join(parts)})"
     if "amgx_solver" in linear_options:
         cfg_path = linear_options["amgx_solver"].get("cfg_path")
