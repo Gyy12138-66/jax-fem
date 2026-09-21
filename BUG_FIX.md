@@ -740,4 +740,39 @@ R3 兜底     第 40 次迭代的走廊探测（§10.1.1）→ recovery="refresh
 - E0f：配置 `0119-flash-voxel-fast-pyamg-frozen.json`（与 E0 只差这一个键；刷新相关选项保持缺省关闭），新 TAG `voxel_pyamg_frozen_E0f`，`STAGES="1 2 S 3"`，环境与 E0 相同（`XLA_PYTHON_CLIENT_MEM_FRACTION=0.85`，不开持久编译缓存、不采 dump），运行期间不在本机跑其他占 CPU 的任务。
   验收：未收敛 ≈ 0（E0 303）、建层级 ≈ 182（E0 485）、PARDISO 兜底 0、与 E1b 的一致性不劣于 E0（u_max ≤ 1e-5、vm_max ≤ 1e-7、释放解 ≤ 1e-6）、总墙钟明显低于 14.13 h；重点看 S2 没覆盖的层 91–182。
 - 起跑：2026-09-20 18:04:39 启动（07e5cd2，dirty=0），能量门 RC=0、2-slab 门 RC=0，**生产段 18:10:24 开始**；run.log 回显 `scaled(frozen)`，contract 含 `"scale_policy":"frozen"`。运行记录：桌面 `运行日志6-09-20_1810_MODE5_..._frozen_07e5cd2_voxel_pyamg_frozen_E0f.md`；查看 `bash ~/work/159/status_E0f.sh`。
-- 结果：（跑完后填）
+- 结果：**未跑完**，09-20 21:23:26 在层 71 冻结（XLA 中途编译，与缩放策略无关），见 11.13；冻结前 71 层的数据符合预期（0 次未收敛、每层建一次层级）。
+
+### 11.13 E0f 在层 71 冻结：根因是热学 CG 每次求解都重新编译（2026-09-21）
+
+**现象**：E0f 生产段 09-20 18:10:24 开始，**21:23:26 停在 step 4600 / 层 71**，之后 11.8 h 没有任何输出。与冻结缩放无关，是第三次同指纹的 XLA 中途编译冻结：
+run.log 末行 `slow_operation_alarm: Compiling module jit_while for GPU`；runner 247 个线程全 S、10 s 内 1 个 tick、`futex_do_wait`；子进程 `ptxas` D 态 `__vma_start_write`；主机内存可用 28 GB、swap 0、oom_kill 0。
+同指纹的三次：0911 半模（层 18）、S0（层 34）、E0f（层 71）；E0、E1b、S2、0911 重跑没中。runner 已 kill、显存已释放；D 态残留累计 11 个，需 `wsl --shutdown` 清。
+
+**冻结前的 E0f（层 1–71，步 0–4600）对 E0 同段**——冻结缩放本身工作正常：
+
+| | E0f（frozen） | E0（current） |
+|---|---|---|
+| 力学线性解次数 / 平均迭代 / 最大 | 1,848 / **69** / 365 | 1,883 / 151 / 800 |
+| 未收敛 / 建层级 | **0 / 71**（每层一次） | 25 / 97 |
+| 步 20–4580 墙钟 | **3.15 h**（2.49 s/步） | 3.55 h（2.80 s/步） |
+| 分段 s/步（E0f \| E0） | 2.16\|2.18、2.59\|2.64、2.65\|3.06、2.53\|3.12、2.50\|3.11 | 1.01x → 1.25x |
+
+**`jit_while` 是谁**：代码里只有两处 `while_loop`——力学的 `pcg`（已 jit，模块名 `jit_pcg`）和 `jax_fem/solver.py::jax_solve` 里**在 jit 之外直接调用**的 `jax.scipy.sparse.linalg.cg`（热学）。
+后者内部的 `lax.while_loop` 每次调用都用新建的闭包（`pc = lambda x: x * (1/jacobi)`、BCOO 的 matvec）重新 trace，JAX 的 Python 层缓存按函数对象命中不了，于是**每次热学求解都走一遍完整的 XLA 编译**。
+
+**证据**（`~/work/159/launch_diag_compile.sh`：3-slab 短跑 + `XLA_FLAGS=--xla_dump_to=… --xla_dump_hlo_module_re=jit_while.*`）：
+
+| 项 | 值 |
+|---|---|
+| 197 步里编译出的 `jit_while` 模块 | **300 个**（≈每步 1.5 个，即每次热学 Newton 迭代一个），都走完了 GPU 后端（thunk、buffer assignment 全套，7 分钟 dump 出 18,002 个文件） |
+| 去掉模块编号后 HLO 文本的去重数 | **1**——300 个模块逐字节相同，编译的是同一个东西 |
+| 外推到全高 | 约 1.8–2.6 万次编译 / 次全高运行 |
+
+每次编译都有机会 spawn `ptxas`（XLA 的 PTX 缓存通常命中、不 spawn，但偶尔不命中），而从 17 GB / 247 线程 / 带 dxg 映射的大进程 spawn 子进程在 WSL 上偶发死锁于 `__vma_start_write`。
+六次长跑冻结三次，这就是「每次全高约一半概率冻结」的来源；它与 pgrep 扫描无关（S0、E0f 冻结时都没有扫描），也与求解器策略无关。
+
+**代价**（`bench_eager_cg.py`，n = 30 万的热学规模系统，GPU）：eager 调用 0.074 s/次，一次 jit、数组作参数 0.009 s/次；两种方式的解相对差 2.5e-16（非逐位相同）。
+每次多花 ~0.065 s × ~2.6 万次 ≈ **0.5 h / 次全高**，E0 与 E1b 都背着这笔开销（热学路径两条车道共用）。
+
+**修法（待定，未实施）**：把热学 Krylov 求解包进一个**模块级、只 jit 一次**的函数，`data / indices / b / x0 / 1/diag` 作为数组参数、`n / maxiter / method` 作为静态参数；稀疏结构全程不变（`jax_bcoo_cache_misses = 1`），所以全程只编译一次。
+要点：① 它改的是两条车道共用的热学路径，E1b 若不重跑，就不再与新的 pyamg 运行同代码（论文要求同一提交）；② 结果不再逐位相同（2.5e-16 量级），PARDISO 车道的金标门若含热学 CG 需重立基线——因此应做成可选项、缺省关闭，验证后再决定是否翻转。
