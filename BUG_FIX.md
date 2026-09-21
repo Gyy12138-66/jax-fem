@@ -776,3 +776,29 @@ run.log 末行 `slow_operation_alarm: Compiling module jit_while for GPU`；runn
 
 **修法（待定，未实施）**：把热学 Krylov 求解包进一个**模块级、只 jit 一次**的函数，`data / indices / b / x0 / 1/diag` 作为数组参数、`n / maxiter / method` 作为静态参数；稀疏结构全程不变（`jax_bcoo_cache_misses = 1`），所以全程只编译一次。
 要点：① 它改的是两条车道共用的热学路径，E1b 若不重跑，就不再与新的 pyamg 运行同代码（论文要求同一提交）；② 结果不再逐位相同（2.5e-16 量级），PARDISO 车道的金标门若含热学 CG 需重立基线——因此应做成可选项、缺省关闭，验证后再决定是否翻转。
+
+### 11.14 步骤 S5：热学 Krylov 求解只编译一次（`thermal.jit = true`，提交 68e8d9a）
+
+**实现**（`jax_fem/solver.py`）：`_krylov_core(data, indices, b, x0, jacobi, tol, atol, *, shape, method, maxiter, restart, solve_method, precond)` 把原来 `jax_solve` 里的求解写成数组的纯函数，
+模块级 `jax.jit` 一次（`shape / method / maxiter / restart / solve_method / precond` 为静态参数）。稀疏结构全程不变，所以整个运行只编译一次（按 `x0` 有无各一次）。
+`jax_solve(..., jit_solve=False)`、`linear_solver` 读 `jax_solver["jit"]`、注册表接受并校验 `"jit"`、标签里显示 `jit=True`、计数器 `jax_jit_solves`。**缺省关闭**；复数标量类型时回落到原路径。
+
+**为什么缺省关**：① 结果在 1e-16 量级上不再逐位相同（n = 30 万的对照：相对差 2.5e-16），PARDISO 车道的逐位金标门要复核；② 热学路径两条车道共用，要比较的运行必须两边同开或同关。
+因此新建了两份配置而不动旧的：`0119-flash-voxel-fast-pyamg-frozen-tjit.json`、`0119-flash-voxel-fast-hybrid-tjit.json`。
+
+**单测**：`tests/unit/test_jax_solve_jit.py` 5 条（cg / bicgstab、有无 `x0`，jit 与 eager 的解差 ≤ 1e-9；同一稀疏结构换 5 组数值，`_jitted_krylov._cache_size()` 不增长；经 `linear_solver` 分发与计数；未知方法仍报错；注册表键）。`-m solver` 110 passed，相关单测 88 passed。
+
+**修复前后同口径对照**（3-slab、197 步，XLA 只 dump 名字匹配 `jit_while` / `jit__krylov_core` 的模块）：
+
+| | `jit_while` 编译次数 | `jit__krylov_core` 编译次数 |
+|---|---|---|
+| 修复前（eager） | **300** | — |
+| 修复后（`jit: true`） | **0** | **1**（起跑时） |
+
+两次都 `SHAKEDOWN_GATE_RC=0`；修复后分配器峰值 7,375 MB（修复前同量级 7,650 MB）。
+
+**过程中的一个坑**：第一次用 `--xla_dump_hlo_module_re=.*`（dump 全部模块）做修复后的验证，第一步力学解就 `CUDA_ERROR_OUT_OF_MEMORY: Error recording CUDA event` 起跑即死；
+去掉 dump 或把正则收窄到上面两个名字就正常——是全量 dump 本身引起的，与改动无关。诊断用的 dump 一律收窄正则。
+
+**验证进行中**：`voxel_tjit_V40`（40-slab，frozen + thermal jit，09-21 10:0x 起，约 1.6 h），对照臂 = E0f 冻结前的同段（同配置、只差 `thermal.jit`，计时干净）：
+比 T_max / u_max / vm_max 的逐点差、力学迭代数是否逐次相同、分段步速。脚本 `~/work/159/cmp_V40.py`。通过后用同一提交重跑全高 E0f′ 与 E1b′。
