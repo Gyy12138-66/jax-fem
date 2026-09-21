@@ -815,3 +815,5 @@ run.log 末行 `slow_operation_alarm: Compiling module jit_while for GPU`；runn
 | 建层级 / 中途编译告警 / 分配器峰值 | 40（每层一次）/ 0 / 7,692 MB | 同量级 |
 
 每步省 0.24 s 比微基准估的（0.065 s × 每步 1.5 次）多得多：大进程里每次重编译更贵。外推全高约省 0.8 h，两条车道都受益。验证通过，用同一提交重跑全高：E0j（pyamg，frozen + thermal jit）与 E1j（PARDISO + thermal jit）。
+
+**E0j 起跑**：2026-09-21 11:37:00 启动（d6bd04f，dirty=0），能量门 RC=0、2-slab 门 RC=0，**生产段 11:42:13 开始**；run.log 回显 `jit=True` 与 `scaled(frozen)`。运行记录：桌面 `运行日志6-09-21_1142_MODE5_thermal-jaxCGjit_..._d6bd04f_voxel_pyamg_frozen_tjit_E0j.md`；查看 `bash ~/work/159/status_E0j.sh`。结果：（跑完后填）
