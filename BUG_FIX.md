@@ -862,3 +862,10 @@ run.log 末行 `slow_operation_alarm: Compiling module jit_while for GPU`；runn
 - **共同因素**：VM 自 09-17 17:34 连续运行 5 天，累计 16 个 D 态残留进程（3 个 ptxas、1 个 pgrep、11 个 ps、现在加 1 个 runner），全部卡在 dxg 相关的锁上；本机 9 次长跑里 5 次在不同代码路径上冻结，宿主侧的共同点就是这个驱动通道。
   三种指纹（09-08/09-15 runner 在 dxg 分配路径 D 态；ptxas ×3；本次 create_allocation 失败）指向同一处：长时间运行后 WSL2 dxgkrnl 的 vmbus 通道退化。
 - 处置：D 态进程杀不掉，只能 `wsl --shutdown`（无其他任务在跑，无损失）；之后**每次长跑前先 `wsl --shutdown` 起一个新 VM**，并把它写进启动器的检查单。E1j 重启需重跑 stage 1/2/S（shakedown 输出不完整，删目录或换 TAG）。
+
+**更正与后续（2026-09-22 10:25）**：
+- 09:59 `wsl --shutdown` 后的第一个新 VM 上，E1j **第二次**在 shakedown 一开始就冻结（runner RSS 仅 366 MB 即 D 态 `__vma_start_write`，10:01–10:02）；dmesg 在开机 62 s 时有一条 `WARNING … dxgvmbus.c:3095 dxgvmb_send_wait_sync_object_gpu`。
+- 10:14 第二次 shutdown 后的新 VM：GPU 自检（矩阵乘、3 × 2 GB 分配）正常，无 D 态；那条 WARNING 在每次开机后第一次用 GPU 时出一次、之后不再出，**不是冻结的原因**。
+- **上文把 `dxgvmb_send_create_allocation failed ffffffb5 / Ioctl failed: -75` 当作直接原因是错的**：第三次尝试（10:16 起，shakedown RC=0、释放解正常、生产段 10:24:48 开始）的 dmesg 里同样有这条，时间正对应每次起跑时 XLA 分配器的 4 GiB 探测（run.log 里的 `Failed to allocate device memory of 4.00GiB`），每次运行都有，是正常噪声。
+- 因此关于冻结，能确定的只有：runner（或它 spawn 的 ptxas）卡在 dxgkrnl 持有的 VMA 写锁上（`__vma_start_write`），触发点随机、与代码路径无关；今天在旧 VM 与新 VM 上各发生一次，第三次通过。Windows 主机已连续运行 5 天（09-17 09:55 起），System 日志无显示驱动事件。
+- 处置不变：长跑前 `wsl --shutdown`；若再发生，重启 Windows（主机侧 dxgkrnl 状态只有重启能复位）。E1j 第三次尝试进行中。
