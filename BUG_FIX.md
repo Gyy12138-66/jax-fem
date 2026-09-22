@@ -850,3 +850,15 @@ run.log 末行 `slow_operation_alarm: Compiling module jit_while for GPU`；runn
 **分阶段**：nonlinear_solve 83.1%、assembly 39.0%、solver 34.7%（E0：87.3 / 27.9 / 52.4%）——线性解不再是最大项，装配成为第一大项。
 
 **下一步**：E1j（PARDISO + `thermal.jit`，同一提交）跑完即得到最终的同代码加速比；之后翻转两个缺省值（先给所有旧配置显式写旧值，含 `halfmodel-0911` 分支）。
+
+### 11.16 E1j 在 2-slab shakedown 的释放解上冻结：WSL dxg 驱动的显存分配调用失败（2026-09-22 09:34）
+
+- E1j（PARDISO + `thermal.jit`，8931d2c）09:26:37 起跑，能量门 RC=0，shakedown 09:27:05 开始，**09:34:25 停在释放解**（末行 `v06: release adopted build mechanical tensor state`，随后的释放解装配需要在 GPU 上为第二个力学 Problem 分配显存）。
+- 指纹与前几次都不同：**runner 主线程本身 D 态** `__vma_start_write`（241 个线程 S、1 个 D，0 tick），RSS 24.5 GB，没有 ptxas 子进程；主机内存可用 21 GB、swap 0、oom_kill 0；显存 11.4 GB。
+- **dmesg 给出了直接原因**（VM 运行秒数 402750 ≈ 09:27–09:34）：
+  `dxgvmb_send_create_allocation: send_create_allocation failed ffffffb5` → `dxgkio_create_allocation: Ioctl failed: -75`——WSL 的 GPU 半虚拟化驱动（dxgkrnl）向宿主申请显存分配失败，调用没有返回，进程卡在驱动持有的 VMA 写锁上。
+  此前 dmesg 里已持续出现 `dxgkio_query_adapter_info: Ioctl failed: -22`、`dxgkio_is_feature_enabled: Ioctl failed: -75`。
+- 与代码无关：同一个释放解在 12 h 前的 E0j（同提交）和 E1b 里都正常；`thermal.jit` 不经过这条路径。
+- **共同因素**：VM 自 09-17 17:34 连续运行 5 天，累计 16 个 D 态残留进程（3 个 ptxas、1 个 pgrep、11 个 ps、现在加 1 个 runner），全部卡在 dxg 相关的锁上；本机 9 次长跑里 5 次在不同代码路径上冻结，宿主侧的共同点就是这个驱动通道。
+  三种指纹（09-08/09-15 runner 在 dxg 分配路径 D 态；ptxas ×3；本次 create_allocation 失败）指向同一处：长时间运行后 WSL2 dxgkrnl 的 vmbus 通道退化。
+- 处置：D 态进程杀不掉，只能 `wsl --shutdown`（无其他任务在跑，无损失）；之后**每次长跑前先 `wsl --shutdown` 起一个新 VM**，并把它写进启动器的检查单。E1j 重启需重跑 stage 1/2/S（shakedown 输出不完整，删目录或换 TAG）。
