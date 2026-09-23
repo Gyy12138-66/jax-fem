@@ -1,0 +1,109 @@
+{
+  "schema": "v2.cube-stress-smoke/2",
+  "scope": "production",
+  "purpose": "Balbaa 2022 立方体（10 x 10 x 10 mm，200 um 单元，250 个 40 um 真实层 -> 50 个 slab，D-V2-07 分级基板 30 x 30 x 6 mm）的阶段 3 生产合同。读法 A（D-V2-11，yuyao 2026-08-27 拍板）：每个真实层用一次覆盖整层的均匀\"闪热\"替代逐道扫描，持续时间 = 真实层扫描时间，能量守恒；事件延迟开关暂不做（yuyao 同日决定），力学节拍 = 事件驱动 + 每层一次计划步。",
+  "provenance": {
+    "paper": "Balbaa2022 Sec 2.6.3, Fig 4-5, Sec 3.4 (XRD), Sec 4.3",
+    "deviations": ["D-V2-07", "D-V2-10", "D-V2-11", "D-V2-12", "D-V2-18", "D-V2-28"],
+    "zero_calibration": true
+  },
+  "geometry": {
+    "part_xy_m": 0.01,
+    "model_part_xy_m": 0.01,
+    "model_part_z_m": 0.01,
+    "production_part_z_m": 0.01,
+    "substrate_xy_m": 0.03,
+    "substrate_z_m": 0.006,
+    "substrate_grading": 1.4,
+    "model_substrate_xy_m": 0.02,
+    "model_substrate_z_m": 0.006,
+    "model_substrate_grading": 1.4,
+    "cell_size_m": 0.0002,
+    "substrate_footprint_note": "substrate_xy_m 0.03 is the D-V2-07 figure-derived value; the MODELLED footprint is 0.02 m (2 x cube width) because the 30 mm variant (305k cells, 1.0 M mechanics DOF) builds on the RTX 5080 (GPU peak 12.3 GB, host RSS 39.8 GB at the 40 GB WSL cap) but the substrate-release solve, which instantiates a second problem, runs the 16 GB GPU out of memory (memory probes 3 and 4, 2026-08-27, with and without the XLA cache). The 20 mm variant (205k cells, 0.67 M DOF) passes build + release: GPU peak 9.5 GB, host RSS 37.7 GB, 150 s per full-size mechanics solve. Registered as a D-V2-07 production amendment; footprint sensitivity 20 vs 30 mm is to be measured on a reduced-height build (no release needed for that comparison)."
+  },
+  "layer_schedule": {
+    "physical_layer_thickness_m": 0.00004,
+    "activation_slab_thickness_m": 0.0002,
+    "physical_layers_per_slab": 5,
+    "model_physical_layers": 250,
+    "production_physical_layers": 250,
+    "activation_rule": "activate a 200 um slab when its first contained 40 um physical-layer flash starts",
+    "deposition_mode": "flash",
+    "deposition_z_rule": "slab_top",
+    "recoat_time_s": 5.0,
+    "recoat_substeps": 10,
+    "recoat_substep_ratio": 1.5,
+    "recoat_after_final_layer": false
+  },
+  "scan": {
+    "power_W": 140.0,
+    "speed_m_s": 0.65,
+    "hatch_m": 0.00012,
+    "margin_m": 0.0001,
+    "sample_step_m": 0.0002,
+    "jump_speed_m_s": 5.0,
+    "start_angle_deg": 0.0,
+    "rotation_per_physical_layer_deg": 90.0,
+    "serpentine": true,
+    "flash": {
+      "beam_radius_m": 0.1,
+      "substeps": 10,
+      "power_rule": "commanded = P / capture(footprint)",
+      "note": "legacy Gaussian exp(-2 rho^2/r^2) with r = 100 mm centred on the 10 mm footprint: centre-to-corner drop 1.0 %, captured fraction erf(sqrt2 a/r)^2 = 0.00635. The commanded power 140/0.00635 = 22,047 W is an aggregation construct (the AM-Bench L0 rev-4 argument: the conserved invariants are the per-layer energy 173.08 J and the layer clock 1.2363 s); the ledger measures the deposited energy against Ac x 173.08 J per layer. Rotation/hatch have no meaning for a flash and are kept only to define the real scan time. Balbaa's own cube result: hatch spacing does not affect the in-depth RS profile (Sec 4.3.2)."
+    }
+  },
+  "thermal_mechanical": {
+    "initial_temperature_K": 353.15,
+    "ambient_K": 313.0,
+    "stress_free_reference_K": 1273.15,
+    "final_cooldown_s": 600.0,
+    "final_cooldown_steps": 60,
+    "bottom_mechanics_bc": "fixed_until_release",
+    "release_after_cooling": true,
+    "release_rule": "substrate cells cut (stiffness and locked-in stress removed) + 3-point rigid-body anchors on printed nodes; bottom Dirichlet temperature held at the preheat value through cooldown (Balbaa: 600 s cooling, then model-change removal of the substrate)"
+  },
+  "runner": {
+    "material_config": "cases/AM-Benchmark/verification/v2-cube-rs/model/v2_material_config.json",
+    "material_config_relocate_prefix": "/home/user/work/159/jax-fem/",
+    "layer_activation_geometry": "centroid",
+    "absorptivity": 0.62,
+    "beam_radius_m": 0.0002,
+    "source_depth_m": 0.000125935,
+    "source_depth_cutoff_m": 0.000199,
+    "source_cutoff_renormalize": true,
+    "heat_source_note": "depth band identical to the smoke contract (vertex-collocated lumped source, discrete band integral = 1, see cube-stress-smoke.json); the in-plane radius is overridden by scan.flash.beam_radius_m in flash mode.",
+    "consolidation": {
+      "solidus_K": 10000.0,
+      "liquidus_K": 10000.0,
+      "latent_heat_J_kg": 0.0,
+      "phase_history_model": "legacy_reset",
+      "stress_relaxation_temperature_K": 1273.15,
+      "activation_reset_temperature_K": 353.15,
+      "note": "as in the smoke contract: melt detection off (sentinel), T_ref 1273.15 K once at activation, T_cut lifecycle events force mechanics solves (no deferral switch yet)."
+    },
+    "mechanics": {
+      "model": "j2_plastic",
+      "every_steps": 20,
+      "rel_tol": 5e-05,
+      "acceptance": "abaqus",
+      "max_iter": 50,
+      "line_search": true,
+      "max_cuts": 3,
+      "temperature_floor_K": 293.15,
+      "note": "20 rows per physical layer (10 flash + 10 recoat sub-steps), so the scheduled solve lands once per layer; T_cut events add ~1-2 forced solves per layer."
+    },
+    "output": {
+      "thermal_output_every": 500,
+      "mechanics_output_every": 500,
+      "summary_every": 20
+    },
+    "linear_solver": {
+      "platform": "gpu",
+      "python_bin": "/home/user/miniconda3/envs/jax-fem-gpu/bin/python",
+      "solver": "pardiso",
+      "pardiso_mode": "phase23",
+      "cell_target_batch_size": 32768,
+      "note": "GPU assembly + CPU MKL PARDISO (solver-compare/results/RESULTS.md). The wrapper default assembly chunk (262,144 cells) cut the 305k-cell mesh into 2 chunks of 152,500 cells and the mechanics tangent kernel_jac (f64[152500,24,8,3,3] = 2.1 GB per array) ran the RTX 5080 out of its 16 GB (memory probe 2026-08-27, peak 12.5 GB then CUDA_ERROR_OUT_OF_MEMORY; host RSS 10.7 GB). cell_target_batch_size 32768 keeps each chunk's tangent arrays ~0.45 GB. Memory feasibility at ~1.0 M mechanics DOF is checked by model/runs/v_cube_memory_probe.sh before any production run."
+    }
+  }
+}

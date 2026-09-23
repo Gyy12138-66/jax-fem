@@ -1,0 +1,287 @@
+{
+ "schema_version": "ambench.d11-coarsen/1",
+ "purpose": "diagnostic A: separate metric-resolution staircase from aggregation physics",
+ "band_height_mm": 1.0,
+ "bands": [
+  [
+   0.0,
+   1.0
+  ],
+  [
+   1.0,
+   2.0
+  ],
+  [
+   2.0,
+   3.0
+  ],
+  [
+   3.0,
+   4.0
+  ],
+  [
+   4.0,
+   5.0
+  ],
+  [
+   5.0,
+   6.0
+  ],
+  [
+   6.0,
+   7.0
+  ]
+ ],
+ "deciding_leg": "L1_thick",
+ "threshold": 0.05,
+ "pre_registered": {
+  "deciding_metric": "L1 only; L2/L3 reported as absolute differences, not relative, not deciding",
+  "gate2": "coarsened L1 M1 AND M2 must both fall >= 50 % vs stage 1 (26.7 % / 16.9 %) to count as significant improvement"
+ },
+ "readings": [
+  "Block averaging is NOT hiding the difference: it is the common ruler the coarsest member can actually resolve. A coarse member cannot answer a sub-cell question, so this is the correct like-for-like comparison.",
+  "But N=50 gives only 5 bands over the leg. That ruler is blunt, so a PASS on it is WEAK evidence. Strong evidence requires deliverable B: every member on the same 0.1 mm mesh."
+ ],
+ "per_member": {
+  "50": {
+   "L1_thick": {
+    "x_plane_mm": 2.375,
+    "section_cells": 70,
+    "line_cells": 7,
+    "raw_Mroot_N_mm": -1140.9828925132751,
+    "coarse_Mroot_N_mm": -1140.9828925132751
+   },
+   "L2_thin": {
+    "x_plane_mm": 7.125,
+    "section_cells": 70,
+    "line_cells": 7,
+    "raw_Mroot_N_mm": 49.20842885971069,
+    "coarse_Mroot_N_mm": 49.20842885971069
+   },
+   "L3_med": {
+    "x_plane_mm": 10.625,
+    "section_cells": 70,
+    "line_cells": 7,
+    "raw_Mroot_N_mm": 1.3987198378890753,
+    "coarse_Mroot_N_mm": 1.3987198378890753
+   }
+  },
+  "25": {
+   "L1_thick": {
+    "x_plane_mm": 2.375,
+    "section_cells": 140,
+    "line_cells": 14,
+    "raw_Mroot_N_mm": -976.0374302882698,
+    "coarse_Mroot_N_mm": -940.4651127532115
+   },
+   "L2_thin": {
+    "x_plane_mm": 7.125,
+    "section_cells": 140,
+    "line_cells": 14,
+    "raw_Mroot_N_mm": 28.543496405240123,
+    "coarse_Mroot_N_mm": 24.854686867445686
+   },
+   "L3_med": {
+    "x_plane_mm": 10.625,
+    "section_cells": 140,
+    "line_cells": 14,
+    "raw_Mroot_N_mm": -3.6095826729906557,
+    "coarse_Mroot_N_mm": -2.5753218517493153
+   }
+  },
+  "10": {
+   "L1_thick": {
+    "x_plane_mm": 2.375,
+    "section_cells": 350,
+    "line_cells": 35,
+    "raw_Mroot_N_mm": -666.34636079818,
+    "coarse_Mroot_N_mm": -636.0626020640136
+   },
+   "L2_thin": {
+    "x_plane_mm": 7.125,
+    "section_cells": 350,
+    "line_cells": 35,
+    "raw_Mroot_N_mm": 9.317137886043636,
+    "coarse_Mroot_N_mm": 8.402051212545484
+   },
+   "L3_med": {
+    "x_plane_mm": 10.625,
+    "section_cells": 350,
+    "line_cells": 35,
+    "raw_Mroot_N_mm": 0.16260456004645807,
+    "coarse_Mroot_N_mm": -0.034540193493012517
+   }
+  }
+ },
+ "pairs": {
+  "N50_vs_N25": {
+   "L1_thick": {
+    "M1_coarse": 0.2745312078663487,
+    "M2_coarse": 0.21321128986172366,
+    "M2_raw": 0.16899501710327772,
+    "abs_dsxx_band_MPa": 42.42162322998047,
+    "abs_dMroot_N_mm": 200.5177797600636,
+    "band_profile_coarse": [
+     -76.59137725830078,
+     -115.98812103271484,
+     -131.96847534179688,
+     -161.245361328125,
+     -189.19436645507812,
+     -141.30848693847656,
+     121.38662719726562
+    ],
+    "band_profile_fine": [
+     -56.159942626953125,
+     -85.06976699829102,
+     -102.8536491394043,
+     -123.51303482055664,
+     -146.77274322509766,
+     -109.48357009887695,
+     130.23790550231917
+    ]
+   },
+   "L2_thin": {
+    "M1_coarse": 1.9783049649237714,
+    "M2_coarse": 0.9798450538583606,
+    "M2_raw": 0.7239804178536734,
+    "abs_dsxx_band_MPa": 6.885838270187399,
+    "abs_dMroot_N_mm": 24.353741992265007,
+    "band_profile_coarse": [
+     -3.827876091003418,
+     2.139223337173462,
+     0.8185792565345764,
+     0.9490092396736145,
+     2.155900478363037,
+     -4.611910820007324,
+     11.041866302490234
+    ],
+    "band_profile_fine": [
+     -1.3464716672897339,
+     0.5463006943464279,
+     0.7068510353565216,
+     1.1488449275493622,
+     0.8464416638016719,
+     2.058202348649502,
+     4.156028032302835
+    ]
+   },
+   "L3_med": {
+    "M1_coarse": 0.42703342643454534,
+    "M2_coarse": 1.5431242844225392,
+    "M2_raw": 1.3875018151974314,
+    "abs_dsxx_band_MPa": 1.2726433277130127,
+    "abs_dMroot_N_mm": 3.9740416896383906,
+    "band_profile_coarse": [
+     -0.8888473510742188,
+     0.5970054268836975,
+     1.3387069702148438,
+     1.0724496841430664,
+     -0.8569564819335938,
+     -3.5187902450561523,
+     4.309988021850586
+    ],
+    "band_profile_fine": [
+     -0.5137733849696815,
+     0.6849083006381989,
+     0.7228474318981171,
+     0.5281261801719666,
+     -0.2068509832024567,
+     -2.2461469173431396,
+     3.5281132757663665
+    ]
+   },
+   "verdict": {
+    "M1_coarse": 0.2745312078663487,
+    "M2_coarse": 0.21321128986172366,
+    "passes_5pct": false
+   }
+  },
+  "N25_vs_N10": {
+   "L1_thick": {
+    "M1_coarse": 0.4331510604299075,
+    "M2_coarse": 0.4785731934268991,
+    "M2_raw": 0.46475990222131297,
+    "abs_dsxx_band_MPa": 49.31898498535156,
+    "abs_dMroot_N_mm": 304.4025106891979,
+    "band_profile_coarse": [
+     -56.159942626953125,
+     -85.06976699829102,
+     -102.8536491394043,
+     -123.51303482055664,
+     -146.77274322509766,
+     -109.48357009887695,
+     130.23790550231917
+    ],
+    "band_profile_fine": [
+     -39.46163635253906,
+     -60.196913146972655,
+     -71.14088745117186,
+     -84.26747283935548,
+     -97.4537582397461,
+     -66.95094337463378,
+     109.36097373962399
+    ]
+   },
+   "L2_thin": {
+    "M1_coarse": 0.47568315252636545,
+    "M2_coarse": 1.9581689326451648,
+    "M2_raw": 2.063547706854925,
+    "abs_dsxx_band_MPa": 2.2301306486130015,
+    "abs_dMroot_N_mm": 16.452635654900202,
+    "band_profile_coarse": [
+     -1.3464716672897339,
+     0.5463006943464279,
+     0.7068510353565216,
+     1.1488449275493622,
+     0.8464416638016719,
+     2.058202348649502,
+     4.156028032302835
+    ],
+    "band_profile_fine": [
+     -1.0201009035110473,
+     0.08389824423938988,
+     0.13565349802374826,
+     0.0005085509270428834,
+     -0.05838677287101744,
+     0.7069906797260015,
+     6.386158680915837
+    ]
+   },
+   "L3_med": {
+    "M1_coarse": 1.3172481294281304,
+    "M2_coarse": 73.56014548008548,
+    "M2_raw": 23.198532882222704,
+    "abs_dsxx_band_MPa": 2.387074429355562,
+    "abs_dMroot_N_mm": 2.5407816582563028,
+    "band_profile_coarse": [
+     -0.5137733849696815,
+     0.6849083006381989,
+     0.7228474318981171,
+     0.5281261801719666,
+     -0.2068509832024567,
+     -2.2461469173431396,
+     3.5281132757663665
+    ],
+    "band_profile_fine": [
+     -0.2938538581132889,
+     0.3954577684402466,
+     0.3135651260614396,
+     0.148670892417431,
+     -0.027507319999858733,
+     0.14092751201242215,
+     2.0896952033042906
+    ]
+   },
+   "verdict": {
+    "M1_coarse": 0.4331510604299075,
+    "M2_coarse": 0.4785731934268991,
+    "passes_5pct": false
+   }
+  }
+ },
+ "gate2": {
+  "M1_drop": -0.02820677103501379,
+  "M2_drop": -0.261605265453986,
+  "significant_improvement": false
+ }
+}

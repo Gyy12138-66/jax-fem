@@ -24,5 +24,19 @@ classifiers = [
   "Programming Language :: Python :: 3"
 ]
 
+[project.optional-dependencies]
+verification = [
+  "jsonschema[format-nongpl]>=4.26,<5",
+  "PyMuPDF==1.28.0",
+]
+
 [tool.setuptools]
 packages = ["jax_fem"]
+
+[tool.pytest.ini_options]
+markers = [
+    "solver: lane A fast-scan branch precond-optimization (flash acceleration) fast gate -- linear solver registry, pardiso, amg",
+    "meltpool: lane B detail-scan branch meltpool-source (path-resolved / melt-pool) fast gate -- heat source, event table, V1 reduced regression",
+    "gpu: requires a CUDA device",
+    "slow: minutes or longer; excluded from lane fast gates",
+]

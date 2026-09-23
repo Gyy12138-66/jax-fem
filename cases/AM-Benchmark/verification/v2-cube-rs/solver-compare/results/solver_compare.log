@@ -1,0 +1,39 @@
+[2026-08-27T02:38:54Z] ======== solver comparison on smoke2 layer 1 (ARMS: cpu_pardiso gpu_pardiso gpu_jax_bicgstab) ========
+[2026-08-27T02:38:54Z] cpu_pardiso start (env=jax-fem-env platform=cpu extra: )
+[2026-08-27T03:01:40Z] cpu_pardiso end rc=0 ledger=639 complete=yes
+[2026-08-27T03:01:41Z] gpu_pardiso start (env=jax-fem-gpu platform=gpu extra: )
+[2026-08-27T03:01:41Z] gpu_pardiso end rc=127 ledger=0 complete=no
+[2026-08-27T03:01:41Z] gpu_jax_bicgstab start (env=jax-fem-gpu platform=gpu extra: --xla-linear-solver jax --xla-jax-method bicgstab --xla-jax-precond)
+[2026-08-27T03:01:41Z] gpu_jax_bicgstab end rc=127 ledger=0 complete=no
+arm                  platform   wall s  s/step  assembly   solver   newton fallb nonconv  T diff K    u diff vm rms MPa  eqp diff
+cpu_pardiso          cpu          1364   2.134       745      365     1218     0       0         -         -          -         -
+gpu_pardiso          None            -       -         -        -        -     -       0         -         -          -         -
+gpu_jax_bicgstab     None            -       -         -        -        -     -       0         -         -          -         -
+  speedup vs cpu_pardiso: cpu_pardiso = 1.00x
+[2026-08-27T03:01:41Z] SOLVER_COMPARE_DONE /home/user/work/159/output/v2_cube_smoke_smoke2/solver_compare
+[2026-08-27T03:03:23Z] ======== solver comparison on smoke2 layer 1 (ARMS: cpu_pardiso gpu_jax_bicgstab gpu_pardiso ) ========
+[2026-08-27T03:03:23Z] cpu_pardiso complete, skip
+[2026-08-27T03:03:23Z] gpu_jax_bicgstab start (env=jax-fem-gpu python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python platform=gpu extra: --xla-linear-solver jax --xla-jax-method bicgstab --xla-jax-precond)
+[2026-08-27T03:18:56Z] gpu_jax_bicgstab end rc=0 ledger=639 complete=yes
+[2026-08-27T03:18:56Z] gpu_pardiso start (env=jax-fem-gpu python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python platform=gpu extra: )
+[2026-08-27T03:18:58Z] gpu_pardiso end rc=2 ledger=0 complete=no
+arm                  platform   wall s  s/step  assembly   solver   newton fallb nonconv  T diff K    u diff vm rms MPa  eqp diff
+cpu_pardiso          cpu          1364   2.134       745      365     1218     0       0         -         -          -         -
+gpu_jax_bicgstab     gpu           926   1.450       131      421      686     0       0         0  5.68e-14   6.78e-08         0
+gpu_pardiso          None            -       -         -        -        -     -       0         -         -          -         -
+  speedup vs cpu_pardiso: cpu_pardiso = 1.00x
+  speedup vs cpu_pardiso: gpu_jax_bicgstab = 1.47x
+[2026-08-27T03:18:58Z] SOLVER_COMPARE_DONE /home/user/work/159/output/v2_cube_smoke_smoke2/solver_compare
+[2026-08-27T03:20:35Z] ======== solver comparison on smoke2 layer 1 (ARMS: cpu_pardiso gpu_jax_bicgstab gpu_pardiso ) ========
+[2026-08-27T03:20:35Z] cpu_pardiso complete, skip
+[2026-08-27T03:20:35Z] gpu_jax_bicgstab complete, skip
+[2026-08-27T03:20:35Z] gpu_pardiso start (env=jax-fem-gpu python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python platform=gpu extra: )
+[2026-08-27T03:34:28Z] gpu_pardiso end rc=0 ledger=639 complete=yes
+arm                  platform   wall s  s/step  assembly   solver   newton fallb nonconv  T diff K    u diff vm rms MPa  eqp diff
+cpu_pardiso          cpu          1364   2.134       745      365     1218     0       0         -         -          -         -
+gpu_jax_bicgstab     gpu           926   1.450       131      421      686     0       0         0  5.68e-14   6.78e-08         0
+gpu_pardiso          gpu           831   1.300       136      364      594     0       0         0         0          0         0
+  speedup vs cpu_pardiso: cpu_pardiso = 1.00x
+  speedup vs cpu_pardiso: gpu_jax_bicgstab = 1.47x
+  speedup vs cpu_pardiso: gpu_pardiso = 1.64x
+[2026-08-27T03:34:29Z] SOLVER_COMPARE_DONE /home/user/work/159/output/v2_cube_smoke_smoke2/solver_compare

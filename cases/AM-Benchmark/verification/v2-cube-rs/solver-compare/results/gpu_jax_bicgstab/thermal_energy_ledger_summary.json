@@ -1,0 +1,16 @@
+{
+  "all_assembly_identities_within_tolerance": true,
+  "all_balance_steps_within_tolerance": true,
+  "all_pre_solve_state_overrides_within_tolerance": true,
+  "all_temperature_invariants_valid": true,
+  "claim_level": "solver_discrete_weak_form_audit_only",
+  "complete": true,
+  "cumulative_pre_solve_state_override_j": 0.0,
+  "expected_step_count": 639,
+  "maximum_absolute_balance_error_j": 6.294608774102747e-11,
+  "maximum_assembly_identity_error_j": 2.3418766925686896e-17,
+  "maximum_relative_balance_error": 7.088405457290871e-06,
+  "recorded_step_count": 639,
+  "schema_version": "v06.thermal-energy-ledger-summary/1",
+  "solver_completed": true
+}

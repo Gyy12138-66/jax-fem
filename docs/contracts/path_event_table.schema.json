@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "am-sim/contracts/path_event_table.schema.json",
+  "title": "Path event table row (jax_fem_am --path-file CSV)",
+  "description": "Row-level schema for the scan-path event table. File-level constraints (strictly increasing time, 1-based layer ordering, recoat convention) are checked by the validator in the AM-Sim repo, not by this schema.",
+  "type": "object",
+  "required": ["time", "x", "y", "z", "power", "laser_on", "layer", "hatch", "mode"],
+  "properties": {
+    "time": {"type": "number", "minimum": 0, "description": "End time of the row [s]; strictly increasing across rows"},
+    "x": {"type": "number", "description": "Laser center, mesh coordinates"},
+    "y": {"type": "number", "description": "Laser center, mesh coordinates"},
+    "z": {"type": "number", "description": "Laser center, mesh coordinates"},
+    "power": {"type": "number", "minimum": 0, "description": "Laser power used by the solver [W]; same semantics as --laser-power"},
+    "laser_on": {"type": "integer", "enum": [0, 1]},
+    "layer": {"type": "integer", "minimum": 1, "description": "1-based numerical layer (slab) index"},
+    "hatch": {"type": "integer", "minimum": 1, "description": "1-based hatch line index"},
+    "mode": {"type": "string", "description": "Label: scan, jump, recoat, dwell, ...; empty means path"},
+    "front_coord": {"type": "number", "description": "Activation front along the build axis, mesh coordinates"},
+    "scan_id": {"type": "integer", "minimum": 0}
+  },
+  "additionalProperties": true
+}

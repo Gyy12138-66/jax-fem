@@ -1,0 +1,88 @@
+[14:39:08] thermal L10: free=48563 pinned=252893 coupling_nnz=63588 asym_free=3.53e-17
+[14:39:08]   lambda_max raw=2.830e-02 jacobi=1.537e+00
+[14:39:09]   lambda_min raw=5.518e-04 (lobpcg 38 it, res 1.0e-06, 1s) -> kappa_raw=5.129e+01
+[14:39:11]   lambda_min jacobi=4.546e-02 (lobpcg 113 it, res 9.8e-07, 2s) -> kappa_jacobi=3.382e+01
+[14:39:11]   Jacobi-BiCGSTAB rtol=1e-06: iters=19 info=0 rel_res=9.6e-07 (0s)
+[14:39:11]   Jacobi-BiCGSTAB rtol=1e-10: iters=35 info=0 rel_res=3.5e-11 (0s)
+[14:39:11] thermal L30: free=92854 pinned=208602 coupling_nnz=46314 asym_free=3.49e-17
+[14:39:12]   lambda_max raw=3.039e-02 jacobi=1.514e+00
+[14:39:13]   lambda_min raw=5.422e-04 (lobpcg 33 it, res 9.8e-07, 1s) -> kappa_raw=5.605e+01
+[14:39:16]   lambda_min jacobi=5.861e-02 (lobpcg 79 it, res 9.6e-07, 2s) -> kappa_jacobi=2.583e+01
+[14:39:16]   Jacobi-BiCGSTAB rtol=1e-06: iters=22 info=0 rel_res=8.4e-07 (0s)
+[14:39:16]   Jacobi-BiCGSTAB rtol=1e-10: iters=41 info=0 rel_res=1.2e-11 (0s)
+[14:39:17] thermal L60: free=140898 pinned=160558 coupling_nnz=43845 asym_free=3.59e-17
+[14:39:18]   lambda_max raw=3.282e-02 jacobi=1.498e+00
+[14:39:20]   lambda_min raw=6.407e-04 (lobpcg 38 it, res 8.2e-07, 2s) -> kappa_raw=5.123e+01
+[14:39:25]   lambda_min jacobi=6.498e-02 (lobpcg 80 it, res 9.2e-07, 5s) -> kappa_jacobi=2.305e+01
+[14:39:25]   Jacobi-BiCGSTAB rtol=1e-06: iters=21 info=0 rel_res=9.5e-07 (0s)
+[14:39:25]   Jacobi-BiCGSTAB rtol=1e-10: iters=38 info=0 rel_res=8.8e-11 (0s)
+[14:39:26] thermal L90: free=186869 pinned=114587 coupling_nnz=43807 asym_free=3.54e-17
+[14:39:27]   lambda_max raw=3.563e-02 jacobi=1.492e+00
+[14:39:30]   lambda_min raw=6.451e-04 (lobpcg 36 it, res 9.4e-07, 3s) -> kappa_raw=5.524e+01
+[14:39:36]   lambda_min jacobi=5.953e-02 (lobpcg 71 it, res 9.4e-07, 6s) -> kappa_jacobi=2.506e+01
+[14:39:36]   Jacobi-BiCGSTAB rtol=1e-06: iters=18 info=0 rel_res=9.5e-07 (0s)
+[14:39:37]   Jacobi-BiCGSTAB rtol=1e-10: iters=33 info=0 rel_res=8.4e-11 (0s)
+[14:39:38] thermal L120: free=241294 pinned=60162 coupling_nnz=48260 asym_free=3.74e-17
+[14:39:39]   lambda_max raw=3.952e-02 jacobi=1.562e+00
+[14:39:42]   lambda_min raw=4.333e-04 (lobpcg 30 it, res 8.1e-07, 3s) -> kappa_raw=9.119e+01
+[14:39:54]   lambda_min jacobi=3.761e-02 (lobpcg 184 it, res 9.7e-07, 11s) -> kappa_jacobi=4.154e+01
+[14:39:54]   Jacobi-BiCGSTAB rtol=1e-06: iters=22 info=0 rel_res=6.1e-07 (0s)
+[14:39:54]   Jacobi-BiCGSTAB rtol=1e-10: iters=38 info=0 rel_res=9.5e-11 (0s)
+[14:39:55] thermal L150: free=272798 pinned=28658 coupling_nnz=38084 asym_free=3.39e-17
+[14:39:58]   lambda_max raw=3.880e-02 jacobi=1.452e+00
+[14:40:04]   lambda_min raw=1.269e-03 (lobpcg 64 it, res 9.8e-07, 6s) -> kappa_raw=3.059e+01
+[14:40:13]   lambda_min jacobi=1.203e-01 (lobpcg 79 it, res 9.8e-07, 8s) -> kappa_jacobi=1.207e+01
+[14:40:13]   Jacobi-BiCGSTAB rtol=1e-06: iters=13 info=0 rel_res=5.2e-07 (0s)
+[14:40:13]   Jacobi-BiCGSTAB rtol=1e-10: iters=21 info=0 rel_res=7.5e-11 (0s)
+[14:40:14] thermal L182: free=297351 pinned=4105 coupling_nnz=33373 asym_free=3.44e-17
+[14:40:22]   lambda_max raw=4.079e-02 jacobi=1.452e+00
+[14:40:30]   lambda_min raw=1.268e-03 (lobpcg 73 it, res 9.0e-07, 8s) -> kappa_raw=3.217e+01
+[14:40:38]   lambda_min jacobi=1.168e-01 (lobpcg 64 it, res 8.8e-07, 9s) -> kappa_jacobi=1.243e+01
+[14:40:38]   Jacobi-BiCGSTAB rtol=1e-06: iters=12 info=0 rel_res=8.4e-07 (0s)
+[14:40:39]   Jacobi-BiCGSTAB rtol=1e-10: iters=20 info=0 rel_res=9.7e-11 (0s)
+[14:40:41] mechanics L30: free=278562 pinned=625806 asym_free=1.05e-16 diag range 2.38e+06..1.29e+08
+[14:40:43]   lambda_max raw=4.210e+08 jacobi=5.916e+00
+/home/user/work/d11_B_tree/cases/159_simulation/analysis/precond_A_diagnostics.py:68: UserWarning: Exited at iteration 100 with accuracies 
+[5.26721752e-05 4.23896603e-04]
+not reaching the requested tolerance 1e-06.
+Use iteration 60 instead with accuracy 
+7.984383967466299e-05.
+
+  vals, vecs, hist = spla.lobpcg(S, X, M=M, largest=False, tol=tol, maxiter=maxiter, retResidualNormsHistory=True)
+/home/user/work/d11_B_tree/cases/159_simulation/analysis/precond_A_diagnostics.py:68: UserWarning: Exited postprocessing with accuracies 
+[2.93523695e-05 1.30335310e-04]
+not reaching the requested tolerance 1e-06.
+  vals, vecs, hist = spla.lobpcg(S, X, M=M, largest=False, tol=tol, maxiter=maxiter, retResidualNormsHistory=True)
+[14:41:06]   lambda_min jacobi~1.027e-04 (lobpcg 62 it, res 1.3e-04, converged=False, 23s) -> kappa_jacobi~5.759e+04
+[14:41:26]   Jacobi-BiCGSTAB rtol=1e-6 (cap 2000): iters=862 info=0 rel_res=7.0e-07 (20s)
+[14:41:27] mechanics L90: free=560607 pinned=343761 asym_free=1.08e-16 diag range 4.18e+05..1.29e+08
+[14:41:35]   lambda_max raw=4.211e+08 jacobi=5.065e+00
+/home/user/work/d11_B_tree/cases/159_simulation/analysis/precond_A_diagnostics.py:68: UserWarning: Exited at iteration 100 with accuracies 
+[4.08875945e-05 6.22048743e-05]
+not reaching the requested tolerance 1e-06.
+Use iteration 101 instead with accuracy 
+5.154623443502243e-05.
+
+  vals, vecs, hist = spla.lobpcg(S, X, M=M, largest=False, tol=tol, maxiter=maxiter, retResidualNormsHistory=True)
+/home/user/work/d11_B_tree/cases/159_simulation/analysis/precond_A_diagnostics.py:68: UserWarning: Exited postprocessing with accuracies 
+[4.08875945e-05 6.22048743e-05]
+not reaching the requested tolerance 1e-06.
+  vals, vecs, hist = spla.lobpcg(S, X, M=M, largest=False, tol=tol, maxiter=maxiter, retResidualNormsHistory=True)
+[14:42:18]   lambda_min jacobi~2.943e-06 (lobpcg 103 it, res 6.2e-05, converged=True, 42s) -> kappa_jacobi~1.721e+06
+[14:43:46]   Jacobi-BiCGSTAB rtol=1e-6 (cap 2000): iters=2000 info=2000 rel_res=1.2e-05 (88s)
+[14:43:48] mechanics L150: free=818394 pinned=85974 asym_free=1.09e-16 diag range 1.73e+05..1.29e+08
+[14:44:13]   lambda_max raw=4.219e+08 jacobi=4.707e+00
+/home/user/work/d11_B_tree/cases/159_simulation/analysis/precond_A_diagnostics.py:68: UserWarning: Exited at iteration 100 with accuracies 
+[4.69417089e-05 6.73645735e-05]
+not reaching the requested tolerance 1e-06.
+Use iteration 101 instead with accuracy 
+5.715314120753967e-05.
+
+  vals, vecs, hist = spla.lobpcg(S, X, M=M, largest=False, tol=tol, maxiter=maxiter, retResidualNormsHistory=True)
+/home/user/work/d11_B_tree/cases/159_simulation/analysis/precond_A_diagnostics.py:68: UserWarning: Exited postprocessing with accuracies 
+[4.69417089e-05 6.73645735e-05]
+not reaching the requested tolerance 1e-06.
+  vals, vecs, hist = spla.lobpcg(S, X, M=M, largest=False, tol=tol, maxiter=maxiter, retResidualNormsHistory=True)
+[14:45:15]   lambda_min jacobi~1.341e-06 (lobpcg 103 it, res 6.7e-05, converged=True, 62s) -> kappa_jacobi~3.510e+06
+[14:47:20]   Jacobi-BiCGSTAB rtol=1e-6 (cap 2000): iters=2000 info=2000 rel_res=1.7e-05 (125s)
+[14:47:20] A diagnostics done

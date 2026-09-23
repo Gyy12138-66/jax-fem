@@ -1,0 +1,68 @@
+[2026-08-27T05:19:03Z] generating production mesh (10x10x10 part @200um, 30x30x6 substrate graded 1.4)
+substrate: 150 x 150 x 8 = 180,000 cells (z ladder um: [1506, 1229, 1076, 768, 549, 392, 280, 200])
+part:      50 x 50 x 50 = 125,000 cells (columns offset 50)
+total:     305,000 cells @ 200 um
+runner hint: --support-thickness 6.0e-03 --layer-thickness 2.0e-4 --layers 50 (5:1 lumped; D-V2-11 for event-series granularity)
+wrote /home/user/work/159/output/v2_cube_prod_memprobe/v2_cube_prod_graded_c3d8.inp: 335,259 nodes, 305,000 elements
+[2026-08-27T05:19:04Z] probe start: platform=gpu python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python
+[2026-08-27T05:20:06Z] probe end rc=1
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:02.04
+	Maximum resident set size (kbytes): 10699172
+	Exit status: 1
+[2026-08-27T05:20:06Z] peak GPU MiB: 12466
+wall 59.9 assembly 10.5 solver 30.4 newton 41.6 nonlinear calls 3 solver calls 14
+[2026-08-27T05:20:06Z] MEMPROBE_DONE /home/user/work/159/output/v2_cube_prod_memprobe
+[2026-08-27T05:24:56Z] probe start: platform=gpu python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python batch=32768
+[2026-08-27T05:25:50Z] probe end rc=1
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:54.56
+	Maximum resident set size (kbytes): 10310932
+	Exit status: 1
+[2026-08-27T05:25:50Z] peak GPU MiB: 5868
+wall 52.6 assembly 9.7 solver 31.5 newton 41.8 nonlinear calls 1 solver calls 14
+[2026-08-27T05:25:50Z] MEMPROBE_DONE /home/user/work/159/output/v2_cube_prod_memprobe
+[2026-08-27T05:27:24Z] probe start: platform=gpu python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python batch=32768
+[2026-08-27T05:44:34Z] probe end rc=1
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 17:10.02
+	Maximum resident set size (kbytes): 39772092
+	Exit status: 1
+[2026-08-27T05:44:34Z] peak GPU MiB: 12369
+global_step=0 mode=scan layer=50/50 highest_printed_layer=50 hatch=1/1 scan=1/20 front_z=0.016 active_window_cells=305000/305000 printed_cells=305000/305000 cooling_only_cells=0/305000 mechanics_curre
+global_step=1 mode=scan layer=50/50 highest_printed_layer=50 hatch=1/1 scan=2/20 front_z=0.016 active_window_cells=305000/305000 printed_cells=305000/305000 cooling_only_cells=0/305000 mechanics_curre
+global_step=2 mode=recoat layer=50/50 highest_printed_layer=50 hatch=1/1 scan=3/20 front_z=0.016 active_window_cells=305000/305000 printed_cells=305000/305000 cooling_only_cells=0/305000 mechanics_cur
+global_step=3 mode=cooling layer=50/50 highest_printed_layer=50 hatch=1/1 scan=3/20 front_z=0.016 active_window_cells=305000/305000 printed_cells=305000/305000 cooling_only_cells=0/305000 mechanics_cu
+release cut box: deactivating 180000 cells in [0.0, 0.03, 0.0, 0.03, 0.0, 0.006]
+wall 1016.3 assembly 73.7 solver 870.1 newton 954.1 nonlinear calls 9 solver calls 37
+[2026-08-27T05:44:34Z] MEMPROBE_DONE /home/user/work/159/output/v2_cube_prod_memprobe
+[2026-08-27T05:47:12Z] probe start: platform=gpu python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python batch=16384 allocator=platform
+[2026-08-27T06:04:07Z] probe end rc=1
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 16:55.50
+	Maximum resident set size (kbytes): 39720680
+	Exit status: 1
+[2026-08-27T06:04:07Z] peak GPU MiB: 12263
+global_step=0 mode=scan layer=50/50 highest_printed_layer=50 hatch=1/1 scan=1/20 front_z=0.016 active_window_cells=305000/305000 printed_cells=305000/305000 cooling_only_cells=0/305000 mechanics_curre
+global_step=1 mode=scan layer=50/50 highest_printed_layer=50 hatch=1/1 scan=2/20 front_z=0.016 active_window_cells=305000/305000 printed_cells=305000/305000 cooling_only_cells=0/305000 mechanics_curre
+global_step=2 mode=recoat layer=50/50 highest_printed_layer=50 hatch=1/1 scan=3/20 front_z=0.016 active_window_cells=305000/305000 printed_cells=305000/305000 cooling_only_cells=0/305000 mechanics_cur
+global_step=3 mode=cooling layer=50/50 highest_printed_layer=50 hatch=1/1 scan=3/20 front_z=0.016 active_window_cells=305000/305000 printed_cells=305000/305000 cooling_only_cells=0/305000 mechanics_cu
+release cut box: deactivating 180000 cells in [0.0, 0.03, 0.0, 0.03, 0.0, 0.006]
+wall 1001.5 assembly 79.6 solver 844.1 newton 937.0 nonlinear calls 9 solver calls 37
+[2026-08-27T06:04:08Z] MEMPROBE_DONE /home/user/work/159/output/v2_cube_prod_memprobe
+[2026-08-27T06:05:41Z] generating production mesh (10x10x10 part @200um, 20x20x6 substrate graded 1.4)
+substrate: 100 x 100 x 8 = 80,000 cells (z ladder um: [1506, 1229, 1076, 768, 549, 392, 280, 200])
+part:      50 x 50 x 50 = 125,000 cells (columns offset 25)
+total:     205,000 cells @ 200 um
+runner hint: --support-thickness 6.0e-03 --layer-thickness 2.0e-4 --layers 50 (5:1 lumped; D-V2-11 for event-series granularity)
+wrote /home/user/work/159/output/v2_cube_prod_memprobe/v2_cube_prod_graded_sub20_c3d8.inp: 221,859 nodes, 205,000 elements
+[2026-08-27T06:05:42Z] probe start: platform=gpu python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python batch=32768 allocator=default
+[2026-08-27T06:17:06Z] probe end rc=0
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 11:23.79
+	Maximum resident set size (kbytes): 37663692
+	Exit status: 0
+[2026-08-27T06:17:06Z] peak GPU MiB: 9493
+global_step=0 mode=scan layer=50/50 highest_printed_layer=50 hatch=1/1 scan=1/20 front_z=0.016 active_window_cells=205000/205000 printed_cells=205000/205000 cooling_only_cells=0/205000 mechanics_curre
+global_step=1 mode=scan layer=50/50 highest_printed_layer=50 hatch=1/1 scan=2/20 front_z=0.016 active_window_cells=205000/205000 printed_cells=205000/205000 cooling_only_cells=0/205000 mechanics_curre
+global_step=2 mode=recoat layer=50/50 highest_printed_layer=50 hatch=1/1 scan=3/20 front_z=0.016 active_window_cells=205000/205000 printed_cells=205000/205000 cooling_only_cells=0/205000 mechanics_cur
+global_step=3 mode=cooling layer=50/50 highest_printed_layer=50 hatch=1/1 scan=3/20 front_z=0.016 active_window_cells=205000/205000 printed_cells=205000/205000 cooling_only_cells=0/205000 mechanics_cu
+release cut box: deactivating 80000 cells in [0.0, 0.02, 0.0, 0.02, 0.0, 0.006]
+release_vtk=/home/user/work/159/output/v2_cube_prod_memprobe/run/release.vtu release_u_max=9.04052021297e-06
+wall 680.7 assembly 41.3 solver 606.9 newton 655.7 nonlinear calls 9 solver calls 37
+[2026-08-27T06:17:06Z] MEMPROBE_DONE /home/user/work/159/output/v2_cube_prod_memprobe

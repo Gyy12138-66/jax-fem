@@ -1,0 +1,18 @@
+{
+  "arm": "cpu_full_phase23",
+  "role": "CPU full-Newton baseline",
+  "comparison_baseline": "cpu_full_phase23",
+  "accuracy_baseline": "cpu_full_phase23",
+  "conda_env": "jax-fem-env",
+  "python_bin": "/home/user/miniforge3/envs/jax-fem-env/bin/python",
+  "platform": "cpu",
+  "decomposition": "Rebuild the mechanics tangent and run PARDISO phase 23 for every accepted Newton correction.",
+  "extra_argv": [
+    "--xla-linear-solver",
+    "pardiso",
+    "--xla-pardiso-mode",
+    "phase23",
+    "--mechanics-residual-only-check"
+  ],
+  "notes": "Residual-only convergence checking is enabled in both full and modified arms so the comparison isolates lagged-tangent reuse rather than the final unused tangent build. This arm does not enable mechanics Jacobian reuse."
+}

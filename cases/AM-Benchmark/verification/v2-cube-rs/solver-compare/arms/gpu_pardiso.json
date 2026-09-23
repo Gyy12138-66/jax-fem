@@ -1,0 +1,11 @@
+{
+  "arm": "gpu_pardiso",
+  "role": "GPU assembly, same direct solver",
+  "conda_env": "jax-fem-gpu",
+  "platform": "gpu",
+  "linear_solver": "MKL PARDISO via jax_fem_am custom_solver, mode phase23 (CPU)",
+  "extra_argv": [],
+  "notes": "Element residual/tangent on the RTX 5080 (jax[cuda12] 0.10.2, XLA_PYTHON_CLIENT_PREALLOCATE=false), triplets copied to host, PETSc CSR, PARDISO on CPU, solution back to device. The AM-Bench L0 / D-11 production configuration.",
+  "python_bin": "/home/user/miniconda3/envs/jax-fem-gpu/bin/python",
+  "env_note": "jax-fem-env lives under miniforge3; jax-fem-gpu was cloned under miniconda3 (output/gpu_env_setup.sh) -- `conda activate` from miniforge's conda.sh cannot see it, so arms are launched by absolute python path (the L0/D-11 PYTHON_BIN convention)."
+}

@@ -1,0 +1,5 @@
+stage finished: 2026-08-17T11:01:41Z
+  N10_T800 run_rc=0 metrics_rc=0
+  N10_T900 run_rc=0 metrics_rc=0
+  N10_T1100 run_rc=0 metrics_rc=0
+  N10_Tnone run_rc=0 metrics_rc=0

@@ -1,0 +1,22 @@
+{
+  "arm": "cpu_modified_phase33",
+  "role": "CPU modified-Newton candidate",
+  "comparison_baseline": "cpu_full_phase23",
+  "accuracy_baseline": "cpu_full_phase23",
+  "conda_env": "jax-fem-env",
+  "python_bin": "/home/user/miniforge3/envs/jax-fem-env/bin/python",
+  "platform": "cpu",
+  "decomposition": "Reuse a mechanics Jacobian factorization for up to two corrections; refresh when the true-residual reduction ratio reaches the 0.9 guard.",
+  "extra_argv": [
+    "--xla-linear-solver",
+    "pardiso",
+    "--xla-pardiso-mode",
+    "phase23",
+    "--mechanics-residual-only-check",
+    "--mechanics-jacobian-reuse",
+    "2",
+    "--mechanics-jacobian-refresh-ratio",
+    "0.9"
+  ],
+  "notes": "Assembly remains on CPU. A reused factorization is solved through PARDISO phase 33; the nonlinear acceptance check must always use a freshly evaluated true residual."
+}
