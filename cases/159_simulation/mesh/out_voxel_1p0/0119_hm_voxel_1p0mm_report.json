@@ -1,0 +1,33 @@
+{
+  "source": "/mnt/c/Users/user/Desktop/159/schema/0119_hm_voxel_1p0mm.inp",
+  "voxel_m": 0.0009999999999998899,
+  "cells_in": 48532,
+  "cells_centre_inside": 24144,
+  "part_cells": 24144,
+  "raft_cells": 836,
+  "nodes": 48930,
+  "mechanics_dof": 146790,
+  "jacobian_nonpositive": 0,
+  "part_volume_m3": 2.4143999999992022e-05,
+  "tet_volume_m3": 2.5350300837270913e-05,
+  "part_volume_over_tet": 0.952414732865602,
+  "slabs": 91,
+  "raft_height_m": 0.0009999999999998899,
+  "part_base_z_m": 0.0009999999999998899,
+  "bbox_m": [
+    [
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.08799999999999031,
+      0.09599999999998943,
+      0.09199999999998987
+    ]
+  ],
+  "cells_per_slab_first_last": [
+    836,
+    100
+  ]
+}
