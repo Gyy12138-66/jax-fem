@@ -117,7 +117,7 @@ _ALLOWED_KEYS: Dict[str, frozenset] = {
          "max_coarse", "rebuild", "fallback", "verbose", "device", "smoother",
          "smoother_sweeps", "smoother_omega", "rebuild_iter_factor",
          "clear_jax_caches_on_pattern", "shape_mode", "fixed_levels", "bucket_ratio",
-         "scale_policy", "recovery", "refresh_every"}
+         "scale_policy", "recovery", "refresh_every", "cpu_vcycle"}
     ),
 }
 
@@ -245,6 +245,9 @@ def normalize_linear_solver_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
         # non-converged reused solve, and/or before every N-th reused solve.
         out["recovery"] = _check_choice(out.get("recovery", "rebuild"), ("rebuild", "refresh"), "recovery")
         out["refresh_every"] = int(out.get("refresh_every", 0))
+        # CPU V-cycle: pyamg's own preconditioner (default) or a mirror of the jax
+        # kernels with the fine level on the current tangent (ablation E3', 2026-09-23).
+        out["cpu_vcycle"] = _check_choice(out.get("cpu_vcycle", "pyamg"), ("pyamg", "matched"), "cpu_vcycle")
         if out["refresh_every"] < 0:
             raise ValueError("pyamg refresh_every must be >= 0")
     return out

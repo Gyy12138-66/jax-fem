@@ -767,3 +767,57 @@ class PyamgFallbackRetentionTest(unittest.TestCase):
         self.assertLess(np.linalg.norm(A @ x2 - b) / np.linalg.norm(b), 1e-10)
         self.assertIs(linear.shared_pardiso_solver("phase23"), shared)
         linear.reset_shared_solvers()
+
+
+@unittest.skipIf(pyamg is None, "pyamg not installed")
+class PyamgCpuMatchedVcycleTest(unittest.TestCase):
+    """cpu_vcycle="matched": the CPU path mirrors the jax kernels (fine level on the
+    current tangent, levels capped at fixed_levels, dense coarse inverse), so a CPU
+    run differs from the GPU one only in the device (ablation E3', 2026-09-23)."""
+
+    _drift_sequence = PyamgScalePolicyTest._drift_sequence
+
+    def test_option_is_validated_labelled_and_registered(self):
+        from jax_fem_am.solvers.linear import normalize_linear_solver_spec
+
+        with self.assertRaises(ValueError):
+            amg.PyamgKrylovSolver(cpu_vcycle="fast")
+        with self.assertRaises(ValueError):
+            amg.PyamgKrylovSolver(cpu_vcycle="matched", smoother="block_gauss_seidel")
+        with self.assertRaises(ValueError):
+            amg.PyamgKrylovSolver(cpu_vcycle="matched", method="bicgstab")
+        self.assertIn("vcycle=matched", amg.PyamgKrylovSolver(cpu_vcycle="matched").label)
+        self.assertNotIn("vcycle=", amg.PyamgKrylovSolver().label)
+        self.assertEqual(normalize_linear_solver_spec({"backend": "pyamg"})["cpu_vcycle"], "pyamg")
+        self.assertEqual(
+            normalize_linear_solver_spec({"backend": "pyamg", "cpu_vcycle": "matched"})["cpu_vcycle"], "matched")
+        with self.assertRaises(ValueError):
+            normalize_linear_solver_spec({"backend": "pyamg", "cpu_vcycle": "sometimes"})
+
+    def test_matched_cpu_follows_the_jax_path_solve_by_solve(self):
+        seq, rows, coords = self._drift_sequence()
+        problem = SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)])
+        kw = dict(tol=1e-8, maxiter=400, max_coarse=20, scale_policy="frozen", rebuild_iter_factor=0)
+        jx = amg.PyamgKrylovSolver(device="jax", **kw)
+        cm = amg.PyamgKrylovSolver(device="cpu", cpu_vcycle="matched", **kw)
+        jx.bind_problem(problem); cm.bind_problem(problem)
+        for A, b, x0 in seq:
+            xj = jx(FakePetscMat(A), b, x0, {})
+            xc = cm(FakePetscMat(A), b, x0, {})
+            self.assertLess(np.linalg.norm(A @ xc - b) / np.linalg.norm(b), 1e-6)
+            np.testing.assert_array_equal(xc[rows], b[rows])
+            np.testing.assert_allclose(xc, xj, rtol=0, atol=1e-6 * np.abs(xj).max())
+            # same preconditioner and same Krylov recurrences: same iteration count up to rounding
+            self.assertLessEqual(abs(cm.stats["last_iterations"] - jx.stats["last_iterations"]), 1)
+        self.assertEqual(cm.stats["hierarchy_rebuilds"], 0)
+        self.assertEqual(cm.stats["frozen_scale_solves"], len(seq) - 1)
+        self.assertLessEqual(len(cm._cache.cpu_levels), cm.fixed_levels - 1)
+
+    def test_default_cpu_path_is_pyamg_aspreconditioner(self):
+        seq, rows, coords = self._drift_sequence()
+        solver = amg.PyamgKrylovSolver(tol=1e-8, maxiter=400, max_coarse=20, rebuild_iter_factor=0)
+        solver.bind_problem(SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)]))
+        for A, b, x0 in seq:
+            x = solver(FakePetscMat(A), b, x0, {})
+            self.assertLess(np.linalg.norm(A @ x - b) / np.linalg.norm(b), 1e-6)
+        self.assertIsNone(solver._cache.cpu_levels)
