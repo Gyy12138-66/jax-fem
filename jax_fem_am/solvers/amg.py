@@ -93,6 +93,7 @@ import scipy.sparse.linalg as spla
 SMOOTHERS = ("jacobi", "block_gauss_seidel")
 DEVICES = ("cpu", "gpu", "jax")
 SCALE_POLICIES = ("current", "frozen")
+CPU_VCYCLES = ("pyamg", "matched")
 RECOVERIES = ("rebuild", "refresh")
 SHAPE_MODES = ("auto", "free", "full", "bucket")
 
@@ -166,6 +167,51 @@ def _krylov_cpu(method, S, rhs, y0, M, tol, maxiter):
     except TypeError:  # scipy < 1.12 spelling
         y, info = fn(S, rhs, tol=tol, atol=0.0, **kwargs)
     return y, int(info), counter.k
+
+
+def _vcycle_np(levels, coarse_pinv, sweeps, r0):
+    """NumPy/SciPy mirror of the jax ``vcycle`` kernel (cpu_vcycle="matched"):
+    same damped-Jacobi sweeps, same level loop, dense coarse inverse."""
+    def descend(l, r):
+        if l == len(levels):
+            return coarse_pinv @ r
+        A, dinv, omega, P, R = levels[l]
+        e = omega * dinv * r
+        for _ in range(sweeps - 1):
+            e = e + omega * dinv * (r - A @ e)
+        rc = R @ (r - A @ e)
+        e = e + P @ descend(l + 1, rc)
+        for _ in range(sweeps):
+            e = e + omega * dinv * (r - A @ e)
+        return e
+
+    return descend(0, r0)
+
+
+def _pcg_np(S, b, x0, levels, coarse_pinv, tol, maxiter, sweeps):
+    """NumPy mirror of the jax ``pcg`` kernel: same recurrences and the same stop
+    test ||r||^2 <= tol^2 ||b||^2 or k == maxiter."""
+    b_norm2 = float(b @ b)
+    x = onp.array(x0, dtype=float, copy=True)
+    r = b - S @ x
+    z = _vcycle_np(levels, coarse_pinv, sweeps, r)
+    p = z.copy()
+    rz = float(r @ z)
+    rr = float(r @ r)
+    k = 0
+    while rr > tol * tol * b_norm2 and k < maxiter:
+        q = S @ p
+        alpha = rz / float(p @ q)
+        x += alpha * p
+        r -= alpha * q
+        z = _vcycle_np(levels, coarse_pinv, sweeps, r)
+        rz_new = float(r @ z)
+        beta = rz_new / rz
+        p = z + beta * p
+        rz = rz_new
+        rr = float(r @ r)
+        k += 1
+    return x, k, float(onp.sqrt(rr))
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +527,7 @@ class _PatternCache:
         "ff_diag_pos", "hierarchy", "hierarchy_info", "jax_levels", "jax_coarse_pinv",
         "jax_omega0", "dev_rows", "dev_cols", "dev_indptr", "dev_diag_pos", "fresh_iterations",
         "kernels", "pin_mask", "dev_kill", "dev_pin_mask", "scale_build", "reused_since_refresh",
+        "cpu_levels", "cpu_coarse_pinv",
     )
 
     def __init__(self, signature, n, free, pin, keep, ff_indptr, ff_indices, ff_rows, ff_diag_pos):
@@ -513,6 +560,9 @@ class _PatternCache:
         self.scale_build = None
         # reused solves since the hierarchy was built or refreshed (refresh_every)
         self.reused_since_refresh = 0
+        # cpu_vcycle="matched": host copies of the jax level layout
+        self.cpu_levels = None
+        self.cpu_coarse_pinv = None
 
     def release(self) -> None:
         """Drop device buffers and the jit kernel set so their executables can be freed."""
@@ -527,6 +577,8 @@ class _PatternCache:
         self.dev_kill = None
         self.dev_pin_mask = None
         self.hierarchy = None
+        self.cpu_levels = None
+        self.cpu_coarse_pinv = None
 
 
 class PyamgKrylovSolver:
@@ -559,6 +611,7 @@ class PyamgKrylovSolver:
         scale_policy: str = "frozen",
         recovery: str = "rebuild",
         refresh_every: int = 0,
+        cpu_vcycle: str = "pyamg",
     ) -> None:
         if method not in ("cg", "bicgstab"):
             raise ValueError(f"pyamg method must be cg or bicgstab, got {method!r}")
@@ -591,6 +644,10 @@ class PyamgKrylovSolver:
             raise ValueError(f"recovery must be one of {RECOVERIES}, got {recovery!r}")
         if int(refresh_every) < 0:
             raise ValueError("refresh_every must be >= 0")
+        if cpu_vcycle not in CPU_VCYCLES:
+            raise ValueError(f"cpu_vcycle must be one of {CPU_VCYCLES}, got {cpu_vcycle!r}")
+        if device == "cpu" and cpu_vcycle == "matched" and (smoother != "jacobi" or method != "cg"):
+            raise ValueError("cpu_vcycle='matched' mirrors the jax path: jacobi smoother and cg only")
         self.method = method
         self.near_nullspace = near_nullspace
         self.scaled = bool(scaled)
@@ -645,10 +702,18 @@ class PyamgKrylovSolver:
         #   refresh_every=N: refresh before every N-th reused solve (0 = never).
         self.recovery = recovery
         self.refresh_every = int(refresh_every)
+        # CPU V-cycle. "pyamg": pyamg's own ml.aspreconditioner() -- every level,
+        # the FINE one included, keeps the operator of the tangent the hierarchy was
+        # built on. "matched": a NumPy mirror of the jax kernels -- the fine level
+        # takes the current tangent and its diagonal on every call, levels capped
+        # at fixed_levels, dense coarse inverse, same PCG stop test -- so a CPU run
+        # differs from the GPU one only in the device (2026-09-23, ablation E3').
+        self.cpu_vcycle = cpu_vcycle
         smoother_label = (
             f"{smoother}x{self.smoother_sweeps}" if smoother == "jacobi" else "block_gs(sym)"
         )
-        shape_label = f", shape={self.shape_mode}" if self.use_jax else ""
+        shape_label = f", shape={self.shape_mode}" if self.use_jax else (
+            ", vcycle=matched" if cpu_vcycle == "matched" else "")
         self.label = (
             f"pyamg_solver(sa+{near_nullspace}{'+scaled' if self.scaled else ''}"
             f"{'(frozen)' if self.scaled and scale_policy == 'frozen' else ''}, "
@@ -727,6 +792,10 @@ class PyamgKrylovSolver:
     @property
     def _full(self) -> bool:
         return self.use_jax and self.shape_mode == "full"
+
+    @property
+    def _matched_cpu(self) -> bool:
+        return (not self.use_jax) and self.cpu_vcycle == "matched"
 
     def _kernels_for(self, owner):
         """Jit kernel set owned by ``owner`` (the pattern slot in free mode, the
@@ -853,7 +922,7 @@ class PyamgKrylovSolver:
         # that self.max_coarse is (approximately) a bound in dofs.
         n_candidates = int(B.shape[1]) if B is not None else 1
         max_coarse_blocks = max(10, self.max_coarse // n_candidates)
-        extra = {"max_levels": self.fixed_levels} if self._full else {}
+        extra = {"max_levels": self.fixed_levels} if (self._full or self._matched_cpu) else {}
         ml = pyamg.smoothed_aggregation_solver(
             S, B=B, max_coarse=max_coarse_blocks, presmoother=sm, postsmoother=sm, **extra
         )
@@ -869,6 +938,8 @@ class PyamgKrylovSolver:
                 self._to_jax_hierarchy_full(cache, ml)
             else:
                 self._to_jax_hierarchy(cache, ml)
+        elif self._matched_cpu:
+            self._to_cpu_levels(cache, ml)
         setup = time.perf_counter() - t0
         self.stats["setup_s"] += setup
         self.stats["last_levels"] = cache.hierarchy_info["levels"]
@@ -893,6 +964,25 @@ class PyamgKrylovSolver:
                 flush=True,
             )
         return ml
+
+    def _to_cpu_levels(self, cache: _PatternCache, ml) -> None:
+        """cpu_vcycle="matched": the jax free-mode level layout on the host
+        (level 0 operator and 1/diag are filled in per call from the current S)."""
+        from pyamg.relaxation.smoothing import rho_D_inv_A
+
+        levels = []
+        for l, lvl in enumerate(ml.levels[:-1]):
+            A = lvl.A.tocsr()
+            omega = self.smoother_omega / float(rho_D_inv_A(A))
+            P, R = lvl.P.tocsr(), lvl.R.tocsr()
+            if l == 0:
+                levels.append((None, None, omega, P, R))
+                continue
+            diag = A.diagonal()
+            safe = onp.where(diag != 0.0, diag, 1.0)
+            levels.append((A, onp.where(diag != 0.0, 1.0 / safe, 0.0), omega, P, R))
+        cache.cpu_levels = levels
+        cache.cpu_coarse_pinv = _dense_inverse(ml.levels[-1].A.toarray())
 
     def _to_jax_hierarchy(self, cache: _PatternCache, ml) -> None:
         """Free mode: device operators in the compacted free-block shapes."""
@@ -1054,6 +1144,8 @@ class PyamgKrylovSolver:
             if not self._refresh_device(cache, ml):
                 # capacities no longer fit (should not happen: same patterns): full conversion
                 (self._to_jax_hierarchy_full if self._full else self._to_jax_hierarchy)(cache, ml)
+        elif self._matched_cpu:
+            self._to_cpu_levels(cache, ml)
         else:
             import pyamg
 
@@ -1148,6 +1240,14 @@ class PyamgKrylovSolver:
 
     # -- krylov drivers ---------------------------------------------------------------
     def _solve_cpu(self, cache, S, rhs, y0, rhs_norm):
+        if self._matched_cpu:
+            S = S.tocsr()
+            _, _, omega0, P0, R0 = cache.cpu_levels[0]
+            levels = [(S, 1.0 / S.diagonal(), omega0, P0, R0)] + list(cache.cpu_levels[1:])
+            y, iters, _rr = _pcg_np(S, rhs, y0, levels, cache.cpu_coarse_pinv, self.tol,
+                                    self.maxiter, self.smoother_sweeps)
+            rel = float(onp.linalg.norm(rhs - S @ y) / rhs_norm)
+            return y, int(iters), rel, 0
         ml = cache.hierarchy
         y, info, iters = _krylov_cpu(
             self.method, S, rhs, y0, ml.aspreconditioner(cycle="V"), self.tol, self.maxiter
