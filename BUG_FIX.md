@@ -869,3 +869,29 @@ run.log 末行 `slow_operation_alarm: Compiling module jit_while for GPU`；runn
 - **上文把 `dxgvmb_send_create_allocation failed ffffffb5 / Ioctl failed: -75` 当作直接原因是错的**：第三次尝试（10:16 起，shakedown RC=0、释放解正常、生产段 10:24:48 开始）的 dmesg 里同样有这条，时间正对应每次起跑时 XLA 分配器的 4 GiB 探测（run.log 里的 `Failed to allocate device memory of 4.00GiB`），每次运行都有，是正常噪声。
 - 因此关于冻结，能确定的只有：runner（或它 spawn 的 ptxas）卡在 dxgkrnl 持有的 VMA 写锁上（`__vma_start_write`），触发点随机、与代码路径无关；今天在旧 VM 与新 VM 上各发生一次，第三次通过。Windows 主机已连续运行 5 天（09-17 09:55 起），System 日志无显示驱动事件。
 - 处置不变：长跑前 `wsl --shutdown`；若再发生，重启 Windows（主机侧 dxgkrnl 状态只有重启能复位）。E1j 第三次尝试进行中。
+
+### 11.17 E1j 结果：同代码 PARDISO 参考解，最终加速比 1.72x（2026-09-22 10:24 → 09-23 03:28，17.07 h）
+
+| 项 | E1j（PARDISO + thermal jit） | E0j（pyamg frozen + thermal jit） | E1b（PARDISO，eager 热学） |
+|---|---|---|---|
+| 墙钟 | **17.07 h**（5.17 s/步） | **9.91 h**（3.00 s/步） | 17.87 h |
+| **同代码加速比** | — | **E1j / E0j = 1.722x** | — |
+| 门禁 | 10/11，唯一失败 `ledger_complete`（最大相对 4.1546e-5，与 E0/E0j/E1b 同一组 12 步） | 同 | 同 |
+| Newton 失败 / cutback / 冻结 / 编译告警 | 0 / 0 / 0 / 0 | 同 | — |
+| 力学线性解 | PARDISO 7,477 次数值分解，33,503 s = **9.31 h** | 2.30 h（**4.05x**） | 32,849 s |
+| `solver` 段占比 | 58.9% | 34.7% | — |
+| 装配 / local_assembly / cell_jacobian | 15,825 / 13,446 / 7,417 s | 13,916 / 11,540 / 6,231 s | — |
+| 内存 | RSS 中位 22.3 GB、峰 24.5 GB、HWM 27.5 GB；显存峰 11.9 GB | 15.8 / 19.1 / 31.6 GB；11.8 GB | — |
+
+**正确性（596 个汇报点）**：
+
+- E1j vs E0j：u_max ≤ **7.94e-6**、vm_max ≤ **1.03e-7**、T_max 逐位相同；释放解 u_max 1.815369360e-3 vs 1.815370001e-3（**3.5e-7**）、u_mean 差 3.0e-7。
+- E1j vs E1b（只差 `thermal.jit`）：u_max ≤ **5.27e-10**、vm_max ≤ 2.81e-10、T_max 逐位相同；释放解差 1.2e-8。**热学求解只编译一次不改变结果**（单次求解 1e-16 的差累积到全高仍在 1e-10 量级）。
+
+**热学逐次重编译的代价（同配置、只差该键）**：E1b − E1j = **0.80 h（4.5%）**，与 V40 在 40-slab 上外推的 0.8 h 吻合。装配侧 E1j 比 E1b 多 1.9 ks，属运行间波动（两次 PARDISO 分解时间也差 2%）。
+
+**论文口径确定**：
+
+- 主结果 = E0j 9.91 h vs E1j 17.07 h，**1.722x**，一致性 u_max ≤ 7.9e-6；两者同提交（d6bd04f 与 722d915 的求解器代码相同）、同热学路径。
+- E0（14.13 h）与 E1b（17.87 h）转为消融/证据：E0 vs E0j = 缩放一致性 + 热学 jit 的合计效果；E1b vs E1j = 热学 jit 单独的效果。
+- 时间构成：E0j 里装配 39% 已超过线性解 34.7%，E1j 里线性解仍占 58.9%——这是"把力学线性解从瓶颈上拿掉"的直接证据（图 8 / Amdahl）。
