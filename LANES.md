@@ -60,3 +60,16 @@
 4. 缩小版 V1 单道回归进 `-m meltpool`。
 5. Goldak、蒸发热沉、液相各向异性 k，各自附能量台账与 V1 三角复跑。
 6. 张量积渐变 HEX8 试样生成器（AM-Sim/mesh），多道多层熔池算例。
+
+## 2026-09-23 分支布局调整（论文收尾）
+
+- **`precond-optimization` 冻结在 82138a4**：论文主结果 E0j（d6bd04f）与 E1j（722d915）的代码，不再改动。
+- **`test` 快进到 82138a4 后，缺省值改为 E0j 的设置**：pyamg `scale_policy="frozen"`、`maxiter=800`、`rebuild_iter_factor=0`；jax 热学块 `jit=true`。
+  `device` 仍缺省 `cpu`，`--xla-linear-solver auto` 的力学仍是 PARDISO。依赖旧缺省值的配置已显式写死旧值
+  （`0119-flash-voxel-fast-pyamg.json`、`-pyamg-frozen.json`、`-hybrid.json` 写 `"jit": false`；仓库外 `~/work/159/0911/inputs/0911-half2p5-flash-fast-pyamg.json` 另写 `"scale_policy": "current"`）。
+- **消融支线 `paper-ablation`** @ `~/work/ablation_tree`，从上述 test 提交分出，基线 tag `paper-base-20260923`：
+  - 用途：论文消融与扩展实验（E5c、E5a、E5d、E3、E4、E7、E6 后半、E8、E9、E10、E11）的配置、启动脚本与分析脚本。
+  - **求解器代码冻结**：`jax_fem_am/solvers/**`、`jax_fem/solver.py`、`jax_fem/fe.py`、`jax_fem_am/simulation/**` 不改，保证所有消融与 E0j 同一求解器代码；只加 `cases/**` 下的配置与脚本。
+  - 若确需改求解器，先在 test 上改并重跑门禁，再合入本支线，受影响的消融重跑。
+  - 输出目录：`~/work/159/output/abl_*`（E10 为 `abl_0911_*`）。
+- `halfmodel-0911`（a847f75，基于 185041c）：E10 前需把其提交移到 `paper-ablation` 上并重跑单测与 2-slab。

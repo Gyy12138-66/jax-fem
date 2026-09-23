@@ -108,14 +108,15 @@
         "tol": 1e-06,
         "atol": 1e-06,
         "maxiter": 10000,
-        "check_residual": true
+        "check_residual": true,
+        "jit": false
       },
       "mechanics": {
         "backend": "pardiso",
         "mode": "phase23"
       },
       "fallback": "pardiso",
-      "note": "Hybrid lane (MODE=4): independent linear blocks per physics. Thermal: jax CG + Jacobi on the GPU (group-A: Jacobi-scaled kappa 12-42 flat with height); check_residual true now means the RELATIVE post-solve guard (true residual <= check_factor(100) x max(tol*|b|, atol), RuntimeError -> PARDISO fallback), replacing the vendored absolute assert err<0.1 that forced ~1e-10 relative accuracy on ~1e9 flash rhs. Mechanics: MKL PARDISO phase23 (group-A/B: Jacobi-scaled kappa 6e4-4e6, every Jacobi Krylov solve stalls; SA-AMG+rigid-body modes needs 46-56 CG iterations, see the pyamg backend). 40-slab shakedown 2026-09-03: flat 4.3-4.5 s/step at layers 21-40, bit-identical build stresses to the PARDISO-only lane. 'solver: auto' means exactly these two blocks; they are spelled out so the contract fingerprint documents them."
+      "note": "Hybrid lane (MODE=4): independent linear blocks per physics. Thermal: jax CG + Jacobi on the GPU (group-A: Jacobi-scaled kappa 12-42 flat with height); check_residual true now means the RELATIVE post-solve guard (true residual <= check_factor(100) x max(tol*|b|, atol), RuntimeError -> PARDISO fallback), replacing the vendored absolute assert err<0.1 that forced ~1e-10 relative accuracy on ~1e9 flash rhs. Mechanics: MKL PARDISO phase23 (group-A/B: Jacobi-scaled kappa 6e4-4e6, every Jacobi Krylov solve stalls; SA-AMG+rigid-body modes needs 46-56 CG iterations, see the pyamg backend). 40-slab shakedown 2026-09-03: flat 4.3-4.5 s/step at layers 21-40, bit-identical build stresses to the PARDISO-only lane. 'solver: auto' means exactly these two blocks; they are spelled out so the contract fingerprint documents them. Pinned 2026-09-23: explicit pre-change values (thermal jit false; pyamg scale_policy where absent) so this config reproduces its runs after the defaults moved to the E0j settings."
     }
   }
 }

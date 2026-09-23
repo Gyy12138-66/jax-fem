@@ -79,11 +79,15 @@ class JaxSolveJitTest(unittest.TestCase):
 
 class JaxJitRegistryTest(unittest.TestCase):
     def test_key_is_optional_validated_and_reaches_the_block_and_the_label(self):
+        # default ON since 2026-09-23 (the E0j setting)
         spec = registry.normalize_linear_solver_spec({"backend": "jax", "method": "cg"})
-        self.assertNotIn("jit", spec)
+        self.assertIs(spec["jit"], True)
         block = registry.build_linear_block({"backend": "jax", "method": "cg"})
-        self.assertNotIn("jit", block["jax_solver"])
-        self.assertNotIn("jit=True", registry.linear_block_label(block))
+        self.assertIs(block["jax_solver"]["jit"], True)
+        self.assertIn("jit=True", registry.linear_block_label(block))
+        # an explicit false still turns it off (pinned pre-2026-09-23 configs)
+        off = registry.build_linear_block({"backend": "jax", "method": "cg", "jit": False})
+        self.assertNotIn("jit=True", registry.linear_block_label(off))
 
         spec = registry.normalize_linear_solver_spec({"backend": "jax", "method": "cg", "jit": True})
         self.assertIs(spec["jit"], True)

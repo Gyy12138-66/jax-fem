@@ -44,13 +44,14 @@ class SpecParsingTest(unittest.TestCase):
             self.assertIsNone(registry.parse_linear_solver_spec(value))
 
     def test_shorthand_forms(self):
+        # jax specs carry jit=True by default since 2026-09-23 (the E0j setting)
         self.assertEqual(
             registry.parse_linear_solver_spec("jax:cg:jacobi"),
-            {"backend": "jax", "method": "cg", "precond": "jacobi"},
+            {"backend": "jax", "method": "cg", "precond": "jacobi", "jit": True},
         )
         self.assertEqual(
             registry.parse_linear_solver_spec("jax:bicgstab:none"),
-            {"backend": "jax", "method": "bicgstab", "precond": "none"},
+            {"backend": "jax", "method": "bicgstab", "precond": "none", "jit": True},
         )
         self.assertEqual(
             registry.parse_linear_solver_spec("pardiso:phase23"),
@@ -97,10 +98,11 @@ class BlockBuildingTest(unittest.TestCase):
         self.assertEqual(
             block,
             {"jax_solver": {"precond": True, "method": "cg", "tol": 1e-6, "atol": 1e-6,
-                            "maxiter": 10000, "check_residual": False, "check_factor": 50.0}},
+                            "maxiter": 10000, "check_residual": False, "check_factor": 50.0,
+                            "jit": True}},
         )
         no_pc = registry.build_linear_block("jax:bicgstab:none")
-        self.assertEqual(no_pc["jax_solver"], {"precond": False, "method": "bicgstab"})
+        self.assertEqual(no_pc["jax_solver"], {"precond": False, "method": "bicgstab", "jit": True})
 
     def test_pardiso_block_is_shared_per_mode(self):
         a = registry.build_linear_block({"backend": "pardiso", "mode": "phase23"})
@@ -156,7 +158,7 @@ class ScopedDefaultsTest(unittest.TestCase):
         self.assertEqual(
             blocks["thermal"],
             {"jax_solver": {"precond": True, "method": "cg", "tol": 1e-6, "atol": 1e-6,
-                            "maxiter": 10000}},
+                            "maxiter": 10000, "jit": True}},
         )
         self.assertEqual(blocks["mechanics"]["custom_solver"].label, "pardiso_v07(phase23)")
 
@@ -166,7 +168,7 @@ class ScopedDefaultsTest(unittest.TestCase):
             thermal_linear_solver="jax:bicgstab:none", mechanics_linear_solver="spsolve",
         )
         blocks = registry.scoped_linear_options_from_args(args)
-        self.assertEqual(blocks["thermal"], {"jax_solver": {"precond": False, "method": "bicgstab"}})
+        self.assertEqual(blocks["thermal"], {"jax_solver": {"precond": False, "method": "bicgstab", "jit": True}})
         self.assertEqual(blocks["mechanics"], {"spsolve_solver": {}})
 
     def test_legacy_global_choice_leaves_scopes_empty(self):

@@ -551,7 +551,9 @@ class PyamgScalePolicyTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             amg.PyamgKrylovSolver(scale_policy="lagged")
         self.assertIn("(frozen)", amg.PyamgKrylovSolver(scale_policy="frozen").label)
-        self.assertNotIn("(frozen)", amg.PyamgKrylovSolver().label)
+        # default "frozen" since 2026-09-23 (the E0j setting)
+        self.assertIn("(frozen)", amg.PyamgKrylovSolver().label)
+        self.assertNotIn("(frozen)", amg.PyamgKrylovSolver(scale_policy="current").label)
 
     def test_frozen_scale_is_kept_while_reused_and_solution_is_exact(self):
         seq, rows, coords = self._drift_sequence()
@@ -605,7 +607,13 @@ class PyamgScalePolicyTest(unittest.TestCase):
 
     def test_registry_accepts_and_validates_scale_policy(self):
         from jax_fem_am.solvers.linear import normalize_linear_solver_spec
-        self.assertEqual(normalize_linear_solver_spec({"backend": "pyamg"})["scale_policy"], "current")
+        # E0j settings are the defaults since 2026-09-23
+        defaults = normalize_linear_solver_spec({"backend": "pyamg"})
+        self.assertEqual(defaults["scale_policy"], "frozen")
+        self.assertEqual(defaults["maxiter"], 800)
+        self.assertEqual(defaults["rebuild_iter_factor"], 0.0)
+        self.assertEqual(defaults["max_coarse"], 3000)
+        self.assertEqual(normalize_linear_solver_spec({"backend": "pyamg", "scale_policy": "current"})["scale_policy"], "current")
         self.assertEqual(normalize_linear_solver_spec({"backend": "pyamg", "scale_policy": "frozen"})["scale_policy"], "frozen")
         with self.assertRaises(ValueError):
             normalize_linear_solver_spec({"backend": "pyamg", "scale_policy": "sometimes"})

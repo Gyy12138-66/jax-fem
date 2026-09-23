@@ -187,9 +187,11 @@ def normalize_linear_solver_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
         if out.get("check_factor") is not None:
             out["check_factor"] = float(out["check_factor"])
         # Compile the Krylov solve once instead of on every call (BUG_FIX.md
-        # section 11.13/11.14). Off by default: results move at the 1e-16 level.
-        if "jit" in out and out["jit"] is not None:
-            out["jit"] = _as_bool(out["jit"], "jit")
+        # section 11.13/11.14). ON by default since 2026-09-23 (the E0j setting):
+        # results move at the 1e-16 level (1e-10 over a full build) and the
+        # per-call recompilation spawned ptxas ~20k times per full-height run.
+        # Configs that must reproduce pre-2026-09-23 runs write "jit": false.
+        out["jit"] = _as_bool(out["jit"], "jit") if out.get("jit") is not None else True
     elif backend == "pardiso":
         mode = out.get("mode")
         if mode is not None:
@@ -208,7 +210,9 @@ def normalize_linear_solver_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
         )
         out["scaled"] = _as_bool(out.get("scaled", True), "scaled")
         out["tol"] = float(out.get("tol", 1e-6))
-        out["maxiter"] = int(out.get("maxiter", 500))
+        # Defaults below follow the E0j configuration (2026-09-23): maxiter 800,
+        # rebuild_iter_factor 0, scale_policy "frozen". Earlier runs pin their values.
+        out["maxiter"] = int(out.get("maxiter", 800))
         # dofs of the coarsest level; 3000 keeps the v159 hierarchy at 3 levels
         # (level 2 tops out at 1746 dofs), 1000 produced a 4th level from layer
         # 71 on and tripled the CG iteration count (BUG_FIX.md section 7).
@@ -225,16 +229,16 @@ def normalize_linear_solver_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
         )
         out["smoother_sweeps"] = int(out.get("smoother_sweeps", 2))
         out["smoother_omega"] = float(out.get("smoother_omega", 4.0 / 3.0))
-        out["rebuild_iter_factor"] = float(out.get("rebuild_iter_factor", 3.0))
+        out["rebuild_iter_factor"] = float(out.get("rebuild_iter_factor", 0.0))
         # Shape policy of the jit path: "auto" = full on gpu/jax, free on cpu.
         out["shape_mode"] = _check_choice(out.get("shape_mode", "auto"), PYAMG_SHAPE_MODES, "shape_mode")
         out["fixed_levels"] = int(out.get("fixed_levels", 4))
         out["bucket_ratio"] = float(out.get("bucket_ratio", 1.25))
         # Jacobi scaling while a hierarchy is reused: "frozen" keeps the scaling the
         # prolongator was built with (BUG_FIX.md section 11); "current" is the
-        # behaviour of every run up to E0/E1b.
+        # behaviour of every run up to E0/E1b. Default "frozen" since 2026-09-23.
         out["scale_policy"] = _check_choice(
-            out.get("scale_policy", "current"), PYAMG_SCALE_POLICIES, "scale_policy"
+            out.get("scale_policy", "frozen"), PYAMG_SCALE_POLICIES, "scale_policy"
         )
         # Galerkin refresh of a reused hierarchy (same aggregation and P, coarse
         # operators of the current tangent): as the first recovery after a
