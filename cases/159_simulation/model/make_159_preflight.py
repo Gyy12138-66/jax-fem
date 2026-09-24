@@ -144,6 +144,27 @@ def load_config(path: Path) -> dict:
         raise SystemExit("runner stress relaxation temperature must equal the stress-free reference")
     if runner["layer_activation_geometry"] != "centroid":
         raise SystemExit("layer_activation_geometry must be 'centroid' (intersection double-activates face-aligned slabs)")
+    # Half / partial models: the mesh carries `represented_fraction` of the real part's cross-section.
+    # Scan and hold times follow the REAL part (A_mesh / fraction); the energy that enters the mesh is
+    # the mesh's own share (P x A_mesh / (hatch x v)), so the per-cell energy density is unchanged.
+    sym = cfg["mesh"].get("symmetry") or {}
+    frac = float(sym.get("represented_fraction", 1.0))
+    if not (0.0 < frac <= 1.0):
+        raise SystemExit("mesh.symmetry.represented_fraction must lie in (0, 1]")
+    cfg["mesh"]["_represented_fraction"] = frac
+    mech = runner["mechanics"]
+    bottom_bc = mech.get("bottom_bc", "fixed")
+    if bottom_bc not in ("fixed", "fixed_symmetry"):
+        raise SystemExit("runner.mechanics.bottom_bc must be 'fixed' or 'fixed_symmetry'")
+    release_mode = tm.get("release_anchor_mode", "rigid_body")
+    if release_mode not in ("rigid_body", "symmetry_plane"):
+        raise SystemExit("thermal_mechanical.release_anchor_mode must be 'rigid_body' or 'symmetry_plane'")
+    uses_plane = bottom_bc == "fixed_symmetry" or release_mode == "symmetry_plane" or bool(runner.get("thermal_symmetry_plane", False))
+    if uses_plane and frac == 1.0:
+        raise SystemExit("symmetry-plane boundary conditions require mesh.symmetry.represented_fraction < 1")
+    if frac < 1.0 and not uses_plane:
+        raise SystemExit("mesh.symmetry.represented_fraction < 1 requires the symmetry-plane boundary conditions "
+                         "(runner.mechanics.bottom_bc, thermal_mechanical.release_anchor_mode, runner.thermal_symmetry_plane)")
     return cfg
 
 
@@ -176,7 +197,8 @@ def generate_schedule(cfg: dict, mesh: dict) -> tuple[list[dict], dict]:
     uniformity = math.exp(-2.0 * rho_max ** 2 / r_flash ** 2)
     capture = slab_capture(mesh, centre, r_flash)
     area = mesh["area_m2"]
-    t_scan_slab = area / (hatch * speed)
+    frac = float(cfg["mesh"].get("_represented_fraction", 1.0))
+    t_scan_slab = area / (hatch * speed) / frac        # scan time of the REAL part's layer
     if (rpf * t_scan_slab <= t_flash).any():
         raise SystemExit("some slab's scan time is shorter than the flash duration")
     rows: list[dict] = []
@@ -194,7 +216,8 @@ def generate_schedule(cfg: dict, mesh: dict) -> tuple[list[dict], dict]:
         t_scan = float(t_scan_slab[k])
         t_hold = rpf * t_scan - t_flash
         hold_steps = recoat_substep_durations(t_hold, int(fl["hold_substeps"]), float(fl["hold_substep_ratio"]))
-        p_cmd = rpf * power * t_scan / (t_flash * float(capture[k]))
+        e_layer = rpf * power * frac * t_scan                   # energy entering the MESH (= rpf x P x A_mesh/(hatch v))
+        p_cmd = e_layer / (t_flash * float(capture[k]))
         layer_start = state["time"]
         scan_id += 1
         first_row = None
@@ -204,14 +227,14 @@ def generate_schedule(cfg: dict, mesh: dict) -> tuple[list[dict], dict]:
                     physical_layer=physical_layer, scan_id=scan_id, physical_z=physical_z)
             if first_row is None:
                 first_row = len(rows) - 1
-            energy_J += rpf * power * t_scan / n_sub
+            energy_J += e_layer / n_sub
             scan_time_s += t_flash / n_sub
         for hold_dt in hold_steps:
             add_row(rows, state, dt=hold_dt, x=float(centre[0]), y=float(centre[1]), z=deposition_z, power=0.0,
                     laser_on=0, layer=slab, hatch=0, mode="hold",
                     physical_layer=physical_layer, scan_id=scan_id, physical_z=physical_z)
             hold_time_s += hold_dt
-        slab_energy[slab] = slab_energy.get(slab, 0.0) + rpf * power * t_scan
+        slab_energy[slab] = slab_energy.get(slab, 0.0) + e_layer
         if (physical_layer - 1) % per_slab == 0:
             activation_events.append({"slab": slab, "physical_layer": physical_layer, "row_index": first_row,
                                       "global_step": first_row, "time_s": rows[first_row]["time"],
@@ -219,7 +242,7 @@ def generate_schedule(cfg: dict, mesh: dict) -> tuple[list[dict], dict]:
         layer_summaries.append({"physical_layer": physical_layer, "activation_slab": slab, "z_m": physical_z,
                                 "deposition_z_m": deposition_z, "area_m2": float(area[k]), "scan_time_s": t_scan,
                                 "hold_time_s": t_hold, "capture_fraction": float(capture[k]),
-                                "commanded_power_W": p_cmd, "nominal_laser_energy_J": rpf * power * t_scan, "real_layers": rpf,
+                                "commanded_power_W": p_cmd, "nominal_laser_energy_J": e_layer, "real_layers": rpf,
                                 "scan_start_time_s": layer_start, "scan_end_time_s": state["time"]})
         if physical_layer < n_physical or bool(layers["recoat_after_final_layer"]):
             for sub_dt in recoat_steps:
@@ -237,6 +260,7 @@ def generate_schedule(cfg: dict, mesh: dict) -> tuple[list[dict], dict]:
                                       "`layer` = 1-based activation slab; --layers = slab count; --layer-thickness = "
                                       "slab thickness; per-row `power` is the commanded flash power of that layer"),
         "coordinate_frame": "mesh coordinates (raft bottom at z = 0, part base at z = raft height)",
+        "symmetry_represented_fraction": frac,
         "substrate_z_m": base, "substrate_box_m": mesh["raft_box"],
         "part_bounds_xy_m": [[float(mesh["part_xy_min"][0]), float(mesh["part_xy_max"][0])],
                              [float(mesh["part_xy_min"][1]), float(mesh["part_xy_max"][1])]],
@@ -255,7 +279,7 @@ def generate_schedule(cfg: dict, mesh: dict) -> tuple[list[dict], dict]:
                   "capture_fraction_slab_min_max": [float(capture.min()), float(capture.max())],
                   "commanded_power_W_min_max": [float(min(l["commanded_power_W"] for l in layer_summaries)),
                                                 float(max(l["commanded_power_W"] for l in layer_summaries))],
-                  "physical_energy_per_layer_J_min_max": [float(rpf * power * t_scan_slab.min()), float(rpf * power * t_scan_slab.max())],
+                  "physical_energy_per_layer_J_min_max": [float(rpf * power * frac * t_scan_slab.min()), float(rpf * power * frac * t_scan_slab.max())],
                   "physical_energy_per_layer_J": [l["nominal_laser_energy_J"] for l in layer_summaries],
                   "layer_scan_time_s_min_max": [float(t_scan_slab.min()), float(t_scan_slab.max())],
                   "power_rule": fl["power_rule"]},
@@ -326,14 +350,15 @@ def validate_schedule(rows: list[dict], ledger: dict, cfg: dict, mesh: dict) -> 
     # per-layer energy identities: P x t_scan, flash + hold = t_scan, commanded x capture x t_flash = P x t_scan
     power, speed, hatch = float(scan["power_W"]), float(scan["speed_m_s"]), float(scan["hatch_m"])
     t_flash = ledger["flash"]["flash_duration_s"]
+    frac = float(ledger.get("symmetry_represented_fraction", 1.0))
     for l in ledger["layers"]:
         k = l["activation_slab"] - 1
-        if not math.isclose(l["scan_time_s"], mesh["area_m2"][k] / (hatch * speed), rel_tol=1e-12):
+        if not math.isclose(l["scan_time_s"], mesh["area_m2"][k] / (hatch * speed) / frac, rel_tol=1e-12):
             raise ValueError("scan time rule broken")
-        if not math.isclose(l["nominal_laser_energy_J"], rpf * power * l["scan_time_s"], rel_tol=1e-12):
+        if not math.isclose(l["nominal_laser_energy_J"], rpf * power * frac * l["scan_time_s"], rel_tol=1e-12):
             raise ValueError("layer energy identity failed")
-        if not math.isclose(l["commanded_power_W"] * t_flash * l["capture_fraction"], rpf * power * l["scan_time_s"], rel_tol=1e-9):
-            raise ValueError("flash power rule broken: commanded x capture x t_flash != rpf x P x t_scan")
+        if not math.isclose(l["commanded_power_W"] * t_flash * l["capture_fraction"], rpf * power * frac * l["scan_time_s"], rel_tol=1e-9):
+            raise ValueError("flash power rule broken: commanded x capture x t_flash != rpf x frac x P x t_scan")
         if not math.isclose(l["hold_time_s"] + t_flash, rpf * l["scan_time_s"], rel_tol=1e-12):
             raise ValueError("flash + hold must span the grouped layer scan time")
     if not math.isclose(sum(l["nominal_laser_energy_J"] for l in ledger["layers"]), ledger["nominal_laser_energy_J"], rel_tol=1e-9):
@@ -416,7 +441,7 @@ def runner_contract(cfg: dict, *, mesh_path: Path, path: Path, material: Path, l
         "--bottom-temperature", f"{float(tm['initial_temperature_K']):.12g}",
         "--cooling-steps", str(int(tm["final_cooldown_steps"])),
         "--cooling-dt", f"{ledger['cooling_dt_s']:.12g}",
-        "--mechanics-model", mech["model"], "--bottom-mechanics-bc", "fixed",
+        "--mechanics-model", mech["model"], "--bottom-mechanics-bc", mech.get("bottom_bc", "fixed"),
         "--mechanics-every", str(int(mech["every_steps"])),
         "--mechanics-rel-tol", f"{float(mech['rel_tol']):.12g}",
         "--mechanics-acceptance", mech["acceptance"],
@@ -431,6 +456,14 @@ def runner_contract(cfg: dict, *, mesh_path: Path, path: Path, material: Path, l
     ]
     if mech["line_search"]:
         argv.append("--mechanics-line-search")
+    release_mode = tm.get("release_anchor_mode", "rigid_body")
+    if (mech.get("bottom_bc", "fixed") == "fixed_symmetry" or release_mode == "symmetry_plane"
+            or bool(runner.get("thermal_symmetry_plane", False))):
+        # Half model: one plane serves the build BC, the release BC and the adiabatic thermal face.
+        argv += ["--symmetry-plane-axis", str(mech.get("symmetry_plane_axis", "x")),
+                 "--symmetry-plane-side", str(mech.get("symmetry_plane_side", "min"))]
+    if bool(runner.get("thermal_symmetry_plane", False)):
+        argv.append("--thermal-symmetry-plane")
     if lin.get("cell_target_batch_size"):
         argv += ["--xla-cell-target-batch-size", str(int(lin["cell_target_batch_size"]))]
     if lin["solver"] == "jax":
@@ -465,7 +498,7 @@ def runner_contract(cfg: dict, *, mesh_path: Path, path: Path, material: Path, l
     if lin.get("fallback"):
         argv += ["--xla-fallback-solver", str(lin["fallback"])]
     if tm["release_after_cooling"]:
-        argv += ["--release-after-cooling", "--release-anchor-mode", "rigid_body",
+        argv += ["--release-after-cooling", "--release-anchor-mode", release_mode,
                  "--release-cut-box", f"{box[0]:.12g}", f"{box[1]:.12g}", f"{box[2]:.12g}", f"{box[3]:.12g}",
                  f"{box[4]:.12g}", f"{raft:.12g}"]
     return {
@@ -496,7 +529,11 @@ def runner_contract(cfg: dict, *, mesh_path: Path, path: Path, material: Path, l
                    "vertex_rule_band_integral": vertex_rule_band_integral(float(layers["activation_slab_thickness_m"]), float(runner["source_depth_m"]),
                                                                           float(runner["source_depth_cutoff_m"]), bool(runner["source_cutoff_renormalize"])),
                    "capture_fraction": "per slab on the mesh (ledger slab_capture_fraction); measured by the stage-2 energy trial"},
-        "release": {"mode": "rigid_body anchors on printed nodes", "cut_box_m": [box[0], box[1], box[2], box[3], box[4], raft],
+        "symmetry": {"represented_fraction": float(cfg["mesh"].get("_represented_fraction", 1.0)),
+                     "bottom_mechanics_bc": mech.get("bottom_bc", "fixed"), "release_anchor_mode": release_mode,
+                     "thermal_symmetry_plane": bool(runner.get("thermal_symmetry_plane", False)),
+                     "time_rule": "scan/hold time = A_mesh/(hatch x v)/fraction (the real part); energy = rpf x P x fraction x t_scan (the mesh's share)"},
+        "release": {"mode": f"{release_mode} anchors on printed nodes", "cut_box_m": [box[0], box[1], box[2], box[3], box[4], raft],
                     "cut_semantics": "cells with centroid inside the box (the raft) lose stiffness and locked-in stress; the raft is the --support-thickness fixture band"},
     }
 
