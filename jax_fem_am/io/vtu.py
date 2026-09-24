@@ -150,6 +150,7 @@ def save_step(
             if not (
                 name.startswith("release_bottom_u")
                 or name.startswith("release_anchor_u")
+                or name.startswith("release_u_deform")
             ):
                 raise ValueError(f"invalid release point field name: {name}")
             values = np.asarray(values, dtype=np.float64)

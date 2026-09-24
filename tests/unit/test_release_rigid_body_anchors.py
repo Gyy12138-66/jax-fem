@@ -55,3 +55,61 @@ class RigidBodyAnchorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RobustAnchorSelectionTest(unittest.TestCase):
+    """2026-09-24: automatic anchors always reach rank 6; geometries that passed
+    before keep exactly the same anchors; manual points; rigid-motion removal."""
+
+    def _cube(self):
+        # Balbaa-cube-like retained part: 10 mm cube offset like the X1 mesh, uniform grid
+        g = _grid(10, 10, 10) * 1e-3
+        return g + np.array([0.005, 0.005, 0.006])
+
+    def test_cube_legacy_rule_is_degenerate_and_new_selection_has_rank_six(self):
+        pts = self._cube()
+        ids = np.arange(len(pts))
+        legacy = release._legacy_anchor_triple(pts, ids)
+        self.assertLess(release._anchor_triple_rank(pts, legacy), 6)
+        new = release.select_rigid_body_anchor_nodes(pts, ids)
+        self.assertEqual(release.validate_rigid_body_anchor_rank(pts, new, ids), 6)
+
+    def test_geometries_that_passed_keep_the_same_anchors(self):
+        points = np.vstack([_grid(8, 8, 1), _grid(4, 4, 4, z0=1.0) + np.array([2.0, 2.0, 0.0])])
+        part = np.arange(162, len(points))
+        rng = np.random.default_rng(0)
+        cloud = rng.random((500, 3)) * np.array([0.09, 0.1, 0.09])
+        for pts, ids in ((points, part), (cloud, np.arange(len(cloud)))):
+            legacy = release._legacy_anchor_triple(pts, ids)
+            self.assertEqual(release._anchor_triple_rank(pts, legacy), 6)
+            self.assertEqual(release.select_rigid_body_anchor_nodes(pts, ids), legacy)
+
+    def test_manual_anchor_points_pick_the_nearest_retained_nodes(self):
+        pts = self._cube()
+        ids = np.arange(len(pts))
+        targets = [0.005, 0.005, 0.006, 0.015, 0.005, 0.006, 0.005, 0.015, 0.006]
+        got = release.select_rigid_body_anchor_nodes(pts, ids, targets)
+        np.testing.assert_allclose(pts[got], np.reshape(targets, (3, 3)), atol=1e-12)
+        self.assertEqual(release.validate_rigid_body_anchor_rank(pts, got, ids), 6)
+        bc = release.make_anchor_mechanics_bc(pts, candidate_node_ids=ids, anchor_points=targets)
+        self.assertTrue(bc[0][0](pts[got[0]]) and bc[0][3](pts[got[1]]) and bc[0][5](pts[got[2]]))
+
+    def test_no_extent_in_xy_is_rejected(self):
+        pts = np.array([[0.0, 0.0, z] for z in range(5)])
+        with self.assertRaisesRegex(ValueError, "no extent"):
+            release._robust_anchor_triple(pts, np.arange(5))
+
+    def test_rigid_body_motion_removal_is_gauge_independent(self):
+        pts = self._cube()
+        ids = np.arange(len(pts))
+        rng = np.random.default_rng(1)
+        u_def = 1e-5 * rng.standard_normal(pts.shape)
+        # make u_def orthogonal to rigid motion so the split is unique
+        u_def, _, _ = release.remove_rigid_body_motion(pts, u_def, ids)
+        c = pts.mean(axis=0)
+        for t, w in (([1e-4, -2e-4, 3e-5], [1e-3, -2e-3, 5e-4]), ([0, 0, 0], [0, 0, 0])):
+            u = u_def + np.asarray(t) + np.cross(np.asarray(w), pts - c)
+            got, tt, ww = release.remove_rigid_body_motion(pts, u, ids)
+            np.testing.assert_allclose(got, u_def, atol=1e-15)
+            np.testing.assert_allclose(tt, t, atol=1e-15)
+            np.testing.assert_allclose(ww, w, atol=1e-12)

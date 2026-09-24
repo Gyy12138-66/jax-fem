@@ -1042,8 +1042,76 @@ def validate_release_anchor_protocol(
 RIGID_BODY_ANCHOR_COMPONENTS = ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))
 
 
-def select_rigid_body_anchor_nodes(points, candidate_node_ids=None):
+def _anchor_triple_rank(points, anchor_node_ids):
+    return _rigid_body_constraint_rank(points, rigid_body_anchor_dof_pairs(anchor_node_ids))
+
+
+def _legacy_anchor_triple(points, ids):
+    """The 2026-09-07 rule: anchor0 = minimum x, anchor1 = farthest from anchor0,
+    anchor2 = farthest from the anchor0-anchor1 line (indices into ``ids``)."""
+    candidates = points[ids]
+    a0 = int(onp.argmin(candidates[:, 0]))
+    dist0 = onp.linalg.norm(candidates - candidates[a0], axis=1)
+    a1 = int(onp.argmax(dist0))
+    axis = candidates[a1] - candidates[a0]
+    axis_norm = max(float(onp.linalg.norm(axis)), 1e-12)
+    cross_dist = onp.linalg.norm(onp.cross(candidates - candidates[a0], axis / axis_norm), axis=1)
+    a2 = int(onp.argmax(cross_dist))
+    return [int(ids[a0]), int(ids[a1]), int(ids[a2])]
+
+
+def _robust_anchor_triple(points, ids):
+    """Anchors that always satisfy the fixed 3-2-1 components
+    (anchor0: x, y, z; anchor1: y, z; anchor2: z).
+
+    With d = p1 - p0 and e = p2 - p0 the rotational block of the constraint
+    matrix has determinant d_x * (d_x * e_y - d_y * e_x): anchor1 must be offset
+    from anchor0 along x, and anchor2 must be off the anchor0-anchor1 line in the
+    xy projection. anchor0 = minimum x; anchor1 maximises |d_x| (distance breaks
+    ties); anchor2 maximises |d_x e_y - d_y e_x| (twice the projected triangle
+    area). Any solid with extent in x and y has a non-degenerate triple.
+    """
+    candidates = points[ids]
+    span = max(float(onp.ptp(candidates, axis=0).max()), 1e-300)
+    a0 = int(onp.argmin(candidates[:, 0]))
+    rel = candidates - candidates[a0]
+    a1 = int(onp.argmax(onp.abs(rel[:, 0]) + 1e-6 * onp.linalg.norm(rel, axis=1)))
+    d = rel[a1]
+    area = onp.abs(d[0] * rel[:, 1] - d[1] * rel[:, 0])
+    a2 = int(onp.argmax(area))
+    if abs(d[0]) <= 1e-9 * span or area[a2] <= 1e-9 * span * span:
+        raise ValueError(
+            "release rigid-body anchors: the retained material has no extent in x or y "
+            "(no non-degenerate 3-2-1 triple exists); use --release-anchor-points or box mode"
+        )
+    return [int(ids[a0]), int(ids[a1]), int(ids[a2])]
+
+
+def _nearest_anchor_nodes(points, ids, anchor_points):
+    """Manual anchors: the candidate node nearest to each of three given points."""
+    targets = onp.asarray(anchor_points, dtype=onp.float64).reshape(3, 3)
+    candidates = points[ids]
+    picked = []
+    for t in targets:
+        picked.append(int(ids[int(onp.argmin(onp.linalg.norm(candidates - t, axis=1)))]))
+    return picked
+
+
+def select_rigid_body_anchor_nodes(points, candidate_node_ids=None, anchor_points=None):
     """Return the three anchor node ids (global) of the 3-2-1 scheme.
+
+    Selection (2026-09-24): if ``anchor_points`` (three xyz points) is given, the
+    retained candidate nearest to each point is used (manual override, e.g. to
+    match an experiment's datum). Otherwise the 2026-09-07 rule below is kept
+    whenever it gives constraint rank 6 -- every geometry that passed before gets
+    exactly the same anchors -- and only a degenerate result falls back to
+    ``_robust_anchor_triple`` (the Balbaa cube put anchor2 vertically above
+    anchor0 -> rank 5 of 6). The anchors only fix the rigid-body gauge of the
+    free-free release: a statically determinate 3-2-1 restraint carries no
+    reaction for a self-equilibrated residual-stress state, so stresses and the
+    deformation shape do not depend on where they sit.
+
+    2026-09-07 rule:
 
     anchor0: minimum x among the candidates; anchor1: farthest candidate from
     anchor0; anchor2: candidate farthest from the anchor0-anchor1 line.
@@ -1058,17 +1126,38 @@ def select_rigid_body_anchor_nodes(points, candidate_node_ids=None):
         ids = onp.asarray(candidate_node_ids, dtype=onp.int64)
     else:
         ids = onp.arange(len(points), dtype=onp.int64)
-    candidates = points[ids]
-    anchor0_id = int(onp.argmin(candidates[:, 0]))
-    anchor0 = candidates[anchor0_id]
-    dist0 = onp.linalg.norm(candidates - anchor0, axis=1)
-    anchor1_id = int(onp.argmax(dist0))
-    anchor1 = candidates[anchor1_id]
-    axis = anchor1 - anchor0
-    axis_norm = max(float(onp.linalg.norm(axis)), 1e-12)
-    cross_dist = onp.linalg.norm(onp.cross(candidates - anchor0, axis / axis_norm), axis=1)
-    anchor2_id = int(onp.argmax(cross_dist))
-    return [int(ids[anchor0_id]), int(ids[anchor1_id]), int(ids[anchor2_id])]
+    if anchor_points is not None:
+        return _nearest_anchor_nodes(points, ids, anchor_points)
+    legacy = _legacy_anchor_triple(points, ids)
+    if len(set(legacy)) == 3 and _anchor_triple_rank(points, legacy) == 6:
+        return legacy
+    return _robust_anchor_triple(points, ids)
+
+
+def remove_rigid_body_motion(points, displacement, node_ids):
+    """Split a displacement field into the best-fit (small) rigid-body motion over
+    ``node_ids`` and the remainder: u = t + w x (x - c) + u_def, least squares.
+
+    Returns ``(u_def, t, w)`` with ``u_def`` for every node. ``u_def`` does not
+    depend on how the rigid-body gauge of a free-free solve was fixed, which is
+    how measured distortions are reported (best-fit alignment to the design).
+    """
+    points = onp.asarray(points, dtype=onp.float64)
+    u = onp.asarray(displacement, dtype=onp.float64).reshape(len(points), 3)
+    ids = onp.asarray(node_ids, dtype=onp.int64).reshape(-1)
+    c = points[ids].mean(axis=0)
+    r = points[ids] - c
+    n = len(ids)
+    A = onp.zeros((3 * n, 6))
+    A[0::3, 0] = A[1::3, 1] = A[2::3, 2] = 1.0
+    # w x r = (wy rz - wz ry, wz rx - wx rz, wx ry - wy rx)
+    A[0::3, 4], A[0::3, 5] = r[:, 2], -r[:, 1]
+    A[1::3, 3], A[1::3, 5] = -r[:, 2], r[:, 0]
+    A[2::3, 3], A[2::3, 4] = r[:, 1], -r[:, 0]
+    sol, *_ = onp.linalg.lstsq(A, u[ids].reshape(-1), rcond=None)
+    t, w = sol[:3], sol[3:]
+    rigid = t[None, :] + onp.cross(w[None, :], points - c)
+    return u - rigid, t, w
 
 
 def rigid_body_anchor_dof_pairs(anchor_node_ids):
@@ -1099,14 +1188,14 @@ def validate_rigid_body_anchor_rank(points, anchor_node_ids, retained_node_ids):
     return rank
 
 
-def make_anchor_mechanics_bc(points, candidate_node_ids=None):
+def make_anchor_mechanics_bc(points, candidate_node_ids=None, anchor_points=None):
     # Anchors must sit on load-bearing material that survives the release cut
     # (see select_rigid_body_anchor_nodes); the caller validates the rank.
     points = onp.asarray(points, dtype=onp.float64)
     span = max(float((points.max(axis=0) - points.min(axis=0)).max()), 1.0)
     atol = 1e-8 * span
     anchor0, anchor1, anchor2 = (
-        points[i] for i in select_rigid_body_anchor_nodes(points, candidate_node_ids)
+        points[i] for i in select_rigid_body_anchor_nodes(points, candidate_node_ids, anchor_points)
     )
 
     def at_node(target):
