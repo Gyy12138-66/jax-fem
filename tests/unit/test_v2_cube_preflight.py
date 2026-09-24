@@ -354,3 +354,28 @@ def test_build_preflight_writes_mesh_path_contract_and_fingerprinted_ledger(tmp_
     for key in ("E_table", "alpha_table", "poisson_table", "flow_curve_table", "k_table_solid"):
         assert pathlib.Path(relocated[key]).is_file()
         assert str(ROOT) in relocated[key]
+
+
+DWELL_PYAMG = ROOT / "cases/AM-Benchmark/verification/v2-cube-rs/inputs/cube-stress-production-dwellflash-pyamg.json"
+
+
+def test_per_physics_solver_blocks_and_fallback_reach_the_contract():
+    """X1 (2026-09-24): the cube preflight passes per-physics linear-solver blocks and the
+    fallback exactly like the 159 preflight; the PARDISO production contract is unchanged."""
+    cfg = MODULE.load_config(DWELL_PYAMG)
+    rows, ledger = MODULE.generate_schedule(cfg)
+    argv = MODULE.runner_contract(cfg, mesh=ROOT / "m", path=ROOT / "p", material=ROOT / "mat", ledger=ledger)["argv"]
+    assert argv[argv.index("--xla-linear-solver") + 1] == "auto"
+    mech = json.loads(argv[argv.index("--mechanics-linear-solver") + 1])
+    therm = json.loads(argv[argv.index("--thermal-linear-solver") + 1])
+    assert mech["backend"] == "pyamg" and mech["device"] == "gpu" and mech["scale_policy"] == "frozen"
+    assert therm["backend"] == "jax" and therm["jit"] is True
+    assert argv[argv.index("--xla-fallback-solver") + 1] == "pardiso"
+    base = MODULE.load_config(DWELL)
+    rows_b, ledger_b = MODULE.generate_schedule(base)
+    argv_b = MODULE.runner_contract(base, mesh=ROOT / "m", path=ROOT / "p", material=ROOT / "mat", ledger=ledger_b)["argv"]
+    assert "--mechanics-linear-solver" not in argv_b and "--xla-fallback-solver" not in argv_b
+    # everything but the solver arguments is identical to the PARDISO production contract
+    strip = lambda a: [x for i, x in enumerate(a) if not (x.startswith("--") and "linear-solver" in x or x == "--xla-fallback-solver")
+                       and not (i > 0 and (a[i - 1].endswith("linear-solver") or a[i - 1] == "--xla-fallback-solver"))]
+    assert strip(argv) == strip(argv_b)

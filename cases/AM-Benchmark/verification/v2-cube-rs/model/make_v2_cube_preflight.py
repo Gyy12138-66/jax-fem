@@ -809,6 +809,16 @@ def runner_contract(cfg: dict, *, mesh: Path, path: Path, material: Path, ledger
         argv.append("--mechanics-line-search")
     if lin.get("cell_target_batch_size"):
         argv += ["--xla-cell-target-batch-size", str(int(lin["cell_target_batch_size"]))]
+    for scope in ("thermal", "mechanics"):
+        # Per-physics blocks, same encoding as cases/159_simulation/model/make_159_preflight.py
+        # (spec keys in jax_fem_am/solvers/linear.py; compact key-sorted JSON so the
+        # contract fingerprint is stable). Added 2026-09-24 for X1 (cube on the
+        # pyamg-GPU lane of the solver paper).
+        spec = lin.get(scope)
+        if spec:
+            argv += [f"--{scope}-linear-solver", json.dumps(spec, sort_keys=True, separators=(",", ":"))]
+    if lin.get("fallback"):
+        argv += ["--xla-fallback-solver", str(lin["fallback"])]
     if tm["release_after_cooling"]:
         argv += ["--release-after-cooling", "--release-anchor-mode", "rigid_body",
                  "--release-cut-box", "0", f"{sub_xy:.12g}", "0", f"{sub_xy:.12g}",
