@@ -153,7 +153,7 @@ def build_parser(config=None):
                         help="Cap on the hardened yield stress (Pa), ~UTS (Ti64: ~1.15e9). Linear isotropic hardening "
                              "extrapolated past its ~10%% strain validity produced ~2 GPa fictitious von Mises at the "
                              "bottom-clamp region; the cap saturates hardening there. None keeps unbounded legacy hardening.")
-    parser.add_argument("--bottom-mechanics-bc", choices=("fixed", "elastic", "paper_minimal", "edge_minimal", "free_anchor", "symmetry_plane"),
+    parser.add_argument("--bottom-mechanics-bc", choices=("fixed", "elastic", "paper_minimal", "edge_minimal", "free_anchor", "symmetry_plane", "fixed_symmetry"),
                         default=cfg(config, "bottom_mechanics_bc", "fixed"),
                         help="'fixed' rigidly clamps the base nodes (legacy; models an infinitely stiff build plate and "
                              "concentrates fictitious stress at the clamp edge). 'elastic' replaces the clamp with a "
@@ -164,13 +164,22 @@ def build_parser(config=None):
                              "part is free to bend and contract: a plate lying unclamped (no contact/gravity). "
                              "symmetry_plane is the half-model form of free_anchor: the normal displacement is "
                              "fixed on the face named by --symmetry-plane-axis/--symmetry-plane-side and a "
-                             "minimal in-plane anchor removes the remaining three rigid modes.")
+                             "minimal in-plane anchor removes the remaining three rigid modes. "
+                             "fixed_symmetry is the half-model form of 'fixed': base nodes clamped AND the normal "
+                             "displacement fixed on the symmetry face (build phase of a half model on a plate).")
     parser.add_argument("--symmetry-plane-axis", choices=("x", "y", "z"),
                         default=cfg(config, "symmetry_plane_axis", "x"),
-                        help="Axis normal to the symmetry plane for --bottom-mechanics-bc symmetry_plane.")
+                        help="Axis normal to the symmetry plane for --bottom-mechanics-bc symmetry_plane / "
+                             "fixed_symmetry, --release-anchor-mode symmetry_plane and --thermal-symmetry-plane.")
     parser.add_argument("--symmetry-plane-side", choices=("min", "max"),
                         default=cfg(config, "symmetry_plane_side", "min"),
                         help="Which extreme face along --symmetry-plane-axis carries the symmetry condition.")
+    parser.add_argument("--thermal-symmetry-plane", dest="thermal_symmetry_plane", action="store_true",
+                        default=cfg(config, "thermal_symmetry_plane", False),
+                        help="Treat the --symmetry-plane-axis/--symmetry-plane-side face as adiabatic: exterior faces "
+                             "whose centroid lies on that plane are excluded from convection/radiation "
+                             "(half model; requires --surface-selection exterior). Default off.")
+    parser.add_argument("--no-thermal-symmetry-plane", dest="thermal_symmetry_plane", action="store_false")
     parser.add_argument("--edge-minimal-axis", choices=("auto", "x", "y", "z"),
                         default=cfg(config, "edge_minimal_axis", "auto"),
                         help="For --bottom-mechanics-bc edge_minimal (welding plates, Lu 2020 Fig. 2): the in-plane axis "
@@ -316,13 +325,15 @@ def build_parser(config=None):
     parser.add_argument("--release-after-cooling", dest="release_after_cooling", action="store_true", default=cfg(config, "release_after_cooling", False))
     parser.add_argument("--no-release-after-cooling", dest="release_after_cooling", action="store_false")
     parser.add_argument("--release-anchor-mode",
-                        choices=("rigid_body", "box", "paper_minimal_root"),
+                        choices=("rigid_body", "box", "paper_minimal_root", "symmetry_plane"),
                         default=cfg(config, "release_anchor_mode", "rigid_body"),
                         help="rigid_body (default): free-free release with 3-point rigid-body anchors (full removal "
                              "from the plate). box: clamp all nodes inside --release-anchor-box (u=0), modeling a "
                              "partial EDM/saw cut that leaves a root attachment. paper_minimal_root: restrain the "
                              "retained release-root bottom only in the build direction plus three in-plane rigid "
-                             "DOFs (formal Kaess 2023 cantilever semantics; requires --release-cell-set).")
+                             "DOFs (formal Kaess 2023 cantilever semantics; requires --release-cell-set). "
+                             "symmetry_plane: half-model free-free release: u_n=0 on the --symmetry-plane-axis/-side "
+                             "face plus two in-plane anchors on retained printed plane nodes (rank 6 checked).")
     parser.add_argument("--release-anchor-points", type=float, nargs=9, metavar="XYZ",
                         default=cfg(config, "release_anchor_points", None),
                         help="rigid_body mode only: three points (x1 y1 z1 x2 y2 z2 x3 y3 z3, mesh coordinates); "
