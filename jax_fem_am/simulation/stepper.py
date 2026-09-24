@@ -76,6 +76,7 @@ from jax_fem_am.physics.mechanics import ThermoMechanical
 from jax_fem_am.physics.release import (
     load_release_cell_set,
     make_anchor_mechanics_bc,
+    remove_rigid_body_motion,
     select_rigid_body_anchor_nodes,
     validate_rigid_body_anchor_rank,
     make_box_anchor_mechanics_bc,
@@ -1319,7 +1320,10 @@ def main():
                 raise ValueError("--release-anchor-mode box requires --release-anchor-box")
             release_bc = make_box_anchor_mechanics_bc(points, args.release_anchor_box)
         else:
-            rigid_anchor_ids = select_rigid_body_anchor_nodes(points, printed_node_ids)
+            release_anchor_points = getattr(args, "release_anchor_points", None)
+            rigid_anchor_ids = select_rigid_body_anchor_nodes(
+                points, printed_node_ids, release_anchor_points
+            )
             rigid_anchor_rank = validate_rigid_body_anchor_rank(
                 points, rigid_anchor_ids, printed_node_ids
             )
@@ -1329,7 +1333,9 @@ def main():
                 f"constraint rank {rigid_anchor_rank}/6 on retained printed material "
                 f"({len(printed_node_ids)} candidate nodes, {int(release_cut_cell.sum())} cut cells excluded)"
             )
-            release_bc = make_anchor_mechanics_bc(points, candidate_node_ids=printed_node_ids)
+            release_bc = make_anchor_mechanics_bc(
+                points, candidate_node_ids=printed_node_ids, anchor_points=release_anchor_points
+            )
         if release_cell_set is not None:
             anchor_nodes, anchor_components, _ = (
                 mechanics.fes[0].Dirichlet_boundary_conditions(release_bc)
@@ -1491,6 +1497,21 @@ def main():
         release_mechanics.prefer_direct_linear_solver = True
         u_release = run_mechanics(release_mechanics, u_guess, mechanics_params, mechanics_newton_overrides)
         quad_stress = release_mechanics.compute_cell_stress(u_release[0], mechanics_params)
+        # Release deformation with the best-fit rigid-body motion of the retained
+        # printed nodes removed: independent of the anchor gauge (2026-09-24).
+        release_u_deform_max = None
+        if len(printed_node_ids) >= 3:
+            _u_def, _t, _w = remove_rigid_body_motion(
+                onp.asarray(points), onp.asarray(u_release[0]), printed_node_ids
+            )
+            _u_def_mag = onp.linalg.norm(_u_def, axis=1)
+            release_u_deform_max = float(_u_def_mag[printed_node_ids].max())
+            if release_point_fields is None:
+                release_point_fields = {}
+            release_point_fields["release_u_deform_x"] = _u_def[:, 0]
+            release_point_fields["release_u_deform_y"] = _u_def[:, 1]
+            release_point_fields["release_u_deform_z"] = _u_def[:, 2]
+            release_point_fields["release_u_deform_mag"] = _u_def_mag
         vtk_path = os.path.join(args.output_dir, "release.vtu")
         save_step(
             release_mechanics.fes[0],
@@ -1526,6 +1547,7 @@ def main():
             f"release_vtk={vtk_path} release_u_max={release_u_max_retained:.12g} "
             f"release_u_mean={float(u_release_norm[printed_node_ids].mean()) if len(printed_node_ids) else 0.0:.12g} "
             f"release_u_max_all_nodes={float(onp.max(onp.abs(u_release_np))):.12g}"
+            + (f" release_u_deform_max={release_u_deform_max:.12g}" if release_u_deform_max is not None else "")
         )
 
 

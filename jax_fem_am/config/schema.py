@@ -323,6 +323,11 @@ def build_parser(config=None):
                              "partial EDM/saw cut that leaves a root attachment. paper_minimal_root: restrain the "
                              "retained release-root bottom only in the build direction plus three in-plane rigid "
                              "DOFs (formal Kaess 2023 cantilever semantics; requires --release-cell-set).")
+    parser.add_argument("--release-anchor-points", type=float, nargs=9, metavar="XYZ",
+                        default=cfg(config, "release_anchor_points", None),
+                        help="rigid_body mode only: three points (x1 y1 z1 x2 y2 z2 x3 y3 z3, mesh coordinates); "
+                             "the retained node nearest to each becomes anchor 0/1/2 of the 3-2-1 scheme "
+                             "(anchor0 fixes x,y,z, anchor1 y,z, anchor2 z). Default: automatic selection.")
     parser.add_argument("--release-anchor-box", type=float, nargs=6, metavar=("XMIN", "XMAX", "YMIN", "YMAX", "ZMIN", "ZMAX"),
                         default=cfg(config, "release_anchor_box", None),
                         help="Axis-aligned box (mesh coordinates) whose nodes stay clamped during a box-mode release.")
