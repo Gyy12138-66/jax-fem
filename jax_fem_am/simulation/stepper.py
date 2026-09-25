@@ -107,6 +107,7 @@ from jax_fem_am.process.activation import (
     physical_node_mask,
     resolve_surface_active_mask,
     should_activate_layer_for_state,
+    update_island_deferral,
     uses_strict_active_domain,
 )
 from jax_fem_am.process.scan_path import (
@@ -138,6 +139,16 @@ from jax_fem.utils import save_sol
 
 
 ID_TO_AXIS = ("x", "y", "z")
+
+
+def note_mechanical_birth(event_quad):
+    """Queue a stress-free reference capture for late mechanical births.
+
+    The v03 loop carries no tensor state of its own, so this is a no-op; the
+    v06 adapter (runner.install_mechanical_birth_hook) replaces it with a
+    version that adds ``event_quad`` to the pending reference events.
+    """
+    return None
 
 
 def run_mechanics(mechanics, u_guess, params, newton_overrides=None):
@@ -946,6 +957,21 @@ def main():
     last_flow_curve_active_quad = None
     permanent_powder_quad = make_quad_scalar(
         permanent_powder_cell.astype(onp.float64), thermal.fes[0].num_quads)
+    island_deferral = getattr(args, "mechanics_island_deferral", "off") == "node"
+    island_anchor_cell = substrate_cell | support_cell
+    if island_deferral:
+        if not strict_active_domain:
+            raise ValueError(
+                "--mechanics-island-deferral node requires strict void future "
+                "layers (layer_on_scan + future_layer_mode void, or along_path)"
+            )
+        if not island_anchor_cell.any():
+            raise ValueError(
+                "--mechanics-island-deferral node needs a substrate/support "
+                "fixture band to anchor the load path"
+            )
+    island_deferred_cell = onp.zeros(len(cells), dtype=bool)
+    island_checked_load_cell = None
 
     highest_printed_layer = 0
 
@@ -1194,6 +1220,47 @@ def main():
         T_mech_quad = clamp_mechanics_temperature(T_quad, args.mechanics_temperature_floor)
         dT_quad = (T_mech_quad - T_ref_quad) * mechanical_active_quad
         active_factor_quad, E_quad, alpha_quad, poisson_quad, yield_quad, hardening_quad = mechanics_material_quads(T_mech_quad, mechanical_active_quad, phase_quad, args, tables)
+        mechanical_printed_cell = printed_cell
+        if island_deferral:
+            # Floating-island mechanical birth. Connectivity runs over the
+            # cells that carry stiffness (strict-domain powder contributes
+            # exactly zero), so an island bridged only by unmelted powder is
+            # still floating. Recomputed only when that set changes.
+            load_cell = contributing_cell_mask(active_factor_quad)
+            if (
+                island_checked_load_cell is None
+                or not onp.array_equal(load_cell, island_checked_load_cell)
+            ):
+                deferred, born = update_island_deferral(
+                    cells,
+                    load_cell,
+                    island_anchor_cell,
+                    island_deferred_cell,
+                    num_nodes=len(points),
+                )
+                if born.any():
+                    # Stress free in the current configuration: the island
+                    # nodes were held at zero displacement while it floated.
+                    note_mechanical_birth(
+                        make_quad_scalar(born.astype(onp.float64), thermal.fes[0].num_quads) > 0.5
+                    )
+                if deferred.any() or born.any():
+                    print(
+                        f"mechanics island deferral: step={state.global_step} "
+                        f"deferred_cells={int(deferred.sum())} "
+                        f"newly_connected_cells={int(born.sum())}"
+                    )
+                island_deferred_cell = deferred
+                island_checked_load_cell = load_cell
+            if island_deferred_cell.any():
+                mechanical_printed_cell = printed_cell & (~island_deferred_cell)
+                keep_quad = make_quad_scalar(
+                    (~island_deferred_cell).astype(onp.float64),
+                    thermal.fes[0].num_quads,
+                )
+                mechanical_active_quad = mechanical_active_quad * keep_quad
+                dT_quad = (T_mech_quad - T_ref_quad) * mechanical_active_quad
+                active_factor_quad, E_quad, alpha_quad, poisson_quad, yield_quad, hardening_quad = mechanics_material_quads(T_mech_quad, mechanical_active_quad, phase_quad, args, tables)
         flow_curve_active_quad = flow_curve_active_quads(
             mechanical_active_quad,
             phase_quad,
@@ -1219,7 +1286,13 @@ def main():
         ]
 
         is_last = state.global_step == step_states[-1].global_step
-        did_mechanics = should_run_mechanics(state.global_step, args) or (is_last and args.mechanics_every > 0)
+        if is_last and island_deferral and island_deferred_cell.any():
+            print(
+                "WARNING: mechanics island deferral: "
+                f"{int(island_deferred_cell.sum())} printed cells never connected "
+                "to the fixture and stay out of the build mechanics"
+            )
+        did_mechanics =should_run_mechanics(state.global_step, args) or (is_last and args.mechanics_every > 0)
         if did_mechanics:
             if strict_active_domain:
                 mechanical_physical_nodes = physical_node_mask(
@@ -1240,7 +1313,7 @@ def main():
                 )
             # Lateral powder springs follow the printed state: only faces of
             # printed cells are embedded in powder and receive support.
-            mechanics.set_powder_surface_mask(printed_cell)
+            mechanics.set_powder_surface_mask(mechanical_printed_cell)
             u_guess = run_mechanics_with_cutback(
                 mechanics, u_guess, mechanics_params, mechanics_newton_overrides, args,
                 last_T_mech_quad, last_mechanical_active_quad, T_ref_quad,

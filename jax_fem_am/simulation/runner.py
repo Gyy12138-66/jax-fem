@@ -229,6 +229,34 @@ def install_mechanics_event_wrapper(base_module):
     return True
 
 
+def install_mechanical_birth_hook(base_module):
+    """Route late mechanical births into the stress-free reference events.
+
+    A floating island (``--mechanics-island-deferral node``) melts, solidifies
+    and cools outside the mechanics solve with its nodes held at zero. When
+    it first connects to the fixture its cells join ``pending_reference``:
+    the next mechanics call captures ``eps_ref = eps - eps_th - eps_p`` for
+    them (eps = 0 and eps_p = 0 there), so the island is born stress free
+    and its free shrinkage while floating is not replayed as load. The
+    event also forces that mechanics call (install_mechanics_event_wrapper).
+    """
+    current = base_module.note_mechanical_birth
+    if getattr(current, "_v06_mechanical_birth_hook", False):
+        return False
+    np = base_module.np
+
+    def note_mechanical_birth_with_reference(event_quad):
+        event = np.asarray(event_quad, dtype=bool)
+        if REGISTRY.pending_reference is None:
+            REGISTRY.pending_reference = event
+        else:
+            REGISTRY.pending_reference = REGISTRY.pending_reference | event
+
+    note_mechanical_birth_with_reference._v06_mechanical_birth_hook = True
+    base_module.note_mechanical_birth = note_mechanical_birth_with_reference
+    return True
+
+
 def install_output_state_wrapper(base_module):
     """Append v06 tensor state and elastic strain to VTU cell fields."""
     current = base_module.make_quad_stress_cell_infos
@@ -829,6 +857,7 @@ def install_v06_adapter(base_module, profiler=None):
     base_module.ThermoMechanical = StateSafeThermoMechanical
     install_phase_lifecycle_wrapper(base_module)
     install_mechanics_event_wrapper(base_module)
+    install_mechanical_birth_hook(base_module)
     install_output_state_wrapper(base_module)
     install_step_state_capture_wrappers(base_module)
     base_module.run_mechanics = run_mechanics_with_state

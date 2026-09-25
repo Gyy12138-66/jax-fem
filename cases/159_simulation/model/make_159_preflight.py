@@ -464,6 +464,10 @@ def runner_contract(cfg: dict, *, mesh_path: Path, path: Path, material: Path, l
                  "--symmetry-plane-side", str(mech.get("symmetry_plane_side", "min"))]
     if bool(runner.get("thermal_symmetry_plane", False)):
         argv.append("--thermal-symmetry-plane")
+    if mech.get("island_deferral", "off") != "off":
+        # floating voxel islands stay out of the mechanics solve until they
+        # connect to the fixture (0911 half model); absent key = contract unchanged
+        argv += ["--mechanics-island-deferral", str(mech["island_deferral"])]
     if lin.get("cell_target_batch_size"):
         argv += ["--xla-cell-target-batch-size", str(int(lin["cell_target_batch_size"]))]
     if lin["solver"] == "jax":
