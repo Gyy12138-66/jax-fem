@@ -541,6 +541,63 @@ class V06AdapterTest(unittest.TestCase):
         )
         self.assertFalse(bool(np.asarray(driver.REGISTRY.pending_reference).any()))
 
+    def test_stepper_birth_hook_is_a_noop_without_the_adapter(self):
+        base = load_fresh_v03("v03_v06_birth_hook_noop_test")
+        self.assertIsNone(
+            base.note_mechanical_birth(jnp.ones((1, 1, 1), dtype=bool))
+        )
+        self.assertIsNone(driver.REGISTRY.pending_reference)
+
+    def test_mechanical_birth_joins_pending_reference_and_forces_mechanics(self):
+        base = load_fresh_v03("v03_v06_birth_hook_test")
+        driver.install_v06_adapter(base)
+        self.assertFalse(driver.install_mechanical_birth_hook(base))
+        driver.REGISTRY.pending_reference = jnp.asarray(
+            [[[True]], [[False]], [[False]]]
+        )
+
+        base.note_mechanical_birth(jnp.asarray([[[False]], [[False]], [[True]]]))
+
+        np.testing.assert_array_equal(
+            np.asarray(driver.REGISTRY.pending_reference)[:, 0, 0],
+            [True, False, True],
+        )
+        self.assertTrue(
+            base.should_run_mechanics(3, SimpleNamespace(mechanics_every=100))
+        )
+
+    def test_island_born_after_cooling_is_stress_free(self):
+        # A floating island melted, solidified at the relaxation temperature
+        # and cooled 800 K with its nodes held at zero. At birth its free
+        # shrinkage must be absorbed into eps_ref, not replayed as stress.
+        base = load_fresh_v03("v03_v06_island_birth_test")
+        base.run_mechanics = lambda _problem, u_guess, _params, _overrides=None: u_guess
+        driver.install_v06_adapter(base)
+        build = object.__new__(base.ThermoMechanical)
+        build.mechanics_model = "linear_elastic"
+        build.dim = 3
+        build._eps_p_state = jnp.zeros((1, 1, 3, 3))
+        build._eps_ref_state = jnp.zeros((1, 1, 3, 3))
+        build._relaxation_mask = jnp.ones((1, 1, 1), dtype=bool)
+        build._u_grads = lambda _sol: jnp.zeros((1, 1, 3, 3))
+        driver.REGISTRY.relaxation_mask = jnp.ones((1, 1, 1), dtype=bool)
+        alpha = 1.5e-5
+        dT = -800.0
+        params = [jnp.zeros((1, 1, 1))] * 9
+        params[1] = jnp.full((1, 1, 1), dT)
+        params[4] = jnp.full((1, 1, 1), alpha)
+
+        base.note_mechanical_birth(jnp.ones((1, 1, 1), dtype=bool))
+        base.run_mechanics(build, [jnp.zeros((1, 3))], params)
+
+        thermal = alpha * dT * np.eye(3)
+        np.testing.assert_allclose(
+            np.asarray(build._eps_ref_state[0, 0]), -thermal, rtol=1e-12
+        )
+        elastic = 0.0 - np.asarray(build._eps_ref_state[0, 0]) - thermal
+        np.testing.assert_allclose(elastic, 0.0, atol=1e-15)
+        self.assertFalse(bool(np.asarray(driver.REGISTRY.pending_reference).any()))
+
     def test_release_solve_adopts_and_commits_build_state(self):
         base = load_fresh_v03("v03_v06_release_test")
         base.run_mechanics = lambda _problem, u_guess, _params, _overrides=None: u_guess

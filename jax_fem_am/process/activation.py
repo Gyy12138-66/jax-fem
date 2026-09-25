@@ -180,6 +180,69 @@ def contributing_cell_mask(*quad_fields):
     return mask
 
 
+def anchored_cell_mask(cells, member_cell, anchor_cell, num_nodes=None):
+    """Return member cells node-connected, through member cells, to an anchor.
+
+    Two cells are connected when they share at least one node. A member
+    component that contains no anchor cell (substrate/support fixture) is a
+    fully floating island. Anchor cells are always members and anchored.
+    """
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    cells = onp.asarray(cells)
+    member_cell = onp.asarray(member_cell, dtype=bool)
+    anchor_cell = onp.asarray(anchor_cell, dtype=bool)
+    if cells.ndim != 2:
+        raise ValueError("cells must have shape (num_cells, nodes_per_cell)")
+    num_cells, nodes_per_cell = cells.shape
+    if member_cell.shape != (num_cells,) or anchor_cell.shape != (num_cells,):
+        raise ValueError(
+            "member_cell and anchor_cell must have shape (num_cells,), "
+            f"got {member_cell.shape} and {anchor_cell.shape} for {num_cells} cells"
+        )
+    if num_nodes is None:
+        num_nodes = int(cells.max()) + 1 if cells.size else 0
+    member = member_cell | anchor_cell
+    member_ids = onp.flatnonzero(member)
+    anchored = onp.zeros(num_cells, dtype=bool)
+    if member_ids.size == 0:
+        return anchored
+    # Bipartite cell-node graph: vertex i < num_cells is a cell, num_cells + n
+    # is mesh node n. Components of this graph are node-sharing cell groups.
+    rows = onp.repeat(member_ids, nodes_per_cell)
+    cols = num_cells + cells[member_ids].ravel()
+    size = num_cells + int(num_nodes)
+    graph = csr_matrix(
+        (onp.ones(rows.size, dtype=onp.int8), (rows, cols)),
+        shape=(size, size),
+    )
+    _, labels = connected_components(graph, directed=False)
+    anchor_labels = onp.unique(labels[onp.flatnonzero(anchor_cell)])
+    anchored[member_ids] = onp.isin(labels[member_ids], anchor_labels)
+    return anchored
+
+
+def update_island_deferral(cells, load_cell, anchor_cell, previous_deferred, num_nodes=None):
+    """One step of floating-island mechanical birth.
+
+    ``load_cell`` marks the cells that carry stiffness (under strict void
+    layers, powder contributes exactly zero, so an island bridged only by
+    unmelted powder still floats). A load cell whose node-connected load
+    component holds no fixture cell is a floating island: its six rigid-body
+    modes see no stiffness and the mechanics system is singular (0911 half
+    model: printed layers 76-78, 234-243, 250-251). Returns
+    ``(deferred, born)``: the cells to keep out of the mechanics solve now,
+    and the previously deferred cells that connected at this update.
+    """
+    load_cell = onp.asarray(load_cell, dtype=bool)
+    previous_deferred = onp.asarray(previous_deferred, dtype=bool)
+    anchored = anchored_cell_mask(cells, load_cell, anchor_cell, num_nodes=num_nodes)
+    deferred = load_cell & (~anchored)
+    born = previous_deferred & anchored
+    return deferred, born
+
+
 def make_inactive_node_dirichlet_bc(inactive_node_mask, *, vec, value):
     """Create zero-contribution DOF constraints for inactive-only nodes."""
 
