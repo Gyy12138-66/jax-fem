@@ -30,6 +30,7 @@ from jax_fem_am.physics.mechanics import ThermoMechanical
 from jax_fem_am.process.activation import (
     contributing_cell_mask,
     physical_node_mask,
+    shared_node_cell_pairs,
     update_island_deferral,
 )
 
@@ -110,6 +111,61 @@ def _free_tangent(mechanical_active_cell):
         np.arange(3), int(physical.sum())
     )
     return tangent[np.ix_(free, free)], load_cell
+
+
+def _vertex_joint_tangent(mechanical_active_cell):
+    """Fixed-bottom solid cell + solid cell touching it at one vertex (E10i-hybrid step 5070)."""
+    corners = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0),
+               (0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)]
+    lattice = sorted({(x + dx, y + dy, z + dz) for (x, y, z) in ((0, 0, 0), (1, 1, 1))
+                      for dx, dy, dz in corners})
+    index = {p: k for k, p in enumerate(lattice)}
+    points = np.asarray(lattice, dtype=np.float64)
+    cells = np.asarray([[index[(x + dx, y + dy, z + dz)] for dx, dy, dz in corners]
+                        for (x, y, z) in ((0, 0, 0), (1, 1, 1))], dtype=np.int32)
+    problem = ThermoMechanical(
+        mesh=Mesh(points, cells, ele_type="HEX8"), vec=3, dim=3, ele_type="HEX8",
+        dirichlet_bc_info=None, additional_info=("linear_elastic", None, 0.0, 0.0, (), False),
+    )
+    nq = problem.fes[0].num_quads
+    active_quad = make_quad_scalar(np.asarray(mechanical_active_cell, dtype=np.float64), nq)
+    phase_quad = make_quad_scalar(np.asarray([STATE_SUPPORT, STATE_SOLID]), nq)
+    factor, young, alpha, poisson, yield_stress, hardening = mechanics_material_quads(
+        jnp.zeros_like(active_quad), active_quad, phase_quad, _args(),
+        {"E": None, "alpha": None, "poisson": None},
+    )
+    problem.set_params([jnp.zeros_like(active_quad), jnp.zeros_like(active_quad), factor, young,
+                        alpha, poisson, yield_stress, hardening, jnp.zeros_like(active_quad)])
+    problem.newton_update([jnp.zeros((len(points), 3))])
+    ndof = 3 * len(points)
+    tangent = scipy.sparse.coo_matrix((problem.V, (problem.I, problem.J)), shape=(ndof, ndof)).toarray()
+    load_cell = contributing_cell_mask(factor)
+    physical = physical_node_mask(cells, load_cell, num_nodes=len(points))
+    physical[points[:, 2] == 0.0] = False                      # clamped base
+    free = np.repeat(np.flatnonzero(physical) * 3, 3) + np.tile(np.arange(3), int(physical.sum()))
+    return tangent[np.ix_(free, free)], cells, load_cell, len(points)
+
+
+def test_vertex_joint_is_a_mechanism_and_face_deferral_removes_it():
+    stiff, cells, load_cell, n_points = _vertex_joint_tangent(np.ones(2, dtype=bool))
+    eig = np.linalg.eigvalsh(stiff)
+    # three rotations about the shared vertex carry no stiffness
+    assert np.sum(eig < 1.0e-9 * eig.max()) == 3
+
+    anchor = np.asarray([True, False])
+    node_deferred, _ = update_island_deferral(
+        cells, load_cell, anchor, np.zeros(2, dtype=bool), num_nodes=n_points
+    )
+    assert not node_deferred.any()          # 'node' accepts the vertex joint
+    face_deferred, _ = update_island_deferral(
+        cells, load_cell, anchor, np.zeros(2, dtype=bool), num_nodes=n_points,
+        adjacency=shared_node_cell_pairs(cells, 3, num_nodes=n_points),
+    )
+    np.testing.assert_array_equal(face_deferred, [False, True])
+
+    stiff_face, *_ = _vertex_joint_tangent(~face_deferred)
+    eig_face = np.linalg.eigvalsh(stiff_face)
+    assert eig_face.min() > 1.0e-6 * eig_face.max()
 
 
 def test_floating_island_tangent_is_singular_and_deferral_fixes_it():
