@@ -180,12 +180,40 @@ def contributing_cell_mask(*quad_fields):
     return mask
 
 
-def anchored_cell_mask(cells, member_cell, anchor_cell, num_nodes=None):
-    """Return member cells node-connected, through member cells, to an anchor.
+def shared_node_cell_pairs(cells, min_shared_nodes, num_nodes=None):
+    """Return ``(i, j)`` arrays of cell pairs that share >= ``min_shared_nodes`` nodes.
 
-    Two cells are connected when they share at least one node. A member
-    component that contains no anchor cell (substrate/support fixture) is a
-    fully floating island. Anchor cells are always members and anchored.
+    Computed once per mesh; ``anchored_cell_mask(adjacency=...)`` then only
+    filters the pairs by membership at every update.
+    """
+    from scipy.sparse import csr_matrix
+
+    cells = onp.asarray(cells)
+    num_cells, nodes_per_cell = cells.shape
+    if num_nodes is None:
+        num_nodes = int(cells.max()) + 1 if cells.size else 0
+    incidence = csr_matrix(
+        (
+            onp.ones(cells.size, dtype=onp.int32),
+            (onp.repeat(onp.arange(num_cells), nodes_per_cell), cells.ravel()),
+        ),
+        shape=(num_cells, int(num_nodes)),
+    )
+    shared = (incidence @ incidence.T).tocoo()
+    keep = (shared.row < shared.col) & (shared.data >= int(min_shared_nodes))
+    return shared.row[keep], shared.col[keep]
+
+
+def anchored_cell_mask(cells, member_cell, anchor_cell, num_nodes=None, adjacency=None):
+    """Return member cells connected, through member cells, to an anchor.
+
+    By default two cells are connected when they share at least one node. A
+    member component that contains no anchor cell (substrate/support fixture)
+    is a fully floating island. ``adjacency`` (from shared_node_cell_pairs)
+    replaces that rule, e.g. by face contact: a cluster hanging on the part by
+    one vertex or one edge still rotates freely about it (0911 E10i-hybrid:
+    a 9-cell island joined at step 5070 through a cell that touched the part
+    at a single node). Anchor cells are always members and anchored.
     """
     from scipy.sparse import csr_matrix
     from scipy.sparse.csgraph import connected_components
@@ -208,6 +236,17 @@ def anchored_cell_mask(cells, member_cell, anchor_cell, num_nodes=None):
     anchored = onp.zeros(num_cells, dtype=bool)
     if member_ids.size == 0:
         return anchored
+    if adjacency is not None:
+        pair_i, pair_j = adjacency
+        both = member[pair_i] & member[pair_j]
+        graph = csr_matrix(
+            (onp.ones(int(both.sum()), dtype=onp.int8), (pair_i[both], pair_j[both])),
+            shape=(num_cells, num_cells),
+        )
+        _, labels = connected_components(graph, directed=False)
+        anchor_labels = onp.unique(labels[onp.flatnonzero(anchor_cell)])
+        anchored[member_ids] = onp.isin(labels[member_ids], anchor_labels)
+        return anchored
     # Bipartite cell-node graph: vertex i < num_cells is a cell, num_cells + n
     # is mesh node n. Components of this graph are node-sharing cell groups.
     rows = onp.repeat(member_ids, nodes_per_cell)
@@ -223,21 +262,25 @@ def anchored_cell_mask(cells, member_cell, anchor_cell, num_nodes=None):
     return anchored
 
 
-def update_island_deferral(cells, load_cell, anchor_cell, previous_deferred, num_nodes=None):
+def update_island_deferral(cells, load_cell, anchor_cell, previous_deferred, num_nodes=None, adjacency=None):
     """One step of floating-island mechanical birth.
 
     ``load_cell`` marks the cells that carry stiffness (under strict void
     layers, powder contributes exactly zero, so an island bridged only by
-    unmelted powder still floats). A load cell whose node-connected load
-    component holds no fixture cell is a floating island: its six rigid-body
-    modes see no stiffness and the mechanics system is singular (0911 half
-    model: printed layers 76-78, 234-243, 250-251). Returns
-    ``(deferred, born)``: the cells to keep out of the mechanics solve now,
-    and the previously deferred cells that connected at this update.
+    unmelted powder still floats). A load cell whose connected load component
+    holds no fixture cell is a floating island: its rigid-body modes see no
+    stiffness and the mechanics system is singular (0911 half model: printed
+    layers 76-78, 234-243, 250-251). Connectivity is node sharing by default,
+    or ``adjacency`` (e.g. face contact, which also rejects vertex/edge
+    hinges). Returns ``(deferred, born)``: the cells to keep out of the
+    mechanics solve now, and the previously deferred cells that connected at
+    this update.
     """
     load_cell = onp.asarray(load_cell, dtype=bool)
     previous_deferred = onp.asarray(previous_deferred, dtype=bool)
-    anchored = anchored_cell_mask(cells, load_cell, anchor_cell, num_nodes=num_nodes)
+    anchored = anchored_cell_mask(
+        cells, load_cell, anchor_cell, num_nodes=num_nodes, adjacency=adjacency
+    )
     deferred = load_cell & (~anchored)
     born = previous_deferred & anchored
     return deferred, born

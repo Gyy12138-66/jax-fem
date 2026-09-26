@@ -106,6 +106,7 @@ from jax_fem_am.process.activation import (
     parse_bead_elsets,
     physical_node_mask,
     resolve_surface_active_mask,
+    shared_node_cell_pairs,
     should_activate_layer_for_state,
     update_island_deferral,
     uses_strict_active_domain,
@@ -957,8 +958,15 @@ def main():
     last_flow_curve_active_quad = None
     permanent_powder_quad = make_quad_scalar(
         permanent_powder_cell.astype(onp.float64), thermal.fes[0].num_quads)
-    island_deferral = getattr(args, "mechanics_island_deferral", "off") == "node"
+    island_mode = getattr(args, "mechanics_island_deferral", "off")
+    island_deferral = island_mode in ("node", "face")
     island_anchor_cell = substrate_cell | support_cell
+    # 'face': >= 3 shared nodes, so vertex/edge hinges do not count as connections
+    island_adjacency = (
+        shared_node_cell_pairs(cells, 3, num_nodes=len(points))
+        if island_mode == "face"
+        else None
+    )
     if island_deferral:
         if not strict_active_domain:
             raise ValueError(
@@ -1237,6 +1245,7 @@ def main():
                     island_anchor_cell,
                     island_deferred_cell,
                     num_nodes=len(points),
+                    adjacency=island_adjacency,
                 )
                 if born.any():
                     # Stress free in the current configuration: the island
