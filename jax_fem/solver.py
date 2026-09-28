@@ -754,10 +754,12 @@ def _single_var_bc_flat(problem):
     if cache is not None and cache[0] == signature:
         return cache[1]
 
+    # Host (numpy) arithmetic: the constrained-DOF count changes with every
+    # element-birth update, and eager jnp ops would compile once per new size.
     if not node_inds_list:
         flat_bc = (
-            np.asarray([], dtype=np.int64),
-            np.asarray([], dtype=np.float64),
+            onp.asarray([], dtype=onp.int64),
+            onp.asarray([], dtype=onp.float64),
         )
         cache = (signature, flat_bc)
         problem._jax_fem_single_var_bc_flat_cache = cache
@@ -767,59 +769,105 @@ def _single_var_bc_flat(problem):
     flat_vals = []
     for node_inds, vec_inds, vals in zip(node_inds_list, vec_inds_list, vals_list):
         flat_inds.append((
-            np.asarray(node_inds) * vec + np.asarray(vec_inds) + offset
+            onp.asarray(node_inds, dtype=onp.int64) * vec
+            + onp.asarray(vec_inds, dtype=onp.int64) + offset
         ).reshape(-1))
-        flat_vals.append(np.asarray(vals).reshape(-1))
+        flat_vals.append(onp.asarray(vals).reshape(-1))
 
-    flat_bc = (np.concatenate(flat_inds), np.concatenate(flat_vals))
+    flat_bc = (onp.concatenate(flat_inds), onp.concatenate(flat_vals))
     cache = (signature, flat_bc)
     problem._jax_fem_single_var_bc_flat_cache = cache
     return flat_bc
 
 
-def _single_var_residual_bc_kernel(problem, single_var_bc, scale):
+def _single_var_bc_dense(problem, dofs):
+    """Full-length (mask, values) view of the single-var Dirichlet set.
+
+    Built on the host once per BC version and passed to module-level jitted
+    kernels as data, so the kernels compile once per problem size instead of
+    once per BC update (element birth updates the inactive-node constraints
+    every step; the old per-update closure baked the indices in as constants).
+    ``jnp.where`` on the mask applies the same per-entry arithmetic as the
+    former ``.at[flat_inds].set``, so results are bitwise identical.
+    Returns None for multi-var problems, or when no DOF is constrained.
+    """
+    single_var_bc = _single_var_bc_flat(problem)
+    if single_var_bc is None:
+        return None
     flat_inds, flat_vals = single_var_bc
     if flat_inds.size == 0:
         return None
+    n = int(dofs.shape[0])
+    cache = getattr(problem, '_jax_fem_single_var_bc_dense_cache', None)
+    # The cache keeps a reference to the flat tuple, so its identity cannot be
+    # recycled while the entry is alive.
+    if cache is not None and cache[0] is single_var_bc and cache[1] == n:
+        return cache[2]
+    mask = onp.zeros(n, dtype=bool)
+    mask[flat_inds] = True
+    vals = onp.zeros(n, dtype=flat_vals.dtype)
+    vals[flat_inds] = flat_vals
+    dense = (np.asarray(mask), np.asarray(vals))
+    problem._jax_fem_single_var_bc_dense_cache = (single_var_bc, n, dense)
+    return dense
+
+
+def _scaled_bc_vals(problem, dense, scale):
+    """Prescribed values times ``scale``, multiplied outside the residual kernel.
+
+    Mirrors the former eager ``flat_vals * scale``: fusing the multiply into
+    the kernel lets XLA:CPU contract it into an FMA and changes the last bit.
+    A traced ``scale`` (arc-length continuation) multiplies in the trace, as
+    the former fallback did.
+    """
+    vals = dense[1]
     try:
         scale_value = float(scale)
-    except (TypeError, ValueError):
-        return None
+    except (TypeError, ValueError, jax.errors.ConcretizationTypeError):
+        return vals * scale
+    if scale_value == 1.0:
+        return vals
+    cache = getattr(problem, '_jax_fem_single_var_bc_scaled_cache', None)
+    if cache is not None and cache[0] is dense and cache[1] == scale_value:
+        return cache[2]
+    scaled = vals * scale_value
+    problem._jax_fem_single_var_bc_scaled_cache = (dense, scale_value, scaled)
+    return scaled
 
-    cache_key = (id(flat_inds), id(flat_vals), scale_value)
-    cache = getattr(problem, '_jax_fem_single_var_residual_bc_jit_cache', None)
-    if cache is not None and cache[0] == cache_key:
-        return cache[1]
 
-    scaled_flat_vals = flat_vals * scale_value
+@jax.jit
+def _dense_residual_bc(res_vec, dofs, mask, scaled_vals):
+    return np.where(mask, dofs - scaled_vals, res_vec).astype(res_vec.dtype)
 
-    @jax.jit
-    def apply_single_var_residual_bc(res_vec, dofs):
-        return res_vec.at[flat_inds].set(
-            dofs[flat_inds] - scaled_flat_vals,
-            unique_indices=True,
-        )
 
-    problem._jax_fem_single_var_residual_bc_jit_cache = (
-        cache_key,
-        apply_single_var_residual_bc,
-    )
-    return apply_single_var_residual_bc
+@jax.jit
+def _dense_assign(dofs, mask, vals):
+    return np.where(mask, vals, dofs).astype(dofs.dtype)
+
+
+@jax.jit
+def _dense_fill(dofs, mask, value):
+    return np.where(mask, value, dofs).astype(dofs.dtype)
+
+
+@jax.jit
+def _dense_copy(dofs, mask):
+    return np.where(mask, dofs, np.zeros_like(dofs))
+
+
+@jax.jit
+def _dense_initial_guess(dofs, mask, vals):
+    return np.where(mask, vals - dofs, np.zeros_like(dofs)).astype(dofs.dtype)
 
 
 def apply_bc_vec(res_vec, dofs, problem, scale=1.):
     single_var_bc = _single_var_bc_flat(problem)
     if single_var_bc is not None:
-        flat_inds, flat_vals = single_var_bc
-        if flat_inds.size == 0:
+        dense = _single_var_bc_dense(problem, dofs)
+        if dense is None:
             return res_vec
-        kernel = _single_var_residual_bc_kernel(problem, single_var_bc, scale)
-        if kernel is not None:
-            return kernel(res_vec, dofs)
-        return res_vec.at[flat_inds].set(
-            dofs[flat_inds] - flat_vals * scale,
-            unique_indices=True,
-        )
+        return _dense_residual_bc(
+            res_vec, dofs, dense[0], _scaled_bc_vals(problem, dense, scale))
 
     res_list = problem.unflatten_fn_sol_list(res_vec)
     sol_list = problem.unflatten_fn_sol_list(dofs)
@@ -849,10 +897,10 @@ def apply_bc(res_fn, problem, scale=1.):
 def assign_bc(dofs, problem):
     single_var_bc = _single_var_bc_flat(problem)
     if single_var_bc is not None:
-        flat_inds, flat_vals = single_var_bc
-        if flat_inds.size == 0:
+        dense = _single_var_bc_dense(problem, dofs)
+        if dense is None:
             return dofs
-        return dofs.at[flat_inds].set(flat_vals, unique_indices=True)
+        return _dense_assign(dofs, *dense)
 
     sol_list = problem.unflatten_fn_sol_list(dofs)
     for ind, fe in enumerate(problem.fes):
@@ -867,10 +915,10 @@ def assign_bc(dofs, problem):
 def assign_ones_bc(dofs, problem):
     single_var_bc = _single_var_bc_flat(problem)
     if single_var_bc is not None:
-        flat_inds, _ = single_var_bc
-        if flat_inds.size == 0:
+        dense = _single_var_bc_dense(problem, dofs)
+        if dense is None:
             return dofs
-        return dofs.at[flat_inds].set(1., unique_indices=True)
+        return _dense_fill(dofs, dense[0], np.asarray(1., dtype=dofs.dtype))
 
     sol_list = problem.unflatten_fn_sol_list(dofs)
     for ind, fe in enumerate(problem.fes):
@@ -885,10 +933,10 @@ def assign_ones_bc(dofs, problem):
 def assign_zeros_bc(dofs, problem):
     single_var_bc = _single_var_bc_flat(problem)
     if single_var_bc is not None:
-        flat_inds, _ = single_var_bc
-        if flat_inds.size == 0:
+        dense = _single_var_bc_dense(problem, dofs)
+        if dense is None:
             return dofs
-        return dofs.at[flat_inds].set(0., unique_indices=True)
+        return _dense_fill(dofs, dense[0], np.asarray(0., dtype=dofs.dtype))
 
     sol_list = problem.unflatten_fn_sol_list(dofs)
     for ind, fe in enumerate(problem.fes):
@@ -903,11 +951,10 @@ def assign_zeros_bc(dofs, problem):
 def copy_bc(dofs, problem):
     single_var_bc = _single_var_bc_flat(problem)
     if single_var_bc is not None:
-        flat_inds, _ = single_var_bc
-        new_dofs = np.zeros_like(dofs)
-        if flat_inds.size == 0:
-            return new_dofs
-        return new_dofs.at[flat_inds].set(dofs[flat_inds], unique_indices=True)
+        dense = _single_var_bc_dense(problem, dofs)
+        if dense is None:
+            return np.zeros_like(dofs)
+        return _dense_copy(dofs, dense[0])
 
     new_dofs = np.zeros_like(dofs)
     sol_list = problem.unflatten_fn_sol_list(dofs)
@@ -930,21 +977,20 @@ def _assign_bc_zero_seed(dofs, problem):
     if single_var_bc is None:
         return assign_bc(np.zeros_like(dofs), problem)
 
-    flat_inds, flat_vals = single_var_bc
     cache_key = (
-        id(flat_inds),
-        id(flat_vals),
         tuple(getattr(dofs, 'shape', ())),
         str(getattr(dofs, 'dtype', None)),
     )
     cache = getattr(problem, '_jax_fem_single_var_bc_zero_seed_cache', None)
-    if cache is not None and cache[0] == cache_key:
-        return cache[1]
+    # Holding the flat tuple in the entry keeps its identity valid.
+    if cache is not None and cache[0] is single_var_bc and cache[1] == cache_key:
+        return cache[2]
 
     seed = np.zeros_like(dofs)
-    if flat_inds.size != 0:
-        seed = seed.at[flat_inds].set(flat_vals, unique_indices=True)
-    problem._jax_fem_single_var_bc_zero_seed_cache = (cache_key, seed)
+    dense = _single_var_bc_dense(problem, dofs)
+    if dense is not None:
+        seed = _dense_assign(seed, *dense)
+    problem._jax_fem_single_var_bc_zero_seed_cache = (single_var_bc, cache_key, seed)
     return seed
 
 
@@ -953,14 +999,10 @@ def _single_var_bc_initial_guess(dofs, problem):
     if single_var_bc is None:
         return None
 
-    flat_inds, flat_vals = single_var_bc
-    x0 = np.zeros_like(dofs)
-    if flat_inds.size != 0:
-        x0 = x0.at[flat_inds].set(
-            flat_vals - dofs[flat_inds],
-            unique_indices=True,
-        )
-    return x0
+    dense = _single_var_bc_dense(problem, dofs)
+    if dense is None:
+        return np.zeros_like(dofs)
+    return _dense_initial_guess(dofs, *dense)
 
 
 ################################################################################

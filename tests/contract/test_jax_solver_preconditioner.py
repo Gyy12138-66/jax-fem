@@ -84,37 +84,15 @@ class JaxSolvePreconditionerTest(unittest.TestCase):
             [1.0, 91.0, 3.0, 4.0, 84.0, 6.0],
         )
 
-    def test_single_var_apply_bc_vec_caches_jit_kernel_by_bc_and_scale(self):
+    def test_single_var_apply_bc_vec_applies_scale(self):
         problem = self.make_single_var_bc_problem()
         res_vec = jnp.asarray([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
         dofs = jnp.asarray([100.0, 101.0, 102.0, 103.0, 104.0, 105.0])
-        original_jit = jax_fem_solver.jax.jit
-        compiled = []
 
-        def fake_jit(fn=None, **_kwargs):
-            if fn is None:
-                return lambda actual_fn: fake_jit(actual_fn, **_kwargs)
-            compiled.append(fn)
+        first = jax_fem_solver.apply_bc_vec(res_vec, dofs, problem)
+        second = jax_fem_solver.apply_bc_vec(res_vec, dofs, problem)
+        scaled = jax_fem_solver.apply_bc_vec(res_vec, dofs, problem, scale=2.0)
 
-            def wrapped(*args, **kwargs):
-                return fn(*args, **kwargs)
-
-            return wrapped
-
-        try:
-            jax_fem_solver.jax.jit = fake_jit
-            first = jax_fem_solver.apply_bc_vec(res_vec, dofs, problem)
-            second = jax_fem_solver.apply_bc_vec(res_vec, dofs, problem)
-            scaled = jax_fem_solver.apply_bc_vec(
-                res_vec,
-                dofs,
-                problem,
-                scale=2.0,
-            )
-        finally:
-            jax_fem_solver.jax.jit = original_jit
-
-        self.assertEqual(len(compiled), 2)
         onp.testing.assert_array_equal(
             onp.asarray(first),
             [1.0, 91.0, 3.0, 4.0, 84.0, 6.0],
@@ -125,32 +103,33 @@ class JaxSolvePreconditionerTest(unittest.TestCase):
             [1.0, 81.0, 3.0, 4.0, 64.0, 6.0],
         )
 
-    def test_single_var_apply_bc_vec_jit_cache_rebuilds_when_bc_lists_change(self):
+    def test_single_var_bc_kernels_do_not_recompile_when_bc_changes(self):
+        # Element birth updates the constrained set every step; the kernels
+        # take the set as data, so a BC update (new values, new indices, new
+        # count) must not trigger a new XLA compilation.
         problem = self.make_single_var_bc_problem()
         res_vec = jnp.asarray([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
         dofs = jnp.asarray([100.0, 101.0, 102.0, 103.0, 104.0, 105.0])
-        original_jit = jax_fem_solver.jax.jit
-        compiled = []
+        kernels = (
+            jax_fem_solver._dense_residual_bc,
+            jax_fem_solver._dense_assign,
+        )
+        if not all(hasattr(k, "_cache_size") for k in kernels):
+            self.skipTest("jitted functions do not expose _cache_size")
 
-        def fake_jit(fn=None, **_kwargs):
-            if fn is None:
-                return lambda actual_fn: fake_jit(actual_fn, **_kwargs)
-            compiled.append(fn)
+        first = jax_fem_solver.apply_bc_vec(res_vec, dofs, problem)
+        jax_fem_solver.assign_bc(dofs, problem)
+        sizes = [k._cache_size() for k in kernels]
 
-            def wrapped(*args, **kwargs):
-                return fn(*args, **kwargs)
+        problem.fes[0].vals_list = [jnp.asarray([30.0, 40.0])]
+        second = jax_fem_solver.apply_bc_vec(res_vec, dofs, problem)
+        problem.fes[0].node_inds_list = [jnp.asarray([0, 1, 2])]
+        problem.fes[0].vec_inds_list = [jnp.asarray([0, 0, 1])]
+        problem.fes[0].vals_list = [jnp.asarray([1.0, 2.0, 3.0])]
+        third = jax_fem_solver.apply_bc_vec(res_vec, dofs, problem)
+        assigned = jax_fem_solver.assign_bc(dofs, problem)
 
-            return wrapped
-
-        try:
-            jax_fem_solver.jax.jit = fake_jit
-            first = jax_fem_solver.apply_bc_vec(res_vec, dofs, problem)
-            problem.fes[0].vals_list = [jnp.asarray([30.0, 40.0])]
-            second = jax_fem_solver.apply_bc_vec(res_vec, dofs, problem)
-        finally:
-            jax_fem_solver.jax.jit = original_jit
-
-        self.assertEqual(len(compiled), 2)
+        self.assertEqual([k._cache_size() for k in kernels], sizes)
         onp.testing.assert_array_equal(
             onp.asarray(first),
             [1.0, 91.0, 3.0, 4.0, 84.0, 6.0],
@@ -158,6 +137,14 @@ class JaxSolvePreconditionerTest(unittest.TestCase):
         onp.testing.assert_array_equal(
             onp.asarray(second),
             [1.0, 71.0, 3.0, 4.0, 64.0, 6.0],
+        )
+        onp.testing.assert_array_equal(
+            onp.asarray(third),
+            [99.0, 2.0, 100.0, 4.0, 5.0, 102.0],
+        )
+        onp.testing.assert_array_equal(
+            onp.asarray(assigned),
+            [1.0, 101.0, 2.0, 103.0, 104.0, 3.0],
         )
 
     def test_single_var_assign_and_copy_bc_use_flat_dof_indices(self):
