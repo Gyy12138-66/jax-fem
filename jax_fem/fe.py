@@ -250,9 +250,15 @@ class FiniteElement:
                 else:
                     raise ValueError(f"Wrong number of arguments for location_fn: must be 1 or 2, get {num_args}")
 
-                node_inds = np.argwhere(jax.vmap(location_fn)(self.points, np.arange(self.num_total_nodes))).reshape(-1)
-                vec_inds = np.ones_like(node_inds, dtype=np.int32) * vecs[i]
-                values = jax.vmap(value_fns[i])(self.points[node_inds].reshape(-1, self.dim)).reshape(-1)
+                # Both device evaluations run over ALL nodes (fixed shapes, compiled once); the
+                # selection happens on the host. A device argwhere / gather over the selected
+                # nodes would compile once per new constrained count, i.e. at every element-birth
+                # update of the inactive-node constraints.
+                mask = onp.asarray(jax.vmap(location_fn)(self.points, np.arange(self.num_total_nodes))).reshape(-1)
+                node_inds = onp.flatnonzero(mask)
+                vec_inds = onp.full(node_inds.shape, vecs[i], dtype=onp.int32)
+                all_values = onp.asarray(jax.vmap(value_fns[i])(self.points)).reshape(len(mask), -1)
+                values = all_values[node_inds].reshape(-1)
                 node_inds_list.append(node_inds)
                 vec_inds_list.append(vec_inds)
                 vals_list.append(values)
