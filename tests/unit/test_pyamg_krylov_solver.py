@@ -821,3 +821,68 @@ class PyamgCpuMatchedVcycleTest(unittest.TestCase):
             x = solver(FakePetscMat(A), b, x0, {})
             self.assertLess(np.linalg.norm(A @ x - b) / np.linalg.norm(b), 1e-6)
         self.assertIsNone(solver._cache.cpu_levels)
+
+
+class PyamgL1FineSmootherTest(unittest.TestCase):
+    """fine_smoother="l1_jacobi" (CR-2026-10-12-01): the fine level of a reused
+    hierarchy smooths with 1/sum_j|s_ij| and omega 1, stable for any SPD tangent;
+    the default damped Jacobi keeps the build-time omega."""
+
+    def _drift(self):
+        seq, rows, coords = PyamgScalePolicyTest()._drift_sequence()
+        return seq, rows, SimpleNamespace(fes=[SimpleNamespace(points=coords, vec=3)])
+
+    def _solver(self, fine, mode="full"):
+        return amg.PyamgKrylovSolver(tol=1e-8, maxiter=400, max_coarse=20, device="jax", shape_mode=mode,
+                                     scale_policy="frozen", rebuild_iter_factor=0, fine_smoother=fine)
+
+    def test_options_are_validated_and_labelled(self):
+        with self.assertRaises(ValueError):
+            amg.PyamgKrylovSolver(fine_smoother="chebyshev")
+        with self.assertRaises(ValueError):   # the pyamg CPU reference has no l1 smoother
+            amg.PyamgKrylovSolver(device="cpu", fine_smoother="l1_jacobi")
+        self.assertIn("(fine l1)", self._solver("l1_jacobi").label)
+        self.assertNotIn("l1", self._solver("jacobi").label)
+        self.assertEqual(amg.PyamgKrylovSolver().fine_smoother, "jacobi")
+
+    def test_registry_default_and_choices(self):
+        from jax_fem_am.solvers.linear import normalize_linear_solver_spec
+        self.assertEqual(normalize_linear_solver_spec({"backend": "pyamg"})["fine_smoother"], "jacobi")
+        spec = normalize_linear_solver_spec({"backend": "pyamg", "device": "gpu", "fine_smoother": "L1_Jacobi"})
+        self.assertEqual(spec["fine_smoother"], "l1_jacobi")
+        with self.assertRaises(ValueError):
+            normalize_linear_solver_spec({"backend": "pyamg", "fine_smoother": "gs"})
+
+    def test_reused_hierarchy_solves_the_drift_sequence_in_both_shapes(self):
+        seq, rows, problem = self._drift()
+        for mode in ("full", "free"):
+            ref, l1 = self._solver("jacobi", mode), self._solver("l1_jacobi", mode)
+            ref.bind_problem(problem); l1.bind_problem(problem)
+            for A, b, x0 in seq:
+                xr = ref(FakePetscMat(A), b, x0, {}); xl = l1(FakePetscMat(A), b, x0, {})
+                self.assertLess(np.linalg.norm(A @ xl - b) / np.linalg.norm(b), 1e-6, mode)
+                np.testing.assert_array_equal(xl[rows], b[rows])
+                np.testing.assert_allclose(xl, xr, rtol=0, atol=1e-5 * np.abs(xr).max())
+            self.assertEqual(l1.stats["hierarchy_rebuilds"], 0, mode)
+            self.assertEqual(l1.stats["fallbacks"], 0, mode)
+            self.assertEqual(l1.stats["fine_smoother"], "l1_jacobi")
+            self.assertEqual(float(l1._cache.jax_omega0), 1.0, mode)       # undamped fine sweep
+            self.assertNotEqual(float(ref._cache.jax_omega0), 1.0, mode)   # default: build-time omega kept
+
+    def test_l1_inverse_diagonal_bounds_the_fine_spectrum(self):
+        # rho(D_l1^-1 S) <= 1 on the scaled free block of the LAST (most drifted) tangent
+        seq, rows, problem = self._drift()
+        s = self._solver("l1_jacobi", "free"); s.bind_problem(problem)
+        for A, b, x0 in seq:
+            s(FakePetscMat(A), b, x0, {})
+        A = seq[-1][0]
+        free = np.flatnonzero(~amg.pinned_rows(A))
+        sc = s._cache.scale_build
+        S = (sp.diags(sc) @ A[free][:, free] @ sp.diags(sc)).tocsr()
+        K = s._kernels_for(s._cache)
+        dinv = np.asarray(K["l1_dinv"](K["jnp"].asarray(S.data), K["jnp"].asarray(np.repeat(np.arange(S.shape[0]), np.diff(S.indptr))), num_rows=S.shape[0]))
+        np.testing.assert_allclose(dinv, 1.0 / np.asarray(abs(S).sum(axis=1)).ravel(), rtol=1e-12)
+        h = np.sqrt(dinv)
+        lam = np.linalg.eigvalsh((sp.diags(h) @ S @ sp.diags(h)).toarray())
+        self.assertLessEqual(lam.max(), 1.0 + 1e-12)
+        self.assertGreater(lam.min(), 0.0)
