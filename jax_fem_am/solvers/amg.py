@@ -642,8 +642,11 @@ class PyamgKrylovSolver:
         self.use_jax = device in ("gpu", "jax")
         if self.use_jax and smoother != "jacobi":
             raise ValueError("the gpu/jax V-cycle supports the jacobi smoother only")
-        if fine_smoother == "l1_jacobi" and not (self.use_jax and smoother == "jacobi"):
-            raise ValueError("fine_smoother='l1_jacobi' is implemented on the gpu/jax V-cycle with the jacobi smoother only")
+        if fine_smoother == "l1_jacobi" and not (
+            smoother == "jacobi" and (self.use_jax or (device == "cpu" and cpu_vcycle == "matched"))
+        ):
+            raise ValueError("fine_smoother='l1_jacobi' is implemented on the gpu/jax V-cycle and its CPU "
+                             "mirror (cpu_vcycle='matched') with the jacobi smoother only")
         if self.use_jax and method != "cg":
             raise ValueError("the gpu/jax path implements cg only (the free block is symmetric)")
         if int(smoother_sweeps) < 1:
@@ -1001,7 +1004,10 @@ class PyamgKrylovSolver:
         levels = []
         for l, lvl in enumerate(ml.levels[:-1]):
             A = lvl.A.tocsr()
-            omega = self.smoother_omega / float(rho_D_inv_A(A))
+            if l == 0 and self.fine_smoother == "l1_jacobi":
+                omega = 1.0   # l1-Jacobi: undamped, no spectral estimate (as on the device)
+            else:
+                omega = self.smoother_omega / float(rho_D_inv_A(A))
             P, R = lvl.P.tocsr(), lvl.R.tocsr()
             if l == 0:
                 levels.append((None, None, omega, P, R))
@@ -1277,7 +1283,9 @@ class PyamgKrylovSolver:
         if self._matched_cpu:
             S = S.tocsr()
             _, _, omega0, P0, R0 = cache.cpu_levels[0]
-            levels = [(S, 1.0 / S.diagonal(), omega0, P0, R0)] + list(cache.cpu_levels[1:])
+            dinv0 = (1.0 / onp.asarray(abs(S).sum(axis=1)).ravel() if self.fine_smoother == "l1_jacobi"
+                     else 1.0 / S.diagonal())
+            levels = [(S, dinv0, omega0, P0, R0)] + list(cache.cpu_levels[1:])
             y, iters, _rr = _pcg_np(S, rhs, y0, levels, cache.cpu_coarse_pinv, self.tol,
                                     self.maxiter, self.smoother_sweeps)
             rel = float(onp.linalg.norm(rhs - S @ y) / rhs_norm)

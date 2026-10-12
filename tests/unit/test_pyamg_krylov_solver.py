@@ -886,3 +886,19 @@ class PyamgL1FineSmootherTest(unittest.TestCase):
         lam = np.linalg.eigvalsh((sp.diags(h) @ S @ sp.diags(h)).toarray())
         self.assertLessEqual(lam.max(), 1.0 + 1e-12)
         self.assertGreater(lam.min(), 0.0)
+
+    def test_cpu_matched_mirror_follows_the_device_l1_path(self):
+        # cpu_vcycle="matched" is the NumPy mirror of the jax kernels: with the l1 fine
+        # smoother it must take the same Krylov path as the device (E3'-style comparison)
+        seq, rows, problem = self._drift()
+        dev = self._solver("l1_jacobi", "free")
+        cpu = amg.PyamgKrylovSolver(tol=1e-8, maxiter=400, max_coarse=20, device="cpu", cpu_vcycle="matched",
+                                    scale_policy="frozen", rebuild_iter_factor=0, fine_smoother="l1_jacobi")
+        dev.bind_problem(problem); cpu.bind_problem(problem)
+        for A, b, x0 in seq:
+            xd = dev(FakePetscMat(A), b, x0, {}); xc = cpu(FakePetscMat(A), b, x0, {})
+            np.testing.assert_allclose(xc, xd, rtol=0, atol=1e-7 * np.abs(xd).max())
+            self.assertLessEqual(abs(cpu.stats["last_iterations"] - dev.stats["last_iterations"]), 2)
+        self.assertEqual(cpu._cache.cpu_levels[0][2], 1.0)
+        self.assertIn("(fine l1)", cpu.label)
+
