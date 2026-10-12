@@ -54,3 +54,11 @@ enabled (default), the stepper's unconditional
 construction). Fixed by adding a no-op `set_flow_curve_active_mask` to the
 surrogate — thermal-only runs never assemble mechanics, so there is nothing
 to bind.
+
+## 2026-10-12 `tests/integration/test_kaess_release_cellset.py` 间歇性静默退出（rc=59）
+
+- 现象：`test_frozen_release_uses_only_root_normal_plus_three_rigid_dofs` 的参数用例中途进程退出，退出码 59，无 traceback（`-X faulthandler` 也无输出），dmesg 同时段有 `dxgkio_query_adapter_info: Ioctl failed`。
+- 频度：test 分支（bdb1c45）4 次中 1 次、precond-optimization 若干次；`JAX_PLATFORMS=cpu` 与 `JAX_PLATFORM_NAME=cpu` 都会出现；重跑即过（integration 140 passed, 1 skipped）。
+- 判断：与求解器改动无关（改动前的 test 分支同样出现）；疑与 WSL dxg 驱动或 MKL 退出路径有关，根因未查。
+- 门禁处理：integration 车道 rc=59 时重跑一次再判定，并在运行记录里注明。
+

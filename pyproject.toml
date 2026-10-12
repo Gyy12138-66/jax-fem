@@ -38,5 +38,6 @@ markers = [
     "solver: lane A fast-scan branch precond-optimization (flash acceleration) fast gate -- linear solver registry, pardiso, amg",
     "meltpool: lane B detail-scan branch meltpool-source (path-resolved / melt-pool) fast gate -- heat source, event table, V1 reduced regression",
     "gpu: requires a CUDA device",
+    "cpu_platform: requires the JAX CPU backend (run with JAX_PLATFORMS=cpu; skipped otherwise, see tests/run_gates.sh)",
     "slow: minutes or longer; excluded from lane fast gates",
 ]

@@ -32,6 +32,20 @@
 - 同一时间只允许一条主线合入 test；另一条随后 merge test，保持共同基点。
 - 输出目录分开：A 用 `~/work/159/output/v159_*`、`output/v2_*`；B 用 `output/mp_*`。
 
+## 门禁车道（2026-10-12 起）
+
+没有单一环境能跑完全部门禁，按车道分开跑：`bash tests/run_gates.sh`。
+
+| 车道 | 环境 | JAX 平台 | 内容 |
+|---|---|---|---|
+| unit / solver / meltpool / integration | `~/miniconda3/envs/jax-fem-gpu`（pyamg + CUDA） | `JAX_PLATFORMS=cpu` | 单元、两条线快速门、集成 |
+| gpu | 同上 | GPU（不强制 CPU） | `-m gpu` 标记的测试 |
+| contract | `~/miniforge3/envs/jax-fem-env`（流水线 CPU 侧环境，含 rfc3339-validator） | `JAX_PLATFORMS=cpu` | `tests/contract` 全量 |
+
+- `cpu_platform` 标记：Kaess G0-v2 审批测试声明 CPU 平台、与实际 JAX 后端比对；不在 CPU 后端上运行时自动跳过并给出原因（`tests/conftest.py`，不改冻结的 kaess 测试文件）。
+- run-manifest 的 date-time 测试在缺少 date-time 格式校验器的环境中跳过（原因写明），在 contract 车道正常运行。
+- `~/miniconda3/envs/jax-fem-env` 是早期环境，流水线不用，门禁也不用。
+
 ## 现有内容归类
 
 | 目录 / 分支 | 归类 |
