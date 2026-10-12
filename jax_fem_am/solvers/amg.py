@@ -91,6 +91,7 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
 SMOOTHERS = ("jacobi", "block_gauss_seidel")
+FINE_SMOOTHERS = ("jacobi", "l1_jacobi")
 DEVICES = ("cpu", "gpu", "jax")
 SCALE_POLICIES = ("current", "frozen")
 CPU_VCYCLES = ("pyamg", "matched")
@@ -438,10 +439,18 @@ def _make_jax_kernels():
 
     decouple_jit = jax.jit(decouple, donate_argnums=(0,))
 
+    def l1_dinv(data, rows, num_rows):
+        # l1-Jacobi: 1 / sum_j |s_ij| per row. For an SPD S, Gershgorin gives
+        # rho(D_l1^-1 S) <= 1, so the undamped sweep converges for ANY tangent --
+        # no spectral estimate, unlike omega/rho_build that a reused hierarchy keeps.
+        return 1.0 / jax.ops.segment_sum(jnp.abs(data), rows, num_segments=num_rows)
+
+    l1_dinv_jit = jax.jit(l1_dinv, static_argnames=("num_rows",))
+
     return {
         "jax": jax, "jnp": jnp, "csr": csr, "CSR": jsparse.CSR,
         "pcg": pcg_jit, "scale_data": scale_data_jit, "residual_norm": residual_norm,
-        "decouple": decouple_jit,
+        "decouple": decouple_jit, "l1_dinv": l1_dinv_jit,
     }
 
 
@@ -612,6 +621,7 @@ class PyamgKrylovSolver:
         recovery: str = "rebuild",
         refresh_every: int = 0,
         cpu_vcycle: str = "pyamg",
+        fine_smoother: str = "jacobi",
     ) -> None:
         if method not in ("cg", "bicgstab"):
             raise ValueError(f"pyamg method must be cg or bicgstab, got {method!r}")
@@ -625,11 +635,15 @@ class PyamgKrylovSolver:
             raise ValueError(f"device must be one of {DEVICES}, got {device!r}")
         if smoother not in SMOOTHERS:
             raise ValueError(f"smoother must be one of {SMOOTHERS}, got {smoother!r}")
+        if fine_smoother not in FINE_SMOOTHERS:
+            raise ValueError(f"fine_smoother must be one of {FINE_SMOOTHERS}, got {fine_smoother!r}")
         if shape_mode not in SHAPE_MODES:
             raise ValueError(f"shape_mode must be one of {SHAPE_MODES}, got {shape_mode!r}")
         self.use_jax = device in ("gpu", "jax")
         if self.use_jax and smoother != "jacobi":
             raise ValueError("the gpu/jax V-cycle supports the jacobi smoother only")
+        if fine_smoother == "l1_jacobi" and not (self.use_jax and smoother == "jacobi"):
+            raise ValueError("fine_smoother='l1_jacobi' is implemented on the gpu/jax V-cycle with the jacobi smoother only")
         if self.use_jax and method != "cg":
             raise ValueError("the gpu/jax path implements cg only (the free block is symmetric)")
         if int(smoother_sweeps) < 1:
@@ -709,9 +723,22 @@ class PyamgKrylovSolver:
         # at fixed_levels, dense coarse inverse, same PCG stop test -- so a CPU run
         # differs from the GPU one only in the device (2026-09-23, ablation E3').
         self.cpu_vcycle = cpu_vcycle
+        # Fine-level smoother of the V-cycle. "jacobi" = damped Jacobi with
+        # omega = smoother_omega / rho(D^-1 S) estimated when the hierarchy is
+        # BUILT; a reused hierarchy refreshes the fine matrix and 1/diag but keeps
+        # that omega, and the later Newton tangents of an increment raise rho by
+        # 1.5-1.9x: on 54 of the 108 v159 drift tangents omega*rho > 2, the sweep
+        # amplifies the top modes and the reused V-cycle is indefinite (PCG r^T z
+        # < 0; L170: 306/393 iterations vs 80-83 with a stable fine smoother).
+        # "l1_jacobi" = 1/sum_j|s_ij| with omega 1, stable for any SPD tangent;
+        # coarser levels keep damped Jacobi on their own (fixed) operators
+        # (change record CR-2026-10-12-01).
+        self.fine_smoother = fine_smoother
         smoother_label = (
             f"{smoother}x{self.smoother_sweeps}" if smoother == "jacobi" else "block_gs(sym)"
         )
+        if fine_smoother == "l1_jacobi":
+            smoother_label += "(fine l1)"
         shape_label = f", shape={self.shape_mode}" if self.use_jax else (
             ", vcycle=matched" if cpu_vcycle == "matched" else "")
         self.label = (
@@ -728,6 +755,7 @@ class PyamgKrylovSolver:
         self.stats: Dict[str, Any] = {
             "device": self.device,
             "shape_mode": self.shape_mode,
+            "fine_smoother": self.fine_smoother,
             "calls": 0,
             "iterations": 0,
             "setup_s": 0.0,
@@ -993,8 +1021,10 @@ class PyamgKrylovSolver:
         levels = []
         for l, lvl in enumerate(ml.levels[:-1]):
             A = lvl.A.tocsr()
-            rho = float(rho_D_inv_A(A))
-            omega = jnp.float64(self.smoother_omega / rho)
+            if l == 0 and self.fine_smoother == "l1_jacobi":
+                omega = jnp.float64(1.0)   # l1-Jacobi: undamped, no spectral estimate
+            else:
+                omega = jnp.float64(self.smoother_omega / float(rho_D_inv_A(A)))
             if l == 0:
                 # fine level: matrix and 1/diag are refreshed from the current
                 # values on every call (see __call__); only omega is kept.
@@ -1063,6 +1093,9 @@ class PyamgKrylovSolver:
         R0_full = sp.csr_matrix((R0.data, (R0.row, free[R0.col])), shape=(Rs[0].shape[0], n))
         omegas = []
         for l in range(L - 1):
+            if l == 0 and self.fine_smoother == "l1_jacobi":
+                omegas.append(1.0)   # l1-Jacobi: undamped, no spectral estimate
+                continue
             rho = float(rho_D_inv_A(As[l]))
             omegas.append(self.smoother_omega / rho)
         coarse_inv = _dense_inverse(As[-1].toarray())
@@ -1185,7 +1218,8 @@ class PyamgKrylovSolver:
             caps = self._struct.caps
         else:
             L = len(As)
-        omegas = [self.smoother_omega / float(rho_D_inv_A(As[l])) for l in range(L - 1)]
+        omegas = [1.0 if (l == 0 and self.fine_smoother == "l1_jacobi")
+                  else self.smoother_omega / float(rho_D_inv_A(As[l])) for l in range(L - 1)]
         try:
             levels = list(old)
             levels[0] = (None, None, jnp.float64(omegas[0]), old[0][3], old[0][4])
@@ -1263,7 +1297,9 @@ class PyamgKrylovSolver:
         if scale is not None:
             data_dev = K["scale_data"](data_dev, jnp.asarray(scale), cache.dev_rows, cache.dev_cols)
         S_dev = K["CSR"]((data_dev, cache.dev_cols, cache.dev_indptr), shape=(nf, nf))
-        if cache.dev_diag_pos is not None:
+        if self.fine_smoother == "l1_jacobi":
+            dinv0 = K["l1_dinv"](data_dev, cache.dev_rows, num_rows=nf)
+        elif cache.dev_diag_pos is not None:
             dinv0 = 1.0 / data_dev[cache.dev_diag_pos]
         else:
             diag = d * (scale * scale) if scale is not None else d
@@ -1295,7 +1331,11 @@ class PyamgKrylovSolver:
         if scale_full is not None:
             data_dev = K["scale_data"](data_dev, jnp.asarray(scale_full), st.dev_rows, st.dev_cols)
         S_dev = K["CSR"]((data_dev, st.dev_cols, st.dev_indptr), shape=(n, n))
-        dinv0 = 1.0 / data_dev[st.dev_diag_pos]
+        if self.fine_smoother == "l1_jacobi":
+            # decoupled pinned rows are unit rows: their l1 sum is 1, as before
+            dinv0 = K["l1_dinv"](data_dev, st.dev_rows, num_rows=n)
+        else:
+            dinv0 = 1.0 / data_dev[st.dev_diag_pos]
         levels = list(cache.jax_levels)
         _, _, omega0, P0, R0 = levels[0]
         levels[0] = (S_dev, dinv0, omega0, P0, R0)

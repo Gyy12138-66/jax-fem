@@ -34,7 +34,8 @@ Backends and their keys:
     pyamg    method (cg|bicgstab), near_nullspace (rigid_body|constant),
              scaled, tol, maxiter, max_coarse, rebuild (pattern|always),
              fallback (pardiso|none), device (cpu|gpu), smoother
-             (jacobi|block_gauss_seidel), smoother_sweeps, smoother_omega
+             (jacobi|block_gauss_seidel), smoother_sweeps, smoother_omega,
+             fine_smoother (jacobi|l1_jacobi; gpu/jax only)
              -- see solvers/amg.py (cpu = pyamg reference, gpu = jax V-cycle)
 
 Defaults (:data:`DEFAULT_SCOPED_SPECS`, selected by ``--xla-linear-solver
@@ -117,7 +118,7 @@ _ALLOWED_KEYS: Dict[str, frozenset] = {
          "max_coarse", "rebuild", "fallback", "verbose", "device", "smoother",
          "smoother_sweeps", "smoother_omega", "rebuild_iter_factor",
          "clear_jax_caches_on_pattern", "shape_mode", "fixed_levels", "bucket_ratio",
-         "scale_policy", "recovery", "refresh_every", "cpu_vcycle"}
+         "scale_policy", "recovery", "refresh_every", "cpu_vcycle", "fine_smoother"}
     ),
 }
 
@@ -250,6 +251,11 @@ def normalize_linear_solver_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
         out["cpu_vcycle"] = _check_choice(out.get("cpu_vcycle", "pyamg"), ("pyamg", "matched"), "cpu_vcycle")
         if out["refresh_every"] < 0:
             raise ValueError("pyamg refresh_every must be >= 0")
+        # Fine-level smoother: "l1_jacobi" stays stable when a reused hierarchy
+        # meets a stiffer-spectrum tangent (CR-2026-10-12-01); default unchanged.
+        out["fine_smoother"] = _check_choice(
+            out.get("fine_smoother", "jacobi"), ("jacobi", "l1_jacobi"), "fine_smoother"
+        )
     return out
 
 
