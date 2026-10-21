@@ -21,6 +21,10 @@ cleanly:
 
 Multiple PARDISO internal handles are kept per sparsity pattern (thermal and
 mechanics systems have different sizes), keyed by (n, nnz).
+
+Outside the ladder, ``free-spd`` (``FreeBlockSPDSolver``) solves only the free
+block of the mechanics system with the symmetric positive-definite type
+(mtype=2, Cholesky on the upper triangle); see its docstring.
 """
 
 from __future__ import annotations
@@ -382,6 +386,204 @@ class VariantSolver:
         return count
 
 
+def _pinned_rows(A):
+    """Rows stored as ``diag == 1`` with no off-diagonal entries (Dirichlet rows).
+
+    Same rule as ``jax_fem_am.solvers.amg.pinned_rows`` (kept local so this
+    module does not import jax)."""
+    diag = A.diagonal()
+    offabs = np.asarray(abs(A).sum(axis=1)).ravel() - np.abs(diag)
+    return np.isclose(diag, 1.0) & (offabs == 0.0)
+
+
+class _FreeBlockPattern:
+    """One activation pattern: free/pinned split, upper-triangular K_FF
+    gather map, 1-based ia/ja and the PARDISO handle holding its factor."""
+
+    __slots__ = ("signature", "free", "pin", "keep", "ia", "ja", "raw",
+                 "analyzed", "data")
+
+    def __init__(self, signature, n, indptr, indices, pinned):
+        self.signature = signature
+        self.free = np.flatnonzero(~pinned)
+        self.pin = np.flatnonzero(pinned)
+        free_map = np.full(n, -1, dtype=np.int64)
+        free_map[self.free] = np.arange(self.free.size)
+        rows = np.repeat(np.arange(n, dtype=np.int64), np.diff(indptr))
+        fr = free_map[rows]
+        fc = free_map[np.asarray(indices, dtype=np.int64)]
+        keep = np.flatnonzero((fr >= 0) & (fc >= fr))
+        fr, fc = fr[keep], fc[keep]
+        # PARDISO needs increasing columns within each row; free_map is
+        # monotone, so this only reorders if the input rows were unsorted.
+        order = np.lexsort((fc, fr))
+        if not np.all(order[1:] > order[:-1]):
+            keep, fr, fc = keep[order], fr[order], fc[order]
+        del rows, free_map
+        nf = self.free.size
+        self.keep = keep
+        self.ia = np.zeros(nf + 1, dtype=np.int32)
+        np.cumsum(np.bincount(fr, minlength=nf), out=self.ia[1:])
+        self.ia += 1
+        self.ja = (fc + 1).astype(np.int32)
+        self.raw = _RawPardiso()
+        self.raw.mtype = 2
+        self.analyzed = False
+        self.data = None  # K_FF values of the current factorization
+
+
+class FreeBlockSPDSolver:
+    """PARDISO on the free block only, as a real SPD system (mtype=2).
+
+    The mechanics system arrives as the whole mesh: pinned dofs (inactive
+    nodes and Dirichlet supports) are unit rows with their off-diagonal
+    entries stored as zeros, so the full-system modes factorize ~0.9 M rows
+    from the first layer on, and mtype=11 ignores the symmetry. This mode
+    splits off the pinned rows (same rule as the AMG lane), solves
+    ``K_FF x_F = b_F - A_FP b_P`` with a Cholesky factor of the upper
+    triangle, and writes ``x_P = b_P``. The result equals the full-system
+    solution (the unit rows decouple exactly).
+
+    One activation pattern is kept at a time: when the free set changes
+    (a new layer), the old factor is released (phase -1) BEFORE the new
+    pattern is analysed, so at most one factor is resident. Within a pattern
+    the symbolic analysis is reused (phase 13 once, then 23; phase 33 when
+    the values are unchanged), as in ``phase23``.
+
+    If PARDISO rejects the block (e.g. not positive definite, error -4), the
+    call falls back to a one-off full-system mtype=11 solve
+    (``pardiso_solve_once``) and the pattern is dropped; ``fallbacks``
+    counts these.
+    """
+
+    def __init__(self):
+        self.mode = "free-spd"
+        self.label = "pardiso_free_spd(mtype=2)"
+        self._pattern = None
+        self._stats = {
+            "solves": 0,
+            "analyze_calls": 0,
+            "pattern_rebuilds": 0,
+            "backsolve_hits": 0,
+            "fallbacks": 0,
+            "pinned_zero_rhs": 0,
+            "pattern_seconds": 0.0,
+            "split_seconds": 0.0,
+            "n_free_last": 0,
+            "nnz_factor_max": 0,
+        }
+        for phase in (13, 23, 33):
+            self._stats[f"phase{phase}_calls"] = 0
+            self._stats[f"phase{phase}_seconds"] = 0.0
+        atexit.register(self._report)
+
+    def _report(self):
+        print(f"[pardiso {self.mode}] {self._stats}", file=sys.stderr)
+
+    def stats_snapshot(self):
+        out = dict(self._stats)
+        out["numeric_factorizations"] = sum(
+            int(out[f"phase{phase}_calls"]) for phase in (13, 23)
+        )
+        out["factorization_phase_seconds"] = sum(
+            float(out[f"phase{phase}_seconds"]) for phase in (13, 23)
+        )
+        out["phase33_backsolve_seconds"] = float(out["phase33_seconds"])
+        return out
+
+    @staticmethod
+    def _signature(n, indptr, indices, pinned):
+        # same sampled signature as PyamgKrylovSolver._signature
+        pinned_idx = np.flatnonzero(pinned)
+        return (
+            int(n),
+            int(indptr[-1]),
+            int(pinned_idx.size),
+            hash(np.ascontiguousarray(indptr[::4093]).tobytes()),
+            hash(np.ascontiguousarray(indices[::9973]).tobytes()),
+            hash(np.ascontiguousarray(pinned_idx[::997]).tobytes()),
+        )
+
+    def _call(self, raw, n, data, ia, ja, rhs, *, phase):
+        t0 = time.perf_counter()
+        try:
+            return raw.call(n, data, ia, ja, rhs, phase=phase)
+        finally:
+            self._stats[f"phase{phase}_calls"] += 1
+            self._stats[f"phase{phase}_seconds"] += time.perf_counter() - t0
+
+    def _drop_pattern(self):
+        pat, self._pattern = self._pattern, None
+        if pat is not None:
+            pat.raw.release()
+
+    def __call__(self, A, b, x0=None, linear_options=None):
+        indptr, indices, data = A.getValuesCSR()
+        indptr = np.asarray(indptr)
+        indices = np.asarray(indices)
+        data = np.asarray(data, dtype=np.float64)
+        rhs = np.asarray(b, dtype=np.float64).ravel()
+        n = indptr.shape[0] - 1
+        self._stats["solves"] += 1
+
+        t0 = time.perf_counter()
+        Afull = scipy.sparse.csr_matrix((data, indices, indptr), shape=(n, n))
+        pinned = _pinned_rows(Afull)
+        signature = self._signature(n, indptr, indices, pinned)
+        pat = self._pattern
+        if pat is None or pat.signature != signature:
+            if pat is not None:
+                self._stats["pattern_rebuilds"] += 1
+            # release first: never two factors resident at once
+            self._drop_pattern()
+            t1 = time.perf_counter()
+            pat = _FreeBlockPattern(signature, n, indptr, indices, pinned)
+            self._pattern = pat
+            self._stats["pattern_seconds"] += time.perf_counter() - t1
+        nf = pat.free.size
+        self._stats["n_free_last"] = int(nf)
+        x = np.zeros(n)
+        x[pat.pin] = rhs[pat.pin]
+        if nf == 0:
+            return x
+        if np.any(x[pat.pin]):
+            f = rhs[pat.free] - (Afull @ x)[pat.free]
+        else:
+            self._stats["pinned_zero_rhs"] += 1
+            f = rhs[pat.free]
+        a = np.ascontiguousarray(data[pat.keep])
+        self._stats["split_seconds"] += time.perf_counter() - t0
+
+        try:
+            if not pat.analyzed:
+                self._stats["analyze_calls"] += 1
+                xf = self._call(pat.raw, nf, a, pat.ia, pat.ja, f, phase=13)
+                pat.analyzed = True
+            elif pat.data is not None and np.array_equal(pat.data, a):
+                self._stats["backsolve_hits"] += 1
+                xf = self._call(pat.raw, nf, a, pat.ia, pat.ja, f, phase=33)
+            else:
+                xf = self._call(pat.raw, nf, a, pat.ia, pat.ja, f, phase=23)
+        except RuntimeError as exc:
+            self._stats["fallbacks"] += 1
+            print(f"WARNING: PARDISO free-spd failed ({exc}); "
+                  "full-system mtype=11 solve for this call", file=sys.stderr, flush=True)
+            self._drop_pattern()
+            return pardiso_solve_once(A, rhs)
+        pat.data = a
+        self._stats["nnz_factor_max"] = max(
+            self._stats["nnz_factor_max"], int(pat.raw.iparm[17])
+        )
+        x[pat.free] = xf
+        return x
+
+    def release_states(self) -> int:
+        """Release the retained factor (phase -1); returns 1 if one was held."""
+        held = self._pattern is not None
+        self._drop_pattern()
+        return int(held)
+
+
 class PardisoCustomSolver:
     """jax-fem ``custom_solver`` adapter: PETSc AIJ -> SciPy CSR -> MKL PARDISO.
 
@@ -401,7 +603,8 @@ class PardisoCustomSolver:
     iterative = False
 
     def __init__(self, mode=None):
-        valid_modes = {None, "base", "nocmp", "cache-idx", "phase23", "fp32ir"}
+        valid_modes = {None, "base", "nocmp", "cache-idx", "phase23", "fp32ir",
+                       "free-spd"}
         if mode not in valid_modes:
             raise ValueError(f"unsupported PARDISO mode: {mode!r}")
         self._solver = None
@@ -427,6 +630,9 @@ class PardisoCustomSolver:
                 mode = os.environ.get("V07_PARDISO_MODE", "").strip()
             if not mode or mode == "base":
                 self._v07_variant = False
+            elif mode == "free-spd":
+                self._v07_variant = FreeBlockSPDSolver()
+                self.label = self._v07_variant.label
             else:
                 self._v07_variant = VariantSolver(mode)
                 self.label = self._v07_variant.label
