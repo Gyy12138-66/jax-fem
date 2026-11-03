@@ -43,6 +43,127 @@ from contextlib import contextmanager
 
 from pathlib import Path
 from typing import Any, Dict, Iterator, Mapping, Optional, Sequence
+import threading
+
+import numpy as _numpy
+
+# --- cudss-plus fine timing (2026-11-03) --------------------------------------
+# JAX_FEM_FINE_TIMING=1 turns on measurement-only instrumentation:
+#   * a device barrier at entry and exit of every profiler stage, so that
+#     asynchronous GPU work is charged to the stage that launched it;
+#   * a per-physics copy of every stage ("<stage>@thermal", "<stage>@mechanics");
+#   * cell_jacobian split into device compute and device->host copy, plus the
+#     host copy of the element tangents in Problem.compute_newton_vars;
+#   * a timeline of the stage totals, one JSON line every
+#     JAX_FEM_FINE_TIMING_PERIOD seconds (default 120).
+# The scoped and detail stages are excluded from the python_overhead
+# accounting. With the switch off (default) every code path is unchanged.
+FINE_TIMING = os.environ.get("JAX_FEM_FINE_TIMING", "") == "1"
+_FINE_STATE: Dict[str, Any] = {"scope": None, "barrier_x": None}
+STAGE_CELL_JACOBIAN_DEVICE = "cell_jacobian_device"
+STAGE_CELL_JACOBIAN_D2H = "cell_jacobian_d2h"
+STAGE_NEWTON_TANGENT_COPY = "newton_tangent_copy"
+FINE_DETAIL_STAGES = frozenset(
+    {
+        STAGE_CELL_JACOBIAN_DEVICE,
+        STAGE_CELL_JACOBIAN_D2H,
+        STAGE_NEWTON_TANGENT_COPY,
+    }
+)
+
+
+def _device_barrier() -> None:
+    """Wait for all work already queued on the default device.
+
+    XLA:GPU runs computations in launch order on one compute stream, so
+    waiting for a fresh scalar op waits for everything launched before it.
+    Never raises (e.g. when called while tracing).
+    """
+    try:
+        import jax.numpy as _jnp
+
+        x = _FINE_STATE["barrier_x"]
+        if x is None:
+            x = _jnp.zeros((), dtype=_jnp.float32)
+            _FINE_STATE["barrier_x"] = x
+        (x + 1.0).block_until_ready()
+    except Exception:
+        pass
+
+
+class _TimedHostStack:
+    """numpy stand-in passed to Problem.split_and_compute_cell under fine timing.
+
+    ``vstack`` first waits for the device chunks (device compute), then copies
+    them to the host (device->host) and records the two parts separately.
+    Everything else is plain numpy.
+    """
+
+    def __init__(self, profiler: "ProfilingReport") -> None:
+        self._profiler = profiler
+
+    def vstack(self, arrays):
+        import jax
+
+        t0 = time.perf_counter()
+        jax.block_until_ready(arrays)
+        t1 = time.perf_counter()
+        out = _numpy.vstack(arrays)
+        t2 = time.perf_counter()
+        self._profiler.add(STAGE_CELL_JACOBIAN_DEVICE, t1 - t0)
+        self._profiler.add(STAGE_CELL_JACOBIAN_D2H, t2 - t1)
+        return out
+
+    def __getattr__(self, name):
+        return getattr(_numpy, name)
+
+
+def _start_fine_timeline(report: "ProfilingReport", profile_json: Optional[str]) -> None:
+    period = float(os.environ.get("JAX_FEM_FINE_TIMING_PERIOD", "120") or 120)
+    target = os.environ.get("JAX_FEM_FINE_TIMING_JSONL") or (
+        f"{profile_json}.timeline.jsonl" if profile_json else None
+    )
+    report.meta["fine_timing"] = {
+        "enabled": True,
+        "barrier": "scalar op block_until_ready at stage entry/exit",
+        "timeline": target,
+        "timeline_period_s": period,
+    }
+    if not target:
+        return
+
+    def loop() -> None:
+        while True:
+            time.sleep(period)
+            try:
+                for _ in range(5):
+                    try:
+                        seconds = dict(report.stage_seconds)
+                        calls = dict(report.stage_calls)
+                        meta_counts = {
+                            k: v
+                            for k, v in dict(report.meta).items()
+                            if isinstance(v, (int, float)) and not isinstance(v, bool)
+                        }
+                        break
+                    except RuntimeError:
+                        continue
+                else:
+                    continue
+                row = {
+                    "epoch": time.time(),
+                    "elapsed": time.perf_counter() - report.wall_start,
+                    "linear_iterations": report.linear_iterations,
+                    "stage_seconds": seconds,
+                    "stage_calls": calls,
+                    "meta_counts": meta_counts,
+                }
+                with open(target, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(row) + "\n")
+            except Exception:
+                pass
+
+    threading.Thread(target=loop, name="fine-timing-timeline", daemon=True).start()
 
 from jax_fem_am.solvers.linear import (
     ITERATIVE_LINEAR_KEYS,
@@ -426,16 +547,33 @@ class ProfilingReport:
         if name not in self.stage_seconds:
             self.stage_seconds[name] = 0.0
             self.stage_calls[name] = 0
+        if FINE_TIMING:
+            _device_barrier()
         t0 = time.perf_counter()
         try:
             yield
         finally:
-            self.stage_seconds[name] += time.perf_counter() - t0
+            if FINE_TIMING:
+                _device_barrier()
+            dt = time.perf_counter() - t0
+            self.stage_seconds[name] += dt
             self.stage_calls[name] += 1
+            if FINE_TIMING:
+                self._add_scoped(name, dt, 1)
 
     def add(self, name: str, seconds: float, calls: int = 1) -> None:
         self.stage_seconds[name] = self.stage_seconds.get(name, 0.0) + seconds
         self.stage_calls[name] = self.stage_calls.get(name, 0) + calls
+        if FINE_TIMING:
+            self._add_scoped(name, seconds, calls)
+
+    def _add_scoped(self, name: str, seconds: float, calls: int) -> None:
+        scope = _FINE_STATE.get("scope")
+        if scope is None or "@" in name:
+            return
+        key = f"{name}@{scope}"
+        self.stage_seconds[key] = self.stage_seconds.get(key, 0.0) + seconds
+        self.stage_calls[key] = self.stage_calls.get(key, 0) + calls
 
     def _accounting_excluded_stages(self) -> set[str]:
         excluded = {STAGE_PYTHON, STAGE_NONLINEAR_SOLVE}
@@ -463,6 +601,10 @@ class ProfilingReport:
         )
         if has_residual_vector_details:
             excluded.update(RESIDUAL_VECTOR_DETAIL_STAGES)
+        # Fine timing: per-physics copies and sub-stage details are views of
+        # stages already counted above.
+        excluded.update(stage for stage in self.stage_seconds if "@" in stage)
+        excluded.update(FINE_DETAIL_STAGES)
         return excluded
 
     def finish(self) -> None:
@@ -1134,6 +1276,8 @@ def install_solver_patch(
         }
         profile_scope = _newton_profile_scope(problem)
         pardiso_before = _pardiso_stats_snapshot(active_options)
+        previous_fine_scope = _FINE_STATE.get("scope")
+        _FINE_STATE["scope"] = profile_scope
         t0 = time.perf_counter()
         try:
             if profile_solver_call:
@@ -1172,6 +1316,7 @@ def install_solver_patch(
                         scoped[key] = scoped.get(key, 0) + (
                             after_value - before_value
                         )
+            _FINE_STATE["scope"] = previous_fine_scope
 
     def _wants_residual_only_check(problem):
         # Scope to the thermal problem: its convergence decisions are far from
@@ -1589,6 +1734,14 @@ def install_problem_local_assembly_timing_patch(
     ):
         stage = STAGE_CELL_JACOBIAN if jac_flag else STAGE_CELL_RESIDUAL
         with profiler.stage(stage):
+            if FINE_TIMING and jac_flag and np_version is _numpy:
+                return original_split(
+                    self,
+                    cells_sol_flat,
+                    _TimedHostStack(profiler),
+                    jac_flag,
+                    internal_vars,
+                )
             return original_split(
                 self,
                 cells_sol_flat,
@@ -1625,6 +1778,47 @@ def install_problem_local_assembly_timing_patch(
     problem_cls.split_and_compute_cell = split_and_compute_cell_timed
     problem_cls.compute_face = compute_face_timed
     problem_cls.compute_residual_vars_helper = compute_residual_vars_helper_timed
+
+    if FINE_TIMING:
+        original_newton_vars = getattr(
+            problem_cls,
+            "_v04_original_compute_newton_vars",
+            problem_cls.compute_newton_vars,
+        )
+        problem_cls._v04_original_compute_newton_vars = original_newton_vars
+
+        def compute_newton_vars_fine(
+            self,
+            sol_list,
+            internal_vars,
+            internal_vars_surfaces,
+        ):
+            # Same steps as jax_fem.problem.Problem.compute_newton_vars; only
+            # the host copies of the element tangents are timed separately.
+            cells_sol_list = [
+                sol[cells] for cells, sol in zip(self.cells_list, sol_list)
+            ]
+            cells_sol_flat = self._flatten_cells_sol(cells_sol_list)
+            weak_form_flat, cells_jac_flat = self.split_and_compute_cell(
+                cells_sol_flat, _numpy, True, internal_vars
+            )
+            t0 = time.perf_counter()
+            self.V = _numpy.array(cells_jac_flat.reshape(-1))
+            profiler.add(STAGE_NEWTON_TANGENT_COPY, time.perf_counter() - t0)
+            weak_form_face_flat, cells_jac_face_flat = self.compute_face(
+                cells_sol_flat, _numpy, True, internal_vars_surfaces
+            )
+            t0 = time.perf_counter()
+            for cells_jac_f_flat in cells_jac_face_flat:
+                self.V = _numpy.hstack(
+                    (self.V, _numpy.array(cells_jac_f_flat.reshape(-1)))
+                )
+            profiler.add(STAGE_NEWTON_TANGENT_COPY, time.perf_counter() - t0)
+            return self.compute_residual_vars_helper(
+                weak_form_flat, weak_form_face_flat
+            )
+
+        problem_cls.compute_newton_vars = compute_newton_vars_fine
     profiler.meta["problem_timing_patch"] = (
         "jax_fem.problem.Problem local assembly methods"
     )
@@ -3497,6 +3691,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             fallback_options=fallback_block,
         )
         base.parse_args = lambda: args
+        if FINE_TIMING:
+            _start_fine_timeline(report, args.profile_json)
         rc = base.main()
         return int(rc or 0)
     finally:
