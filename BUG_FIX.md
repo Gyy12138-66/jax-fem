@@ -222,7 +222,7 @@ Cholesky 1746 阶 < 0.1 s，建层级时间不变；CG 迭代少三倍、每次�
 
 **shakedown 验收**（`v159_voxel_pyamg_fix2`，2026-09-15 01:53–01:58Z）：`SHAKEDOWN_GATE_RC=0`，`all_checks_passed`，136 步 2.28 s/步，释放解 `release_u_max=2.20e-3`，CG 最大 45 次、`NOT converged` 0、PARDISO 警告 0，层级全程 3 个数、`padded to [904368, 113152, 4864, 3840]`。
 
-**第一次 shakedown（01:40–01:45Z）失败的教训**：在 raft 释放解的装配阶段 `CUDA_ERROR_OUT_OF_MEMORY`（PARDISO 一次未跑）。释放解走 PARDISO，此时 pyamg 的整体固定结构 + 补零层级 + 缩放数据（~2.4 GB）是设备上的死重量，加上第二个力学 Problem 的装配临时量，贴着 JAX 默认 75%（12.2 GB）上限；`max_coarse=3000` 使粗层稠密逆多占 105 MB，正好推过线。修法即上表第三行的"路由前 `release_device`"，外加启动器导出 `XLA_PYTHON_CLIENT_MEM_FRACTION=0.85`（`~/work/159/launch_v159_fix2_gates.sh`，仓库外）。开头那条 "Failed to allocate device memory of 4.00GiB" 在成功的跑里同样存在，是分配器探测，不是故障。
+**第一次 shakedown（01:40–01:45Z）失败的教训**：在 raft 释放解的装配阶段 `CUDA_ERROR_OUT_OF_MEMORY`（PARDISO 一次未跑）。释放解走 PARDISO，此时 pyamg 的整体固定结构 + 补零层级 + 缩放数据（~2.4 GB）是设备上的死重量，加上第二个力学 Problem 的装配临时量，贴着 JAX 默认 75%（12.2 GB）上限；`max_coarse=3000` 使粗层稠密逆多占 105 MB，正好推过线。修法即上表第三行的"路由前 `release_device`"，外加启动器导出 `XLA_PYTHON_CLIENT_MEM_FRACTION=0.85`（`~/work/159/scripts/02_fix2_run4_amg_shape/launch_v159_fix2_gates.sh`，仓库外）。开头那条 "Failed to allocate device memory of 4.00GiB" 在成功的跑里同样存在，是分配器探测，不是故障。
 
 单测：pyamg 27 passed，`-m solver` 94 passed，`tests/unit` 342 passed，`tests/contract` 362 passed。
 
@@ -271,7 +271,7 @@ RSS 20.2 GB（HWM 21.8）、主机 `MemAvailable` 19 GB、`oom_kill 0`、无 Tra
 
 未动的保护：非收敛后重建一次再 PARDISO 兜底、路由直接解前 `release_device`、`XLA_PYTHON_CLIENT_MEM_FRACTION=0.85`。
 
-**验证**（`~/work/159/bench_amg.py`，L150 真实矩阵 24 模式，每模式 4 次求解：新建 / 复用 ×2 / **同模式强制重建**；`amgbench/V14old.json` = aa45876 代码、`V14.json` = 融合 kernel、`V15.json` = 本轮采用）：
+**验证**（`~/work/159/scripts/02_fix2_run4_amg_shape/bench_amg.py`，L150 真实矩阵 24 模式，每模式 4 次求解：新建 / 复用 ×2 / **同模式强制重建**；`amgbench/V14old.json` = aa45876 代码、`V14.json` = 融合 kernel、`V15.json` = 本轮采用）：
 
 | 变体 | 分配器峰值 MB | 稳态 in_use MB | 迭代数 / 真残差 / 钉住行 | 用时 新建 / 复用 / 重建 |
 |---|---|---|---|---|
@@ -337,7 +337,7 @@ run-4 到层 80 墙钟 4.06 h，其中 pyamg 求解器调用合计 **1.17 h（29
 
 **预期**（估算，假设复用迭代回到 ~90 次）：层 40–79 的 CG 段 0.50 h → ~0.2 h，扣除刷新成本净省 ~0.2 h；层 80 以后 CG 占比更高，收益更大。
 
-**全程数据（run-4 跑完后补记，7,772 次 CG 求解，`~/work/159/drift_run4.py`）**：
+**全程数据（run-4 跑完后补记，7,772 次 CG 求解，`~/work/159/scripts/02_fix2_run4_amg_shape/drift_run4.py`）**：
 
 | | 次数 | 平均迭代 | 中位 | P90 |
 |---|---|---|---|---|
@@ -492,14 +492,14 @@ CG 段 71% 集中在层 40–79，高层激活比例已 > 50% 并继续升高，
 ### 11.1 步骤 S0：采集切线漂移序列
 
 - 探针改造（提交 7094ce5）：`V159_DUMP_MECH_PER_LAYER=N` 每层导出前 N 次力学解，`V159_DUMP_COMPACT=1` 重复项只存数值；nnz 与本层首个 dump 不一致时回落为完整结构。
-- 运行：`~/work/159/launch_drift_S0.sh`（MODE=5、`TAG=voxel_drift_S0`、40-slab、层 20/30/40 各 12 次）。
+- 运行：`~/work/159/scripts/04_coarsening_scaling_S0_S2/launch_drift_S0.sh`（MODE=5、`TAG=voxel_drift_S0`、40-slab、层 20/30/40 各 12 次）。
 - **在层 34（步 2180）冻结**：run.log 末行 `slow_operation_alarm: Compiling module jit_while for GPU`；runner 243 线程全 S、10 s 内 0 tick；子进程 `ptxas` D 态 `__vma_start_write`。
   与 2026-09-17 的 0911 冻结同指纹，但**这次冻结时没有任何 pgrep/ps 扫描** → 「pgrep 撞 exec」假设被削弱，公共因素是「长跑中途 XLA 重新编译 → 从大进程 spawn ptxas」。runner 可 kill、显存释放，D 态残留需 `wsl --shutdown` 清。
   待查：full 模式力学侧全程 1 个编译变体，层 34 还在编译的 `jit_while` 来自哪里（怀疑热学 CG）；JAX 持久编译缓存未配置；`--xla_gpu_enable_libnvptxcompiler` 在本版本不存在。
 - 产出：层 20、层 30 各 12 个 dump（24 个，11 GB，`~/work/159/drift_dumps/`），同层稀疏结构一致（nnz 57,488,058）。层 40 缺。
   12 次解 = 连续 3 个力学步 × 每步 4 次 Newton 迭代（k=0–3、4–7、8–11）。
 
-### 11.2 步骤 S1：策略回放（`~/work/159/s1_replay.py`）
+### 11.2 步骤 S1：策略回放（`~/work/159/scripts/04_coarsening_scaling_S0_S2/s1_replay.py`）
 
 用生产的 jit V-cycle + PCG 内核，层级建在 k=0，对 k=1…11 求解。**「沿用」一栏与生产日志逐次吻合**（层 30：116/122/121/118/138/140…），回放可信。
 
@@ -591,7 +591,7 @@ current 一栏与生产日志一致；两种策略的真残差都 ≤ 1.35e-6，
 
 - 目的：S1 的数据只到层 30；E0 在层 41–90 的复用均值是 237–307 次、每 10 层 2–15 次跑满 800。要在同样的层段直接看 frozen 的效果，并补采高层的漂移序列。
 - 配置：`cases/159_simulation/inputs/0119-flash-voxel-fast-pyamg-frozen.json`（与 E0 的配置只差 `"scale_policy": "frozen"`），提交 7396a59 的求解器代码。
-- 启动：`~/work/159/launch_frozen_S2.sh` → 直接调 `v_159.sh`（`TAG=voxel_frozen_S2`、`STAGES="1 S"`、`SHAKEDOWN_SLABS=90`，5,850 步，约 4.7 h）；
+- 启动：`~/work/159/scripts/04_coarsening_scaling_S0_S2/launch_frozen_S2.sh` → 直接调 `v_159.sh`（`TAG=voxel_frozen_S2`、`STAGES="1 S"`、`SHAKEDOWN_SLABS=90`，5,850 步，约 4.7 h）；
   层 45/60/75/90 各采 12 次切线到 `~/work/159/drift_dumps_S2/`（约 22 GB）。
 - 对照臂：E0 的 run.log（同网格、同配置、current 缩放），按 10 层：
 
@@ -603,7 +603,7 @@ current 一栏与生产日志一致；两种策略的真残差都 ≤ 1.35e-6，
 
 - 顺带查中途编译的来源：`JAX_LOG_COMPILES=1` 在 runner 的日志配置下没有输出；改用持久编译缓存 `JAX_COMPILATION_CACHE_DIR=~/work/159/jax_cache_prod`——
   编译超过 1 s 的函数会以「函数名-哈希」落盘，文件时间戳即编译时刻，对照 run.log 的步号即可定位是谁在层中途重编。
-- 查看：`bash ~/work/159/status_S2.sh`（逐 10 层的平均迭代 / 未收敛 / 建层级，与上表并排）。
+- 查看：`bash ~/work/159/scripts/04_coarsening_scaling_S0_S2/status_S2.sh`（逐 10 层的平均迭代 / 未收敛 / 建层级，与上表并排）。
 - 结果：见 11.11。
 
 ### 11.9 步骤 S3a：Galerkin 刷新路径（实现 + 在真实序列上的结论）
@@ -739,7 +739,7 @@ R3 兜底     第 40 次迭代的走廊探测（§10.1.1）→ recovery="refresh
 - **代码缺省值暂不改**：等 E0f 通过后再翻转（同时要改两处断言缺省为 `current` 的单测）。
 - E0f：配置 `0119-flash-voxel-fast-pyamg-frozen.json`（与 E0 只差这一个键；刷新相关选项保持缺省关闭），新 TAG `voxel_pyamg_frozen_E0f`，`STAGES="1 2 S 3"`，环境与 E0 相同（`XLA_PYTHON_CLIENT_MEM_FRACTION=0.85`，不开持久编译缓存、不采 dump），运行期间不在本机跑其他占 CPU 的任务。
   验收：未收敛 ≈ 0（E0 303）、建层级 ≈ 182（E0 485）、PARDISO 兜底 0、与 E1b 的一致性不劣于 E0（u_max ≤ 1e-5、vm_max ≤ 1e-7、释放解 ≤ 1e-6）、总墙钟明显低于 14.13 h；重点看 S2 没覆盖的层 91–182。
-- 起跑：2026-09-20 18:04:39 启动（07e5cd2，dirty=0），能量门 RC=0、2-slab 门 RC=0，**生产段 18:10:24 开始**；run.log 回显 `scaled(frozen)`，contract 含 `"scale_policy":"frozen"`。运行记录：桌面 `运行日志6-09-20_1810_MODE5_..._frozen_07e5cd2_voxel_pyamg_frozen_E0f.md`；查看 `bash ~/work/159/status_E0f.sh`。
+- 起跑：2026-09-20 18:04:39 启动（07e5cd2，dirty=0），能量门 RC=0、2-slab 门 RC=0，**生产段 18:10:24 开始**；run.log 回显 `scaled(frozen)`，contract 含 `"scale_policy":"frozen"`。运行记录：桌面 `运行日志6-09-20_1810_MODE5_..._frozen_07e5cd2_voxel_pyamg_frozen_E0f.md`；查看 `bash ~/work/159/scripts/05_E0f_thermal_jit_V40/status_E0f.sh`。
 - 结果：**未跑完**，09-20 21:23:26 在层 71 冻结（XLA 中途编译，与缩放策略无关），见 11.13；冻结前 71 层的数据符合预期（0 次未收敛、每层建一次层级）。
 
 ### 11.13 E0f 在层 71 冻结：根因是热学 CG 每次求解都重新编译（2026-09-21）
@@ -760,7 +760,7 @@ run.log 末行 `slow_operation_alarm: Compiling module jit_while for GPU`；runn
 **`jit_while` 是谁**：代码里只有两处 `while_loop`——力学的 `pcg`（已 jit，模块名 `jit_pcg`）和 `jax_fem/solver.py::jax_solve` 里**在 jit 之外直接调用**的 `jax.scipy.sparse.linalg.cg`（热学）。
 后者内部的 `lax.while_loop` 每次调用都用新建的闭包（`pc = lambda x: x * (1/jacobi)`、BCOO 的 matvec）重新 trace，JAX 的 Python 层缓存按函数对象命中不了，于是**每次热学求解都走一遍完整的 XLA 编译**。
 
-**证据**（`~/work/159/launch_diag_compile.sh`：3-slab 短跑 + `XLA_FLAGS=--xla_dump_to=… --xla_dump_hlo_module_re=jit_while.*`）：
+**证据**（`~/work/159/scripts/05_E0f_thermal_jit_V40/launch_diag_compile.sh`：3-slab 短跑 + `XLA_FLAGS=--xla_dump_to=… --xla_dump_hlo_module_re=jit_while.*`）：
 
 | 项 | 值 |
 |---|---|
@@ -801,7 +801,7 @@ run.log 末行 `slow_operation_alarm: Compiling module jit_while for GPU`；runn
 去掉 dump 或把正则收窄到上面两个名字就正常——是全量 dump 本身引起的，与改动无关。诊断用的 dump 一律收窄正则。
 
 **验证进行中**：`voxel_tjit_V40`（40-slab，frozen + thermal jit，09-21 10:0x 起，约 1.6 h），对照臂 = E0f 冻结前的同段（同配置、只差 `thermal.jit`，计时干净）：
-比 T_max / u_max / vm_max 的逐点差、力学迭代数是否逐次相同、分段步速。脚本 `~/work/159/cmp_V40.py`。通过后用同一提交重跑全高 E0f′ 与 E1b′。
+比 T_max / u_max / vm_max 的逐点差、力学迭代数是否逐次相同、分段步速。脚本 `~/work/159/scripts/05_E0f_thermal_jit_V40/cmp_V40.py`。通过后用同一提交重跑全高 E0f′ 与 E1b′。
 
 **V40 结果（09-21 09:58–11:35，`rc=0`，2,606 步）**——对照 E0f 冻结前的同段（同配置，只差 `thermal.jit`）：
 
@@ -816,7 +816,7 @@ run.log 末行 `slow_operation_alarm: Compiling module jit_while for GPU`；runn
 
 每步省 0.24 s 比微基准估的（0.065 s × 每步 1.5 次）多得多：大进程里每次重编译更贵。外推全高约省 0.8 h，两条车道都受益。验证通过，用同一提交重跑全高：E0j（pyamg，frozen + thermal jit）与 E1j（PARDISO + thermal jit）。
 
-**E0j 起跑**：2026-09-21 11:37:00 启动（d6bd04f，dirty=0），能量门 RC=0、2-slab 门 RC=0，**生产段 11:42:13 开始**；run.log 回显 `jit=True` 与 `scaled(frozen)`。运行记录：桌面 `运行日志6-09-21_1142_MODE5_thermal-jaxCGjit_..._d6bd04f_voxel_pyamg_frozen_tjit_E0j.md`；查看 `bash ~/work/159/status_E0j.sh`。结果：见 11.15（通过，9.91 h）
+**E0j 起跑**：2026-09-21 11:37:00 启动（d6bd04f，dirty=0），能量门 RC=0、2-slab 门 RC=0，**生产段 11:42:13 开始**；run.log 回显 `jit=True` 与 `scaled(frozen)`。运行记录：桌面 `运行日志6-09-21_1142_MODE5_thermal-jaxCGjit_..._d6bd04f_voxel_pyamg_frozen_tjit_E0j.md`；查看 `bash ~/work/159/scripts/06_E0j_E1j/status_E0j.sh`。结果：见 11.15（通过，9.91 h）
 
 ### 11.15 E0j 结果：全高通过（2026-09-21 11:42 → 21:36，9.91 h）
 
