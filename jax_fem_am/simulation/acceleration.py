@@ -59,7 +59,14 @@ import numpy as _numpy
 # The scoped and detail stages are excluded from the python_overhead
 # accounting. With the switch off (default) every code path is unchanged.
 FINE_TIMING = os.environ.get("JAX_FEM_FINE_TIMING", "") == "1"
-_FINE_STATE: Dict[str, Any] = {"scope": None, "barrier_x": None}
+_FINE_STATE: Dict[str, Any] = {
+    "scope": None,
+    "barrier_x": None,
+    "stack": [],          # open profiler stages on the main thread
+    "samples": {},        # category -> count
+    "self": {},           # innermost repo frame of unattributed samples -> count
+    "cum": {},            # every repo frame of unattributed samples -> count
+}
 STAGE_CELL_JACOBIAN_DEVICE = "cell_jacobian_device"
 STAGE_CELL_JACOBIAN_D2H = "cell_jacobian_d2h"
 STAGE_NEWTON_TANGENT_COPY = "newton_tangent_copy"
@@ -118,6 +125,99 @@ class _TimedHostStack:
         return getattr(_numpy, name)
 
 
+def _frame_label(frame, with_line: bool) -> str:
+    code = frame.f_code
+    name = code.co_filename
+    for marker in ("/jax_fem_am/", "/jax_fem/", "/cases/", "/site-packages/"):
+        i = name.find(marker)
+        if i >= 0:
+            name = name[i + 1:]
+            break
+    label = f"{name}:{code.co_name}"
+    return f"{label}:{frame.f_lineno}" if with_line else label
+
+
+def _is_repo_frame(frame) -> bool:
+    name = frame.f_code.co_filename
+    return ("/jax_fem_am/" in name or "/jax_fem/" in name or "/cases/" in name) and (
+        "/site-packages/" not in name
+    )
+
+
+def _sample_main_thread_once(main_ident: int) -> None:
+    """One sample of the main thread: categorise, and for time that no stage
+    and no solver call covers (= python_overhead), record the repo frames."""
+    stack = _FINE_STATE["stack"]
+    if stack:
+        category = "stage:" + stack[-1]
+    elif _FINE_STATE.get("scope") is not None:
+        category = "solver_unstaged:" + str(_FINE_STATE["scope"])
+    else:
+        category = "unattributed"
+    samples = _FINE_STATE["samples"]
+    samples[category] = samples.get(category, 0) + 1
+    if category != "unattributed":
+        return
+    frame = sys._current_frames().get(main_ident)
+    if frame is None:
+        return
+    innermost = _frame_label(frame, with_line=True)
+    self_table = _FINE_STATE["self"]
+    self_table[innermost] = self_table.get(innermost, 0) + 1
+    seen = set()
+    depth = 0
+    cum = _FINE_STATE["cum"]
+    while frame is not None and depth < 60:
+        if _is_repo_frame(frame):
+            label = _frame_label(frame, with_line=False)
+            if label not in seen:
+                seen.add(label)
+                cum[label] = cum.get(label, 0) + 1
+        frame = frame.f_back
+        depth += 1
+
+
+def _top(table: Dict[str, int], n: int) -> Dict[str, int]:
+    return dict(sorted(dict(table).items(), key=lambda kv: -kv[1])[:n])
+
+
+def _start_fine_sampler(report: "ProfilingReport", target: Optional[str]) -> None:
+    hz = float(os.environ.get("JAX_FEM_FINE_SAMPLE_HZ", "10") or 0)
+    if hz <= 0:
+        return
+    main_ident = threading.main_thread().ident
+    interval = 1.0 / hz
+    report.meta.setdefault("fine_timing", {})["sampler_hz"] = hz
+
+    def loop() -> None:
+        last_write = time.time()
+        while True:
+            time.sleep(interval)
+            try:
+                _sample_main_thread_once(main_ident)
+                if target and time.time() - last_write > 600:
+                    last_write = time.time()
+                    Path(target).write_text(json.dumps(_fine_sampling_summary(400)))
+            except Exception:
+                pass
+
+    threading.Thread(target=loop, name="fine-timing-sampler", daemon=True).start()
+
+
+def _fine_sampling_summary(n: int) -> Dict[str, Any]:
+    for _ in range(5):
+        try:
+            return {
+                "hz": float(os.environ.get("JAX_FEM_FINE_SAMPLE_HZ", "10") or 0),
+                "categories": dict(_FINE_STATE["samples"]),
+                "unattributed_self": _top(_FINE_STATE["self"], n),
+                "unattributed_cumulative": _top(_FINE_STATE["cum"], n),
+            }
+        except RuntimeError:
+            continue
+    return {}
+
+
 def _start_fine_timeline(report: "ProfilingReport", profile_json: Optional[str]) -> None:
     period = float(os.environ.get("JAX_FEM_FINE_TIMING_PERIOD", "120") or 120)
     target = os.environ.get("JAX_FEM_FINE_TIMING_JSONL") or (
@@ -129,6 +229,9 @@ def _start_fine_timeline(report: "ProfilingReport", profile_json: Optional[str])
         "timeline": target,
         "timeline_period_s": period,
     }
+    _start_fine_sampler(
+        report, f"{profile_json}.pysample.json" if profile_json else None
+    )
     if not target:
         return
 
@@ -549,12 +652,15 @@ class ProfilingReport:
             self.stage_calls[name] = 0
         if FINE_TIMING:
             _device_barrier()
+            _FINE_STATE["stack"].append(name)
         t0 = time.perf_counter()
         try:
             yield
         finally:
             if FINE_TIMING:
                 _device_barrier()
+                if _FINE_STATE["stack"]:
+                    _FINE_STATE["stack"].pop()
             dt = time.perf_counter() - t0
             self.stage_seconds[name] += dt
             self.stage_calls[name] += 1
@@ -3705,6 +3811,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     pardiso_stats = scoped_stats
         if pardiso_stats is not None:
             report.meta["pardiso_stats"] = pardiso_stats
+        if FINE_TIMING:
+            report.meta["fine_sampling"] = _fine_sampling_summary(200)
         report.finish()
         print(report.summary(), file=sys.stderr)
         if args.profile_json:

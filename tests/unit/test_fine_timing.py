@@ -65,3 +65,26 @@ def test_stage_without_switch_adds_no_scoped_copy(monkeypatch):
         pass
     report.add(acc.STAGE_SOLVER, 1.0)
     assert not any("@" in k for k in report.stage_seconds)
+
+
+def test_sampler_categorises_stage_solver_and_unattributed(fine):
+    import threading
+
+    fine._FINE_STATE["samples"].clear()
+    fine._FINE_STATE["self"].clear()
+    fine._FINE_STATE["cum"].clear()
+    ident = threading.main_thread().ident
+    report = fine.ProfilingReport("t")
+    with report.stage(fine.STAGE_IO):
+        fine._sample_main_thread_once(ident)
+    assert fine._FINE_STATE["stack"] == []
+    fine._FINE_STATE["scope"] = "thermal"
+    fine._sample_main_thread_once(ident)
+    fine._FINE_STATE["scope"] = None
+    fine._sample_main_thread_once(ident)
+    cats = fine._FINE_STATE["samples"]
+    assert cats["stage:io"] == 1
+    assert cats["solver_unstaged:thermal"] == 1
+    assert cats["unattributed"] == 1
+    summary = fine._fine_sampling_summary(10)
+    assert summary["categories"]["unattributed"] == 1
