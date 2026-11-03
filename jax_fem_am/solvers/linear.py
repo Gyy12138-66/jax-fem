@@ -27,7 +27,7 @@ Backends and their keys:
 
     jax      method (cg|bicgstab|gmres|spsolve), precond (jacobi|none), tol,
              atol, maxiter, restart, solve_method, check_residual, check_factor
-    pardiso  mode (base|nocmp|cache-idx|phase23|fp32ir)
+    pardiso  mode (base|nocmp|cache-idx|phase23|fp32ir|free-spd)
     spsolve  (no keys)
     petsc    ksp_type, pc_type, gpu
     amgx     cfg_path
@@ -68,7 +68,7 @@ SCOPES = ("thermal", "mechanics")
 JAX_METHODS = ("cg", "bicgstab", "gmres", "spsolve")
 JAX_SOLVE_METHODS = ("batched", "incremental")
 PRECONDS = ("jacobi", "none")
-PARDISO_MODES = ("base", "nocmp", "cache-idx", "phase23", "fp32ir")
+PARDISO_MODES = ("base", "nocmp", "cache-idx", "phase23", "fp32ir", "free-spd")
 PYAMG_METHODS = ("cg", "bicgstab")
 PYAMG_NEAR_NULLSPACES = ("rigid_body", "constant")
 PYAMG_REBUILD = ("pattern", "always")

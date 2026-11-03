@@ -32,7 +32,7 @@ jax_fem.solver.solver → Newton 循环 → linear_solver(A, b, x0, linear_optio
 | `platform` | `gpu` / `cpu` | `--xla-platform` + 契约 `platform`(设置 `JAX_PLATFORM_NAME`) | 决定装配/残差内核在哪跑;与线性求解器无关 |
 | `python_bin` | 路径 | 契约 `python_bin` | 生产用 `miniconda3/envs/jax-fem-gpu/bin/python`(CUDA 12) |
 | `solver` | `pardiso` / `jax` / `spsolve` / `petsc` / `amgx` / `keep` | `--xla-linear-solver` | `keep` = 不改写,沿用 stepper 里的 `spsolve_solver` |
-| `pardiso_mode` | `base` / `nocmp` / `cache-idx` / `phase23` / `fp32ir` | `--xla-pardiso-mode` | 生产用 `phase23`;字段为必填(preflight 直接索引) |
+| `pardiso_mode` | `base` / `nocmp` / `cache-idx` / `phase23` / `fp32ir` / `free-spd` | `--xla-pardiso-mode` | 生产用 `phase23`;字段为必填(preflight 直接索引) |
 | `cell_target_batch_size` | 整数 | `--xla-cell-target-batch-size` | 装配分批,控显存;生产 32768 |
 | `jax_precond` | bool | `--xla-jax-precond` | **必须显式为 true**,见 §3 的默认值反转 |
 | `jax_method` | `bicgstab` / `cg` / `gmres` / `spsolve` | `--xla-jax-method` | 热学活跃块精确对称,`cg` 可用 |
@@ -172,7 +172,7 @@ A 组诊断(倾倒矩阵离线):热学活跃块 κ(Jacobi 缩放)12–42、与�
 | backend | 实现 | 键 |
 |---|---|---|
 | `jax` | vendored `jax_solve`(GPU/CPU Krylov) | `method` cg/bicgstab/gmres/spsolve,`precond` jacobi/none,`tol`,`atol`,`maxiter`,`restart`,`solve_method`,`check_residual` |
-| `pardiso` | `jax_fem_am.solvers.pardiso.PardisoCustomSolver`(从 acceleration.py 移入;全进程按 mode 共享一个实例,分解句柄跨热学/力学/release/回退复用) | `mode` base/nocmp/cache-idx/phase23/fp32ir |
+| `pardiso` | `jax_fem_am.solvers.pardiso.PardisoCustomSolver`(从 acceleration.py 移入;全进程按 mode 共享一个实例,分解句柄跨热学/力学/release/回退复用) | `mode` base/nocmp/cache-idx/phase23/fp32ir/free-spd(`free-spd`:剔除单位行后只解自由块，mtype=2 Cholesky；自由集合变化时先释放旧分解再分析，常驻至多一份分解；PARDISO 报错时本次退回整系统 mtype=11 一次性求解) |
 | `spsolve` | SciPy 直接法(单线程基线) | — |
 | `petsc` | petsc4py KSP | `ksp_type`,`pc_type`,`gpu` |
 | `amgx` | pyamgx | `cfg_path` |
