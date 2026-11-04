@@ -106,8 +106,10 @@ class _TimedHostStack:
     Everything else is plain numpy.
     """
 
-    def __init__(self, profiler: "ProfilingReport") -> None:
+    def __init__(self, profiler: "ProfilingReport", inner: Any = None) -> None:
         self._profiler = profiler
+        # inner: the np_version being timed (numpy, or jax_fem.problem's _TangentHostWriter)
+        self._inner = _numpy if inner is None else inner
 
     def vstack(self, arrays):
         import jax
@@ -115,14 +117,14 @@ class _TimedHostStack:
         t0 = time.perf_counter()
         jax.block_until_ready(arrays)
         t1 = time.perf_counter()
-        out = _numpy.vstack(arrays)
+        out = self._inner.vstack(arrays)
         t2 = time.perf_counter()
         self._profiler.add(STAGE_CELL_JACOBIAN_DEVICE, t1 - t0)
         self._profiler.add(STAGE_CELL_JACOBIAN_D2H, t2 - t1)
         return out
 
     def __getattr__(self, name):
-        return getattr(_numpy, name)
+        return getattr(self._inner, name)
 
 
 def _frame_label(frame, with_line: bool) -> str:
@@ -1840,11 +1842,15 @@ def install_problem_local_assembly_timing_patch(
     ):
         stage = STAGE_CELL_JACOBIAN if jac_flag else STAGE_CELL_RESIDUAL
         with profiler.stage(stage):
-            if FINE_TIMING and jac_flag and np_version is _numpy:
+            writer_cls = getattr(problem_module, "_TangentHostWriter", None)
+            if FINE_TIMING and jac_flag and (
+                np_version is _numpy
+                or (writer_cls is not None and isinstance(np_version, writer_cls))
+            ):
                 return original_split(
                     self,
                     cells_sol_flat,
-                    _TimedHostStack(profiler),
+                    _TimedHostStack(profiler, np_version),
                     jac_flag,
                     internal_vars,
                 )
@@ -1905,6 +1911,25 @@ def install_problem_local_assembly_timing_patch(
                 sol[cells] for cells, sol in zip(self.cells_list, sol_list)
             ]
             cells_sol_flat = self._flatten_cells_sol(cells_sol_list)
+            if getattr(problem_module, "TANGENT_HOST_PATH", "legacy") != "legacy":
+                writer = problem_module._TangentHostWriter(self)
+                weak_form_flat, cells_jac_flat = self.split_and_compute_cell(
+                    cells_sol_flat, writer, True, internal_vars
+                )
+                t0 = time.perf_counter()
+                if not writer.wrote_cells:
+                    writer.write([cells_jac_flat])
+                profiler.add(STAGE_NEWTON_TANGENT_COPY, time.perf_counter() - t0)
+                weak_form_face_flat, cells_jac_face_flat = self.compute_face(
+                    cells_sol_flat, _numpy, True, internal_vars_surfaces
+                )
+                t0 = time.perf_counter()
+                writer.write(cells_jac_face_flat)
+                self.V = writer.finish()
+                profiler.add(STAGE_NEWTON_TANGENT_COPY, time.perf_counter() - t0)
+                return self.compute_residual_vars_helper(
+                    weak_form_flat, weak_form_face_flat
+                )
             weak_form_flat, cells_jac_flat = self.split_and_compute_cell(
                 cells_sol_flat, _numpy, True, internal_vars
             )

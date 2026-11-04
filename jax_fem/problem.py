@@ -1,3 +1,5 @@
+import os
+
 import numpy as onp
 import jax
 import jax.numpy as np
@@ -10,6 +12,113 @@ from jax_fem.utils import timeit
 from jax_fem.generate_mesh import Mesh
 from jax_fem.fe import FiniteElement
 from jax_fem import logger
+
+
+# cudss-plus 2026-11-04 (options A+B of the stage-cost study): host path of the element tangents.
+# The original compute_newton_vars copied every Newton tangent three times on the host: onp.vstack of pageable
+# device->host copies of the chunks, onp.array of the result, and onp.hstack once per face block (0.94 GB each for
+# the 0119 mechanics). Here every chunk and face block is copied once, in order, into one host buffer of len(I)
+# values that the problem keeps and reuses, through pinned host memory when the backend has it. The values and
+# their order are unchanged. Problem.V is that buffer; its consumers (the PETSc tangent cache's setValuesCOO, the
+# scipy COO assembly) copy it before the next build. JAX_FEM_TANGENT_HOST_PATH=legacy restores the original copies.
+TANGENT_HOST_PATH = os.environ.get("JAX_FEM_TANGENT_HOST_PATH", "pinned").strip().lower()
+_PINNED_SHARDINGS = {}
+
+
+def _pinned_host_sharding(array):
+    """SingleDeviceSharding(memory_kind="pinned_host") for the device of ``array``; None on the CPU backend or
+    when the backend has no pinned host memory (then the copies are pageable)."""
+    try:
+        dev = next(iter(array.devices()))
+    except Exception:
+        return None
+    if dev.platform == "cpu":
+        return None
+    key = (dev.platform, dev.id)
+    if key not in _PINNED_SHARDINGS:
+        try:
+            from jax.sharding import SingleDeviceSharding
+            sharding = SingleDeviceSharding(dev, memory_kind="pinned_host")
+            jax.device_put(np.zeros((1,), dtype=array.dtype), sharding).block_until_ready()
+            _PINNED_SHARDINGS[key] = sharding
+        except Exception as exc:
+            logger.warning(f"pinned_host transfers unavailable ({exc}); element tangents use pageable copies")
+            _PINNED_SHARDINGS[key] = None
+    return _PINNED_SHARDINGS[key]
+
+
+class _TangentHostWriter:
+    """``np_version`` stand-in for split_and_compute_cell(jac_flag=True) in compute_newton_vars.
+
+    ``vstack`` of 3-D chunks (element tangents) copies them, in order, into the problem's reused host buffer and
+    returns a view of that part; ``vstack`` of 2-D chunks (cell residuals) concatenates on the device, where the
+    residual is scattered next. ``write`` appends further blocks (the face tangents). Other attributes are numpy's.
+    """
+
+    def __init__(self, problem):
+        self.problem = problem
+        self.out = None
+        self.offset = 0
+        self.wrote_cells = False
+
+    def _buffer(self, dtype):
+        n = int(self.problem.I.shape[0])
+        buf = getattr(self.problem, "_tangent_host_buffer", None)
+        if buf is None or buf.shape[0] != n or buf.dtype != dtype:
+            buf = onp.empty(n, dtype=dtype)
+            self.problem._tangent_host_buffer = buf
+        return buf
+
+    def write(self, arrays):
+        """Copy ``arrays`` (device or host, any shape) one after another into the buffer; returns (start, stop)."""
+        arrays = list(arrays)
+        start = self.offset
+        if not arrays:
+            return start, start
+        if self.out is None:
+            self.out = self._buffer(onp.dtype(arrays[0].dtype))
+        sizes = [int(onp.prod(a.shape)) for a in arrays]
+        if start + sum(sizes) > self.out.shape[0]:
+            raise ValueError("element tangent blocks exceed len(Problem.I)")
+        pinned = None
+        for a in arrays:
+            if isinstance(a, jax.Array):
+                pinned = _pinned_host_sharding(a)
+                break
+
+        def begin(a):
+            if pinned is not None and isinstance(a, jax.Array):
+                return jax.device_put(a, pinned)
+            return a
+
+        # two deep: the next block's device->host copy runs while this one is copied into the buffer
+        pending = begin(arrays[0])
+        for i, size in enumerate(sizes):
+            nxt = begin(arrays[i + 1]) if i + 1 < len(arrays) else None
+            self.out[self.offset:self.offset + size] = onp.asarray(pending).reshape(-1)
+            self.offset += size
+            pending = nxt
+        return start, self.offset
+
+    def vstack(self, arrays):
+        arrays = list(arrays)
+        if arrays and getattr(arrays[0], "ndim", 0) == 3:
+            start, stop = self.write(arrays)
+            self.wrote_cells = True
+            rows = sum(int(a.shape[0]) for a in arrays)
+            return self.out[start:stop].reshape((rows,) + tuple(arrays[0].shape[1:]))
+        return np.concatenate(arrays, axis=0)
+
+    def finish(self):
+        if self.out is None or self.offset != self.out.shape[0]:
+            raise ValueError(
+                f"element tangents filled {self.offset} of {int(self.problem.I.shape[0])} COO values"
+            )
+        return self.out
+
+    def __getattr__(self, name):
+        return getattr(onp, name)
+
 
 
 @dataclass
@@ -575,14 +684,25 @@ class Problem:
         cells_sol_list = [sol[cells] for cells, sol in zip(self.cells_list, sol_list)] # [(num_cells, num_nodes, vec), ...]
         cells_sol_flat = self._flatten_cells_sol(cells_sol_list) # (num_cells, num_nodes*vec + ...)
         # (num_cells, num_nodes*vec + ...),  (num_cells, num_nodes*vec + ..., num_nodes*vec + ...)
-        weak_form_flat, cells_jac_flat = self.split_and_compute_cell(cells_sol_flat, onp, True, internal_vars)
-        self.V = onp.array(cells_jac_flat.reshape(-1))
+        if TANGENT_HOST_PATH == "legacy":
+            weak_form_flat, cells_jac_flat = self.split_and_compute_cell(cells_sol_flat, onp, True, internal_vars)
+            self.V = onp.array(cells_jac_flat.reshape(-1))
 
-        # [(num_selected_faces, num_nodes*vec + ...,), ...], [(num_selected_faces, num_nodes*vec + ..., num_nodes*vec + ...,), ...]
+            # [(num_selected_faces, num_nodes*vec + ...,), ...], [(num_selected_faces, num_nodes*vec + ..., num_nodes*vec + ...,), ...]
+            weak_form_face_flat, cells_jac_face_flat = self.compute_face(cells_sol_flat, onp, True, internal_vars_surfaces)
+            for cells_jac_f_flat in cells_jac_face_flat:
+                self.V = onp.hstack((self.V, onp.array(cells_jac_f_flat.reshape(-1))))
+
+            return self.compute_residual_vars_helper(weak_form_flat, weak_form_face_flat)
+
+        # cells, then face blocks, straight into the reused host buffer (same order as I/J)
+        writer = _TangentHostWriter(self)
+        weak_form_flat, cells_jac_flat = self.split_and_compute_cell(cells_sol_flat, writer, True, internal_vars)
+        if not writer.wrote_cells:
+            writer.write([cells_jac_flat])
         weak_form_face_flat, cells_jac_face_flat = self.compute_face(cells_sol_flat, onp, True, internal_vars_surfaces)
-        for cells_jac_f_flat in cells_jac_face_flat:
-            self.V = onp.hstack((self.V, onp.array(cells_jac_f_flat.reshape(-1))))
-
+        writer.write(cells_jac_face_flat)
+        self.V = writer.finish()
         return self.compute_residual_vars_helper(weak_form_flat, weak_form_face_flat)
 
     def compute_residual(self, sol_list):
