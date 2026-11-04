@@ -152,7 +152,10 @@ def physical_node_mask(cells, physical_cell, num_nodes=None):
     mask = onp.zeros(num_nodes, dtype=bool)
     selected = cells[physical_cell]
     if selected.size:
-        mask[onp.unique(selected)] = True
+        # Boolean scatter: repeated nodes just set True again, so this is the
+        # same mask as mask[onp.unique(selected)] = True, without the sort
+        # (cudss-plus 2026-11-04: np.unique here was 735 s of the 0119 run).
+        mask[selected.reshape(-1)] = True
     return mask
 
 
