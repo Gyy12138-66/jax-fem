@@ -47,6 +47,31 @@ def _pinned_host_sharding(array):
     return _PINNED_SHARDINGS[key]
 
 
+# cudss-plus 2026-11-04 (dispatch fix, prior P4): the chunk loop of split_and_compute_cell sliced every input
+# eagerly (17 inputs x 7 chunks = 119 slice dispatches, ~0.1 s per 0119 mechanics build while the jitted kernel
+# call returns in 0.2 ms). One jitted dynamic_slice call per chunk cuts the same rows. JAX_FEM_CHUNK_SLICE=eager
+# restores the per-array slicing.
+CHUNK_SLICE = os.environ.get("JAX_FEM_CHUNK_SLICE", "jit").strip().lower()
+
+
+@functools.partial(jax.jit, static_argnums=(1,))
+def _slice_rows(arrays, size, start):
+    return [jax.lax.dynamic_slice_in_dim(x, start, size, axis=0) for x in arrays]
+
+
+def _cell_chunk(input_collection, i, batch_size, num_cuts, num_cells):
+    """Inputs of chunk ``i``: rows [i*batch_size, (i+1)*batch_size), the last chunk running to the end."""
+    start = i * batch_size
+    if CHUNK_SLICE != "eager":
+        leaves, treedef = jax.tree_util.tree_flatten(input_collection)
+        if all(getattr(x, "ndim", 0) >= 1 and x.shape[0] == num_cells for x in leaves):
+            stop = (i + 1) * batch_size if i < num_cuts - 1 else num_cells
+            return jax.tree_util.tree_unflatten(treedef, _slice_rows(leaves, stop - start, start))
+    if i < num_cuts - 1:
+        return jax.tree_util.tree_map(lambda x: x[start:start + batch_size], input_collection)
+    return jax.tree_util.tree_map(lambda x: x[start:], input_collection)
+
+
 class _TangentHostWriter:
     """``np_version`` stand-in for split_and_compute_cell(jac_flag=True) in compute_newton_vars.
 
@@ -567,10 +592,7 @@ class Problem:
             values = []
             jacs = []
             for i in range(num_cuts):
-                if i < num_cuts - 1:
-                    input_col = jax.tree_util.tree_map(lambda x: x[i * batch_size:(i + 1) * batch_size], input_collection)
-                else:
-                    input_col = jax.tree_util.tree_map(lambda x: x[i * batch_size:], input_collection)
+                input_col = _cell_chunk(input_collection, i, batch_size, num_cuts, self.num_cells)
 
                 val, jac = vmap_fn(*input_col)
                 values.append(val)
@@ -582,10 +604,7 @@ class Problem:
         else:
             values = []
             for i in range(num_cuts):
-                if i < num_cuts - 1:
-                    input_col = jax.tree_util.tree_map(lambda x: x[i * batch_size:(i + 1) * batch_size], input_collection)
-                else:
-                    input_col = jax.tree_util.tree_map(lambda x: x[i * batch_size:], input_collection)
+                input_col = _cell_chunk(input_collection, i, batch_size, num_cuts, self.num_cells)
 
                 val = vmap_fn(*input_col)
                 values.append(val)
