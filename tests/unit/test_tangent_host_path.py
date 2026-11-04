@@ -2,8 +2,11 @@
 
 The reused-buffer path (JAX_FEM_TANGENT_HOST_PATH=pinned, the default) and the jitted chunk slicing
 (JAX_FEM_CHUNK_SLICE=jit, the default) must give exactly the values and order of the original code
-(legacy / eager): same Problem.V, same residual, for several chunk counts and with a face block. On the CPU
-backend the copies are pageable; under ``-m gpu`` the same checks run through pinned host memory.
+(legacy / eager): same Problem.V and the same cell-kernel outputs, bit for bit, for several chunk counts and with
+a face block. On the CPU backend the copies are pageable; on a GPU they go through pinned host memory.
+The ASSEMBLED residual is compared bit for bit only on the CPU: on a GPU the scatter-add (``.at[].add``) is not
+deterministic even between two calls of the original code (checked 2026-11-04, float32 and float64), so there
+it is compared to a few ulps of its scale.
 """
 import numpy as onp
 import pytest
@@ -50,6 +53,17 @@ def _newton(p, sol):
     return onp.array(p.V), [onp.asarray(r) for r in res]
 
 
+def _same_residual(a, b):
+    if jax.default_backend() == "cpu":
+        return onp.array_equal(a, b)
+    eps = onp.finfo(onp.asarray(b).dtype).eps
+    return onp.allclose(a, b, rtol=0.0, atol=64 * eps * float(onp.abs(b).max()))
+
+
+def _cells_sol_flat(p, sol):
+    return p._flatten_cells_sol([s[c] for c, s in zip(p.cells_list, sol)])
+
+
 def _check_paths(monkeypatch, num_cuts):
     p = _problem(num_cuts)
     monkeypatch.setattr(problem_mod, "TANGENT_HOST_PATH", "legacy")
@@ -64,7 +78,7 @@ def _check_paths(monkeypatch, num_cuts):
         assert onp.array_equal(V, V_ref)
         assert len(res) == len(res_ref)
         for a, b in zip(res, res_ref):
-            assert onp.array_equal(a, b)
+            assert _same_residual(a, b)
     assert p.V is p._tangent_host_buffer
     return p
 
@@ -72,6 +86,23 @@ def _check_paths(monkeypatch, num_cuts):
 @pytest.mark.parametrize("num_cuts", [1, 3, 4])
 def test_newton_vars_match_legacy(monkeypatch, num_cuts):
     _check_paths(monkeypatch, num_cuts)
+
+
+@pytest.mark.parametrize("num_cuts", [1, 3, 4])
+def test_cell_kernel_outputs_bitwise(monkeypatch, num_cuts):
+    """Residual chunks and tangents out of split_and_compute_cell, before any scatter: bit for bit."""
+    p = _problem(num_cuts)
+    flat = _cells_sol_flat(p, _sol(p, 2))
+    monkeypatch.setattr(problem_mod, "CHUNK_SLICE", "eager", raising=False)
+    val_ref, jac_ref = p.split_and_compute_cell(flat, onp, True, p.internal_vars)
+    res_ref = p.split_and_compute_cell(flat, jnp, False, p.internal_vars)
+    monkeypatch.setattr(problem_mod, "CHUNK_SLICE", "jit", raising=False)
+    w = _TangentHostWriter(p)
+    val, jac = p.split_and_compute_cell(flat, w, True, p.internal_vars)
+    res = p.split_and_compute_cell(flat, jnp, False, p.internal_vars)
+    assert onp.array_equal(onp.asarray(val), onp.asarray(val_ref))
+    assert onp.array_equal(onp.asarray(jac), onp.asarray(jac_ref))
+    assert onp.array_equal(onp.asarray(res), onp.asarray(res_ref))
 
 
 @pytest.mark.parametrize("num_cuts", [1, 4])
@@ -83,7 +114,7 @@ def test_residual_chunk_slicing_matches_eager(monkeypatch, num_cuts):
     monkeypatch.setattr(problem_mod, "CHUNK_SLICE", "jit", raising=False)
     out = [onp.asarray(r) for r in p.compute_residual(sol)]
     for a, b in zip(out, ref):
-        assert onp.array_equal(a, b)
+        assert _same_residual(a, b)
 
 
 def test_writer_rejects_wrong_total():
