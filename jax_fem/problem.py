@@ -83,11 +83,16 @@ class _TangentHostWriter:
     def __init__(self, problem):
         self.problem = problem
         self.out = None
+        self.parts = None  # list mode: the Problem has no COO pattern (Problem.I) to size the buffer
         self.offset = 0
         self.wrote_cells = False
 
+    def _n(self):
+        I = getattr(self.problem, "I", None)
+        return None if I is None else int(I.shape[0])
+
     def _buffer(self, dtype):
-        n = int(self.problem.I.shape[0])
+        n = self._n()
         buf = getattr(self.problem, "_tangent_host_buffer", None)
         if buf is None or buf.shape[0] != n or buf.dtype != dtype:
             buf = onp.empty(n, dtype=dtype)
@@ -100,8 +105,16 @@ class _TangentHostWriter:
         start = self.offset
         if not arrays:
             return start, start
-        if self.out is None:
-            self.out = self._buffer(onp.dtype(arrays[0].dtype))
+        if self.out is None and self.parts is None:
+            if self._n() is None:
+                self.parts = []
+            else:
+                self.out = self._buffer(onp.dtype(arrays[0].dtype))
+        if self.parts is not None:
+            for a in arrays:
+                self.parts.append(onp.asarray(a).reshape(-1))
+                self.offset += self.parts[-1].size
+            return start, self.offset
         sizes = [int(onp.prod(a.shape)) for a in arrays]
         if start + sum(sizes) > self.out.shape[0]:
             raise ValueError("element tangent blocks exceed len(Problem.I)")
@@ -131,14 +144,15 @@ class _TangentHostWriter:
             start, stop = self.write(arrays)
             self.wrote_cells = True
             rows = sum(int(a.shape[0]) for a in arrays)
-            return self.out[start:stop].reshape((rows,) + tuple(arrays[0].shape[1:]))
+            flat = onp.concatenate(self.parts[-len(arrays):]) if self.parts is not None else self.out[start:stop]
+            return flat.reshape((rows,) + tuple(arrays[0].shape[1:]))
         return np.concatenate(arrays, axis=0)
 
     def finish(self):
+        if self.parts is not None:
+            return onp.concatenate(self.parts)
         if self.out is None or self.offset != self.out.shape[0]:
-            raise ValueError(
-                f"element tangents filled {self.offset} of {int(self.problem.I.shape[0])} COO values"
-            )
+            raise ValueError(f"element tangents filled {self.offset} of {self._n()} COO values")
         return self.out
 
     def __getattr__(self, name):
