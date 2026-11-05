@@ -765,6 +765,9 @@ class Problem:
         ``self.V_device``; ``self.V`` is not filled (jax_fem.solver.get_A then asks the assembler).
         With ``device_tangent_chunks`` the cell tangents stay as their chunks, ``self.V_device_chunks`` =
         [(first cell, (cells, n, n) array), ...] in cell order (mechanics K1); face tangents are not allowed."""
+        drop = getattr(getattr(self, "device_tangent_assembler", None), "drop_last", None)
+        if drop is not None:
+            drop()              # the previous matrix is obsolete once a new tangent is built (pool peak)
         if getattr(self, "device_tangent_chunks", False):
             collector = _DeviceChunks()
             weak_form_flat, cells_jac = self.split_and_compute_cell(cells_sol_flat, collector, True, internal_vars)

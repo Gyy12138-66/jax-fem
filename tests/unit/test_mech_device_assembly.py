@@ -74,6 +74,13 @@ def _lane_kff(A):
     return pinned, fr[keep], fc[keep], data[keep], (indptr, indices, data)
 
 
+def _host_matrix_like(p, sol):
+    """PETSc tangent of a fresh host-path problem at the same solution (reference for the device matrix)."""
+    q = _problem()
+    q.compute_newton_vars(sol, q.internal_vars, q.internal_vars_surfaces)
+    return solver_mod.get_A(q)
+
+
 def _both(seed=0):
     from jax_fem_am.solvers.device_assembly import attach_mechanics_device_assembly
 
@@ -125,21 +132,26 @@ def test_cudss_device_path_solves_like_the_host_path():
     assert onp.max(onp.abs(x1 - x_ref)) <= 1e-9 * onp.max(onp.abs(x_ref))
     assert onp.max(onp.abs(x2 - x1)) <= 1e-12 * onp.max(onp.abs(x1))
     p.compute_newton_vars(_sol(p, 2), p.internal_vars, p.internal_vars_surfaces)
+    with pytest.raises(RuntimeError):             # the previous matrix was dropped by the new tangent build
+        A_dev.device_free_spd()
     A2 = solver_mod.get_A(p)
     x3 = dev(A2, b)                               # new values, same pattern: refactorization
     assert onp.all(onp.isfinite(x3))
     # nonzero pinned right-hand side: x_P = b_P, f = b_F - K_FP x_P
     b2 = b.copy()
     b2[pinned] = 1e-3 * rng.standard_normal(int(pinned.sum()))
-    x4_ref = host(A_ref, b2)
-    x4 = dev(A_dev, b2)
+    A2_ref = _host_matrix_like(p, _sol(p, 2))
+    x4_ref = host(A2_ref, b2)
+    x4 = dev(A2, b2)
     assert onp.max(onp.abs(x4 - x4_ref)) <= 1e-9 * onp.max(onp.abs(x4_ref))
     st = dev.stats_snapshot()
-    assert st["device_solves"] == 4 and st["phase13_calls"] == 1 and st["phase33_calls"] == 1
-    assert st["phase23_calls"] == 2 and st["gpu_pattern_failures"] == 0
+    # x1: analysis (13); x2: same matrix, back-substitution (33); x3: new matrix (23); x4: same as x3 (33)
+    assert st["device_solves"] == 4 and st["phase13_calls"] == 1 and st["phase33_calls"] == 2
+    assert st["phase23_calls"] == 1 and st["gpu_pattern_failures"] == 0
     # CPU fallback on the device matrix (as after a cuDSS failure)
-    x5 = dev._cpu_solve(A_dev, b, None, None)
-    assert onp.max(onp.abs(x5 - x_ref)) <= 1e-9 * onp.max(onp.abs(x_ref))
+    x5 = dev._cpu_solve(A2, b, None, None)
+    x5_ref = host(A2_ref, b)
+    assert onp.max(onp.abs(x5 - x5_ref)) <= 1e-9 * onp.max(onp.abs(x5_ref))
     # release (before the release solve): buffers dropped, stale matrices refuse to be used
     asm.release()
     with pytest.raises(RuntimeError):

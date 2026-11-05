@@ -332,6 +332,17 @@ class MechDeviceAssembler:
         self.pattern_seconds += time.perf_counter() - t0
         return self._pattern
 
+    def drop_last(self):
+        """Free the previous matrix's device values before the next tangent is built (called by
+        Problem._compute_newton_vars_device): the tangent build is the JAX pool peak, and the old matrix (~0.47 GB
+        on 0119) is not needed any more (the next solve gets the new matrix; cuDSS is pointed at its buffer before
+        factorizing). M2 full height 2026-11-05: JAX pool OOM at layer 29 without this (peak 6.58 of 7.0 GB)."""
+        last = self._last
+        if last is not None:
+            last.upper = None
+            last.values_ff = None
+        self._last = None
+
     def release(self):
         """Free the device buffers (block map, compaction index, last matrix values), e.g. before the release
         solve builds its own problem on the same mesh. The matrices handed out so far become unusable."""
