@@ -101,6 +101,7 @@ def _libs():
         ds.cudssMatrixDestroy.argtypes = [c_void_p]
         ds.cudssDataDestroy.argtypes = [c_void_p, c_void_p]
         ds.cudssConfigDestroy.argtypes = [c_void_p]
+        ds.cudssMatrixSetValues.argtypes = [c_void_p, c_void_p]
         _rt, _ds = rt, ds
     return _rt, _ds
 
@@ -229,6 +230,50 @@ class _GpuPattern:
         self.bufs = []
 
 
+class _GpuPatternFF(_GpuPattern):
+    """Pattern of a device-assembled K_FF (jax_fem_am.solvers.device_assembly.FreeBlockPattern, M2): structure
+    uploaded once, the values stay in the JAX buffer (cudssMatrixSetValues before every factorization), so there
+    is no cuDSS value buffer and no host split."""
+
+    def __init__(self, handle, variant, signature, fbp, values_ptr):
+        self.signature = signature
+        self.free = fbp.free_idx
+        self.pin = fbp.pin_idx
+        self.analyzed = False
+        self.data = None
+        self.bufs, self.mats = [], []
+        self.cfg = self.cdata = None
+        self.handle = handle
+        self.keep = None
+        self.nf = nf = int(fbp.nf)
+        nz = int(fbp.nnz)
+        if nf == 0:
+            return
+        try:
+            ptr = np.ascontiguousarray(fbp.ptr, dtype=np.int32)
+            col = np.ascontiguousarray(fbp.col, dtype=np.int32)
+            self.d_ptr, self.d_col = _Dev(ptr.nbytes), _Dev(col.nbytes)
+            self.bufs += [self.d_ptr, self.d_col]
+            self.d_x, self.d_b = _Dev(nf * 8), _Dev(nf * 8)
+            self.bufs += [self.d_x, self.d_b]
+            self.d_ptr.put(ptr)
+            self.d_col.put(col)
+            self.cfg = self._config(variant)
+            self.cdata = c_void_p()
+            _ck(_ds.cudssDataCreate(handle, byref(self.cdata)), "cudssDataCreate")
+            self.A, self.X, self.B = c_void_p(), c_void_p(), c_void_p()
+            _ck(_ds.cudssMatrixCreateCsr(byref(self.A), nf, nf, nz, self.d_ptr.p, None, self.d_col.p, values_ptr,
+                                         R_32I, R_32I, R_64F, MTYPE_SPD, MVIEW_UPPER, BASE_ZERO), "MatrixCreateCsr")
+            self.mats.append(self.A)
+            _ck(_ds.cudssMatrixCreateDn(byref(self.X), nf, 1, nf, self.d_x.p, R_64F, COL_MAJOR), "MatrixCreateDn x")
+            self.mats.append(self.X)
+            _ck(_ds.cudssMatrixCreateDn(byref(self.B), nf, 1, nf, self.d_b.p, R_64F, COL_MAJOR), "MatrixCreateDn b")
+            self.mats.append(self.B)
+        except CudssError:
+            self.destroy()
+            raise
+
+
 class CudssFreeBlockSPDSolver:
     """Drop-in for FreeBlockSPDSolver: same call/stats/release protocol, Cholesky on the GPU through cuDSS."""
 
@@ -322,7 +367,91 @@ class CudssFreeBlockSPDSolver:
         self._cpu_signature = signature
         return self._cpu_solve(A, b, x0, linear_options)
 
+    def _solve_device(self, A, b, x0, linear_options):
+        """K_FF assembled on the device (MechDeviceCSR): factor/solve straight from its buffer."""
+        fbp, values = A.device_free_spd()
+        rhs = np.asarray(b, dtype=np.float64).ravel()
+        n = int(fbp.n)
+        self._stats["solves"] += 1
+        self._stats["device_solves"] = self._stats.get("device_solves", 0) + 1
+        t0 = time.perf_counter()
+        signature = ("device",) + tuple(fbp.signature)
+        if signature == self._cpu_signature:       # this pattern already failed on the GPU
+            return self._cpu_solve(A, b, x0, linear_options)
+        x = np.zeros(n)
+        x[fbp.pin_idx] = rhs[fbp.pin_idx]
+        if fbp.nf == 0:
+            return x
+        if np.any(x[fbp.pin_idx]):
+            f = rhs[fbp.free_idx] - A.matvec_raw(x)[fbp.free_idx]
+        else:
+            self._stats["pinned_zero_rhs"] += 1
+            f = rhs[fbp.free_idx]
+        f = np.ascontiguousarray(f)
+        values.block_until_ready()               # cuDSS runs on its own stream: the values must be complete
+        vptr = c_void_p(values.unsafe_buffer_pointer())
+        pat = self._pattern
+        if pat is None or pat.signature != signature:
+            if pat is not None:
+                self._stats["pattern_rebuilds"] += 1
+            self._drop_pattern()
+            self._release_cpu()
+            t1 = time.perf_counter()
+            try:
+                if self._handle is None:
+                    _libs()
+                    h = c_void_p()
+                    _ck(_ds.cudssCreate(byref(h)), "cudssCreate")
+                    self._handle = h
+                pat = _GpuPatternFF(self._handle, self.variant, signature, fbp, vptr)
+            except CudssError as exc:
+                return self._gpu_failed(exc, signature, A, b, x0, linear_options)
+            self._pattern = pat
+            self._stats["pattern_seconds"] += time.perf_counter() - t1
+        self._stats["n_free_last"] = int(fbp.nf)
+        self._stats["split_seconds"] += time.perf_counter() - t0
+        t1 = time.perf_counter()
+        try:
+            _ck(_ds.cudssMatrixSetValues(pat.A, vptr), "MatrixSetValues")
+            if not pat.analyzed:
+                phase = 13
+                self._stats["analyze_calls"] += 1
+                pat.execute(PH_ANALYSIS)
+                pat.analyzed = True
+            elif pat.data is A:
+                phase = 33
+                self._stats["backsolve_hits"] += 1
+            else:
+                phase = 23
+            pat.d_b.put(f)
+            if phase != 33:
+                pat.execute(PH_FACTOR)
+                info = pat.get(DATA_INFO, c_int)
+                if info != 0:
+                    raise CudssError("Cholesky: non-positive minor at %d" % info)
+            pat.execute(PH_SOLVE)
+            xf = np.empty(int(fbp.nf))
+            pat.d_x.get(xf)
+            if not np.all(np.isfinite(xf)):
+                raise CudssError("non-finite solution")
+            if phase != 33:
+                self._stats["nnz_factor_max"] = max(self._stats["nnz_factor_max"], pat.get(DATA_LU_NNZ))
+                fr_, tot_ = c_size_t(), c_size_t()
+                if _rt.cudaMemGetInfo(byref(fr_), byref(tot_)) == 0:
+                    self._stats["gpu_mem_used_gb_max"] = max(self._stats["gpu_mem_used_gb_max"],
+                                                             (tot_.value - fr_.value) / 1024 ** 3)
+                self._jax_memory()
+        except CudssError as exc:
+            return self._gpu_failed(exc, signature, A, b, x0, linear_options)
+        self._stats[f"phase{phase}_calls"] += 1
+        self._stats[f"phase{phase}_seconds"] += time.perf_counter() - t1
+        pat.data = A          # keeps the device values alive for back-substitution / refinement reuse
+        x[fbp.free_idx] = xf
+        return x
+
     def __call__(self, A, b, x0=None, linear_options=None):
+        if getattr(A, "device_free_spd", None) is not None:
+            return self._solve_device(A, b, x0, linear_options)
         indptr, indices, data = A.getValuesCSR()
         indptr = np.asarray(indptr)
         indices = np.asarray(indices)

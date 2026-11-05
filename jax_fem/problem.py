@@ -72,6 +72,25 @@ def _cell_chunk(input_collection, i, batch_size, num_cuts, num_cells):
     return jax.tree_util.tree_map(lambda x: x[start:], input_collection)
 
 
+class _DeviceChunks:
+    """``np_version`` for split_and_compute_cell in device-chunk mode: the element-tangent chunks are kept as a
+    list on the device (no concatenation, so the whole tangent is never held twice); 2-D blocks (cell
+    residuals) are concatenated on the device as with jax.numpy."""
+
+    def __init__(self):
+        self.chunks = None
+
+    def vstack(self, arrays):
+        arrays = list(arrays)
+        if arrays and getattr(arrays[0], "ndim", 0) == 3:
+            self.chunks = arrays
+            return None
+        return np.concatenate(arrays, axis=0)
+
+    def __getattr__(self, name):
+        return getattr(np, name)
+
+
 class _TangentHostWriter:
     """``np_version`` stand-in for split_and_compute_cell(jac_flag=True) in compute_newton_vars.
 
@@ -743,7 +762,27 @@ class Problem:
     def _compute_newton_vars_device(self, cells_sol_flat, internal_vars, internal_vars_surfaces):
         """Element tangents stay on the device (``device_tangent=True``, set with a device assembler such as
         jax_fem_am.solvers.device_assembly): cells then face blocks, flattened in the order of I / J, go to
-        ``self.V_device``; ``self.V`` is not filled (jax_fem.solver.get_A then asks the assembler)."""
+        ``self.V_device``; ``self.V`` is not filled (jax_fem.solver.get_A then asks the assembler).
+        With ``device_tangent_chunks`` the cell tangents stay as their chunks, ``self.V_device_chunks`` =
+        [(first cell, (cells, n, n) array), ...] in cell order (mechanics K1); face tangents are not allowed."""
+        if getattr(self, "device_tangent_chunks", False):
+            collector = _DeviceChunks()
+            weak_form_flat, cells_jac = self.split_and_compute_cell(cells_sol_flat, collector, True, internal_vars)
+            chunks = collector.chunks if collector.chunks is not None else [cells_jac]
+            weak_form_face_flat, cells_jac_face_flat = self.compute_face(cells_sol_flat, np, True,
+                                                                         internal_vars_surfaces)
+            if any(int(x.shape[0]) for x in cells_jac_face_flat):
+                raise NotImplementedError("device tangent chunks: face tangents are not supported")
+            starts, start = [], 0
+            for c in chunks:
+                starts.append(start)
+                start += int(c.shape[0])
+            if start != self.num_cells:
+                raise ValueError(f"device tangent chunks cover {start} of {self.num_cells} cells")
+            self.V_device_chunks = list(zip(starts, chunks))
+            self.V_device = None
+            self.V = None
+            return self.compute_residual_vars_helper(weak_form_flat, weak_form_face_flat)
         weak_form_flat, cells_jac_flat = self.split_and_compute_cell(cells_sol_flat, np, True, internal_vars)
         weak_form_face_flat, cells_jac_face_flat = self.compute_face(cells_sol_flat, np, True, internal_vars_surfaces)
         self.V_device = np.concatenate([cells_jac_flat.reshape(-1)] + [x.reshape(-1) for x in cells_jac_face_flat])

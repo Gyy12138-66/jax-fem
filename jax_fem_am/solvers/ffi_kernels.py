@@ -12,7 +12,10 @@ Kernels (all sums run over the contributors in a fixed order, so the results are
 
 * ``k3_ragged(v, src, off)``: ``out[i] = sum_{k=off[i]}^{off[i+1]-1} v[src[k]]`` (thermal tangent, any COO);
 * ``k1_scalar(v, table)``: ``out[i] = sum_k v[table[i, k]]`` over the entries >= 0 of a padded table;
-* ``k1_block(v, contrib, pos, diag)``: node-pair 3x3 blocks of a (n_cells, 24, 24) tangent (mechanics, M2).
+* ``k1_block(v, contrib, pos, diag)``: node-pair 3x3 blocks of a (n_cells, 24, 24) tangent (mechanics);
+* ``k1_block_acc(v_chunk, contrib, pos, diag, out, cell_start, cell_end)``: the same for the cells
+  [cell_start, cell_end) of one tangent chunk, ADDED into ``out`` (aliased): chunk after chunk in cell order this
+  sums every entry in exactly the element order of ``k1_block`` (M2, so the whole tangent never sits on the device).
 
 E feasibility priors Q1/Q4/Q5 (output/cplus_priors3): NVRTC 0.05 s, K1 block 3.3 ms, K3 1.2 ms on 0119.
 """
@@ -65,6 +68,31 @@ extern "C" __global__ void k1_block(const double* __restrict__ v, const int* __r
   }
   out[pos[b * 3 + i] + (d ? j - i : j)] = s;
 }
+extern "C" __global__ void k1_block_acc(const double* __restrict__ v, const int* __restrict__ c,
+                                        const int* __restrict__ pos, const int* __restrict__ diag,
+                                        double* __restrict__ out, long long nb, int m, long long cs, long long ce) {
+  long long w = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+  if (w >= nb * 9) return;
+  long long b = w / 9;
+  int t = (int)(w - b * 9), i = t / 3, j = t - 3 * (t / 3);
+  int d = diag[b];
+  if (d && j < i) return;
+  const int* r = c + b * m;
+  long long p = pos[b * 3 + i] + (d ? j - i : j);
+  double s = 0.0;
+  bool any = false;
+  for (int k = 0; k < m; ++k) {
+    int x = r[k];
+    if (x < 0) break;
+    long long e = x >> 6;
+    if (e < cs) continue;          // contributors are sorted by cell: earlier chunks
+    if (e >= ce) break;            // later chunks
+    if (!any) { s = out[p]; any = true; }
+    int pp = (x >> 3) & 7, q = x & 7;
+    s += v[(e - cs) * 576 + (3 * pp + i) * 24 + 3 * q + j];
+  }
+  if (any) out[p] = s;
+}
 """
 
 HANDLER_SRC = r"""
@@ -82,7 +110,7 @@ namespace ffi = xla::ffi;
 static std::vector<char> g_image;
 static std::mutex g_mu;
 static CUmodule g_mod = nullptr;
-static CUfunction g_k3 = nullptr, g_scalar = nullptr, g_block = nullptr;
+static CUfunction g_k3 = nullptr, g_scalar = nullptr, g_block = nullptr, g_block_acc = nullptr;
 
 extern "C" int jfa_set_image(const void* data, size_t size) {
   std::lock_guard<std::mutex> lk(g_mu);
@@ -114,6 +142,7 @@ static ffi::Error ensure_loaded() {
   r = cuModuleGetFunction(&g_k3, g_mod, "k3_ragged");
   if (r == CUDA_SUCCESS) r = cuModuleGetFunction(&g_scalar, g_mod, "k1_scalar");
   if (r == CUDA_SUCCESS) r = cuModuleGetFunction(&g_block, g_mod, "k1_block");
+  if (r == CUDA_SUCCESS) r = cuModuleGetFunction(&g_block_acc, g_mod, "k1_block_acc");
   if (r != CUDA_SUCCESS) return ffi::Error(ffi::ErrorCode::kInternal, cu_err(r, "jfa: cuModuleGetFunction"));
   return ffi::Error::Success();
 }
@@ -170,6 +199,39 @@ static ffi::Error K1BlockImpl(cudaStream_t stream, ffi::Buffer<ffi::F64> v, ffi:
   return launch(g_block, nb * 9, stream, args, "k1_block launch");
 }
 
+// out is aliased to the result (input_output_aliases): the result buffer holds the running sums
+static ffi::Error K1BlockAccImpl(cudaStream_t stream, ffi::Buffer<ffi::F64> v, ffi::Buffer<ffi::S32> contrib,
+                                 ffi::Buffer<ffi::S32> pos, ffi::Buffer<ffi::S32> diag, ffi::Buffer<ffi::F64> out_in,
+                                 ffi::ResultBuffer<ffi::F64> out, int64_t cell_start, int64_t cell_end) {
+  ffi::Error e = ensure_loaded();
+  if (e.failure()) return e;
+  if (out->typed_data() != out_in.typed_data())
+    return ffi::Error(ffi::ErrorCode::kInternal, "k1_block_acc: output not aliased to the accumulator input");
+  auto dims = contrib.dimensions();
+  long long nb = dims[0];
+  int m = static_cast<int>(dims[1]);
+  long long cs = cell_start, ce = cell_end;
+  const double* pv = v.typed_data();
+  const int* pc = contrib.typed_data();
+  const int* pp = pos.typed_data();
+  const int* pd = diag.typed_data();
+  double* po = out->typed_data();
+  void* args[] = {&pv, &pc, &pp, &pd, &po, &nb, &m, &cs, &ce};
+  return launch(g_block_acc, nb * 9, stream, args, "k1_block_acc launch");
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(JfaK1BlockAcc, K1BlockAccImpl,
+                              ffi::Ffi::Bind()
+                                  .Ctx<ffi::PlatformStream<cudaStream_t>>()
+                                  .Arg<ffi::Buffer<ffi::F64>>()
+                                  .Arg<ffi::Buffer<ffi::S32>>()
+                                  .Arg<ffi::Buffer<ffi::S32>>()
+                                  .Arg<ffi::Buffer<ffi::S32>>()
+                                  .Arg<ffi::Buffer<ffi::F64>>()
+                                  .Ret<ffi::Buffer<ffi::F64>>()
+                                  .Attr<int64_t>("cell_start")
+                                  .Attr<int64_t>("cell_end"));
+
 XLA_FFI_DEFINE_HANDLER_SYMBOL(JfaK3Ragged, K3RaggedImpl,
                               ffi::Ffi::Bind()
                                   .Ctx<ffi::PlatformStream<cudaStream_t>>()
@@ -195,7 +257,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(JfaK1Block, K1BlockImpl,
                                   .Ret<ffi::Buffer<ffi::F64>>());
 """
 
-TARGETS = {"jfa_k3_ragged": "JfaK3Ragged", "jfa_k1_scalar": "JfaK1Scalar", "jfa_k1_block": "JfaK1Block"}
+TARGETS = {"jfa_k3_ragged": "JfaK3Ragged", "jfa_k1_scalar": "JfaK1Scalar", "jfa_k1_block": "JfaK1Block",
+           "jfa_k1_block_acc": "JfaK1BlockAcc"}
 _lock = threading.Lock()
 _state = {"registered": False, "lib": None, "image": None, "info": {}}
 
@@ -340,6 +403,17 @@ def k1_block(v, contrib, pos, diag, nnz):
     import jax
 
     return jax.ffi.ffi_call("jfa_k1_block", jax.ShapeDtypeStruct((int(nnz),), v.dtype))(v, contrib, pos, diag)
+
+
+def k1_block_acc(v_chunk, contrib, pos, diag, out, cell_start, cell_end):
+    """Add the tangent entries of cells [cell_start, cell_end) (``v_chunk``: their flat (cells, 24, 24) tangents)
+    into ``out`` (full upper CSR values); returns the updated ``out`` (same buffer when donated)."""
+    import jax
+    import numpy as np
+
+    call = jax.ffi.ffi_call("jfa_k1_block_acc", jax.ShapeDtypeStruct(out.shape, out.dtype),
+                            input_output_aliases={4: 0})
+    return call(v_chunk, contrib, pos, diag, out, cell_start=np.int64(cell_start), cell_end=np.int64(cell_end))
 
 
 if __name__ == "__main__":

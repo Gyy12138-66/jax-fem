@@ -95,7 +95,9 @@ from jax_fem_am.physics.release import (
 from jax_fem_am.physics.thermal import TransientThermal
 from jax_fem_am.simulation.device_memory import share_cell_geometry
 from jax_fem_am.solvers.device_assembly import (
+    attach_mechanics_device_assembly,
     attach_thermal_device_assembly,
+    mechanics_enabled as mechanics_device_assembly_enabled,
     thermal_enabled as thermal_device_assembly_enabled,
 )
 from jax_fem_am.process.activation import (
@@ -783,6 +785,12 @@ def main():
         print(f"[device-assembly] thermal tangent assembled on the device (K3): nnz {_asm.nnz}, "
               f"{_asm.len_V} COO values, <= {_asm.max_contributors} per slot, map {_asm.map_bytes / 2**20:.0f} MB, "
               f"built in {_asm.build_seconds:.1f} s, {_asm.ffi['arch']}")
+    if mechanics_device_assembly_enabled():
+        # K1: the HEX8 tangent goes chunk by chunk into K_FF on the device; use with the free-spd-cudss solver
+        _masm = attach_mechanics_device_assembly(mechanics)
+        print(f"[device-assembly] mechanics tangent assembled on the device (K1): {_masm.n_blocks} node-pair "
+              f"blocks, upper nnz {_masm.nnz_upper}, <= {_masm.max_contributors} per block, "
+              f"map {_masm.map_bytes / 2**20:.0f} MB, built in {_masm.build_seconds:.1f} s")
 
     if getattr(args, "mechanics_direct_solver", False):
         # Hybrid mode: build-step mechanics solves go to the direct PARDISO
