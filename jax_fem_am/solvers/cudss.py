@@ -11,7 +11,7 @@ pattern, numeric factorization per call, back-substitution only when the values 
 factor/solve moves to the GPU (cuDSS 1.0, MTYPE_SPD, MVIEW_UPPER).
 
 Variant from env ``JAX_FEM_CUDSS_VARIANT`` (or the lane's ``CUDSS_LANE``; default ``emu53+dc+ir2``):
-``emuNN`` FP64 emulation with NN mantissa bits in the
+``mtN`` host threading layer with N threads (reordering), ``emuNN`` FP64 emulation with NN mantissa bits in the
 factorization, ``dc`` factors stored in FP32 with the diagonal blocks kept in FP64, ``irN`` N refinement steps in FP64.
 
 Any cuDSS failure (allocation, non-positive minor, non-finite solution) -> the current activation pattern is solved by
@@ -50,6 +50,7 @@ R_64F, R_32I = 1, 10
 MTYPE_SPD, MVIEW_UPPER, BASE_ZERO, COL_MAJOR = 3, 2, 0, 0
 PH_ANALYSIS, PH_FACTOR, PH_SOLVE = 3, 4, 1008
 CFG_IR_N_STEPS, CFG_DETERMINISTIC, CFG_EMULATION, CFG_DOWNCAST = 5, 24, 26, 28
+CFG_HOST_NTHREADS = 14
 CFG_HYBRID_MEMORY_MODE, CFG_HYBRID_DEVICE_MEMORY_LIMIT = 11, 12
 DATA_INFO, DATA_LU_NNZ = 0, 1
 
@@ -102,6 +103,7 @@ def _libs():
         ds.cudssDataDestroy.argtypes = [c_void_p, c_void_p]
         ds.cudssConfigDestroy.argtypes = [c_void_p]
         ds.cudssMatrixSetValues.argtypes = [c_void_p, c_void_p]
+        ds.cudssSetThreadingLayer.argtypes = [c_void_p, ctypes.c_char_p]
         _rt, _ds = rt, ds
     return _rt, _ds
 
@@ -202,6 +204,8 @@ class _GpuPattern:
                 lim = c_int64(int(float(tok[3:]) * 2**30))
                 _ck(_ds.cudssConfigSet(cfg, CFG_HYBRID_DEVICE_MEMORY_LIMIT, byref(lim), ctypes.sizeof(lim)),
                     "ConfigSet(hybrid limit)")
+            elif tok.startswith("mt"):                         # mtN: host threading layer, N threads
+                set_int(CFG_HOST_NTHREADS, int(tok[2:]))
             elif tok != "fp64":
                 raise ValueError("unknown CUDSS_LANE token %r" % tok)
         return cfg
@@ -228,6 +232,24 @@ class _GpuPattern:
         for d in self.bufs:
             d.free()
         self.bufs = []
+
+
+def _mt_threads(variant):
+    for tok in variant.split("+"):
+        if tok.startswith("mt"):
+            return int(tok[2:])
+    return 0
+
+
+def _new_handle(variant):
+    """cuDSS handle; with an mtN token the host threading layer (GOMP) runs the reordering on N threads
+    (prior P2, 0119 L170: reordering 2.23 -> 0.85 s, factorization unchanged)."""
+    h = c_void_p()
+    _ck(_ds.cudssCreate(byref(h)), "cudssCreate")
+    if _mt_threads(variant):
+        lib = os.path.join(os.path.dirname(LIBCUDSS), "libcudss_mtlayer_gomp.so.1")
+        _ck(_ds.cudssSetThreadingLayer(h, lib.encode()), "cudssSetThreadingLayer(%s)" % lib)
+    return h
 
 
 class _GpuPatternFF(_GpuPattern):
@@ -400,9 +422,7 @@ class CudssFreeBlockSPDSolver:
             try:
                 if self._handle is None:
                     _libs()
-                    h = c_void_p()
-                    _ck(_ds.cudssCreate(byref(h)), "cudssCreate")
-                    self._handle = h
+                    self._handle = _new_handle(self.variant)
                 pat = _GpuPatternFF(self._handle, self.variant, signature, fbp, vptr)
             except CudssError as exc:
                 return self._gpu_failed(exc, signature, A, b, x0, linear_options)
@@ -477,9 +497,7 @@ class CudssFreeBlockSPDSolver:
             try:
                 if self._handle is None:
                     _libs()
-                    h = c_void_p()
-                    _ck(_ds.cudssCreate(byref(h)), "cudssCreate")
-                    self._handle = h
+                    self._handle = _new_handle(self.variant)
                 pat = _GpuPattern(self._handle, self.variant, signature, n, indptr, indices, pinned)
             except CudssError as exc:
                 return self._gpu_failed(exc, signature, A, b, x0, linear_options)
