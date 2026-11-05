@@ -93,6 +93,7 @@ from jax_fem_am.physics.release import (
     zero_exact_release_cells,
 )
 from jax_fem_am.physics.thermal import TransientThermal
+from jax_fem_am.simulation.device_memory import share_cell_geometry
 from jax_fem_am.process.activation import (
     contributing_cell_mask,
     compute_active_cell,
@@ -766,6 +767,12 @@ def main():
             flow_curve,
         ),
     )
+
+    # Same mesh, element and quadrature: reuse the thermal problem's per-cell geometry (~0.6 GB on 0119).
+    shared_geometry = share_cell_geometry(thermal, mechanics)
+    if shared_geometry:
+        print(f"[share-geometry] mechanics reuses the thermal {', '.join(sorted(shared_geometry))} "
+              f"({sum(shared_geometry.values()) / 2**20:.0f} MB released)")
 
     if getattr(args, "mechanics_direct_solver", False):
         # Hybrid mode: build-step mechanics solves go to the direct PARDISO
