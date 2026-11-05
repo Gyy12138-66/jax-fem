@@ -94,6 +94,10 @@ from jax_fem_am.physics.release import (
 )
 from jax_fem_am.physics.thermal import TransientThermal
 from jax_fem_am.simulation.device_memory import share_cell_geometry
+from jax_fem_am.solvers.device_assembly import (
+    attach_thermal_device_assembly,
+    thermal_enabled as thermal_device_assembly_enabled,
+)
 from jax_fem_am.process.activation import (
     contributing_cell_mask,
     compute_active_cell,
@@ -773,6 +777,12 @@ def main():
     if shared_geometry:
         print(f"[share-geometry] mechanics reuses the thermal {', '.join(sorted(shared_geometry))} "
               f"({sum(shared_geometry.values()) / 2**20:.0f} MB released)")
+
+    if thermal_device_assembly_enabled():
+        _asm = attach_thermal_device_assembly(thermal)
+        print(f"[device-assembly] thermal tangent assembled on the device (K3): nnz {_asm.nnz}, "
+              f"{_asm.len_V} COO values, <= {_asm.max_contributors} per slot, map {_asm.map_bytes / 2**20:.0f} MB, "
+              f"built in {_asm.build_seconds:.1f} s, {_asm.ffi['arch']}")
 
     if getattr(args, "mechanics_direct_solver", False):
         # Hybrid mode: build-step mechanics solves go to the direct PARDISO

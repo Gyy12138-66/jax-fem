@@ -366,6 +366,19 @@ def jax_solve(
 ):
     logger.debug(f"JAX Solver - Solving linear system")
     conversion_t0 = time.perf_counter()
+    device_bcoo = getattr(A, 'device_bcoo', None)
+    if device_bcoo is not None and method != 'spsolve':
+        # values, structure and Jacobi diagonal already on the device (no PETSc / BCOO conversion)
+        data, bcoo_indices, shape, diag = device_bcoo()
+        A = BCOO((data, bcoo_indices), shape=tuple(int(v) for v in shape),
+                 indices_sorted=False, unique_indices=False)
+        jacobi = diag if precond else None
+        _counter_record(timing, 'device_matrix_solves')
+        _timing_record(timing, 'sparse_conversion', time.perf_counter() - conversion_t0)
+        if timing is not None:
+            timing['_last_linear_internal_breakdown'] = True
+        return _jax_solve_bcoo(A, b, x0, jacobi, precond, method, tol, atol, maxiter, restart,
+                               solve_method, timing, check_residual, check_factor, jit_solve)
     indptr, indices, data = A.getValuesCSR()
     if method == 'spsolve':
         data_jax, indices_jax, indptr_jax = _jax_csr_arrays_from_petsc_csr(
@@ -429,8 +442,6 @@ def jax_solve(
         'bcoo_cache_hits' if bcoo_cache_hit else 'bcoo_cache_misses',
     )
     jacobi = np.array(bcoo_cache.diagonal(data)) if precond else None
-    pc = (lambda x: x * (1. / jacobi)) if precond else None
-    
     if issubclass(PETSc.ScalarType, np.complexfloating):
         logger.debug("JAX Solver - Using PETSc with complex number support")
         A = A.astype(complex)
@@ -440,7 +451,14 @@ def jax_solve(
     _timing_record(timing, 'sparse_conversion', time.perf_counter() - conversion_t0)
     if timing is not None:
         timing['_last_linear_internal_breakdown'] = True
+    return _jax_solve_bcoo(A, b, x0, jacobi, precond, method, tol, atol, maxiter, restart,
+                           solve_method, timing, check_residual, check_factor, jit_solve)
 
+
+def _jax_solve_bcoo(A, b, x0, jacobi, precond, method, tol, atol, maxiter, restart, solve_method, timing,
+                    check_residual, check_factor, jit_solve):
+    """Krylov solve of jax_solve on a BCOO ``A`` with its Jacobi diagonal (PETSc-converted or device-assembled)."""
+    pc = (lambda x: x * (1. / jacobi)) if precond else None
     solve_kwargs = {
         'x0': x0,
         'M': pc,
@@ -1165,6 +1183,11 @@ def _get_petsc_tangent_cache(problem):
 
 
 def get_A(problem):
+    assembler = getattr(problem, 'device_tangent_assembler', None)
+    if assembler is not None and getattr(problem, 'device_tangent', False):
+        # tangent assembled on the device (jax_fem_am.solvers.device_assembly): no PETSc matrix
+        logger.debug("Assembling the tangent on the device...")
+        return assembler.matrix(problem)
     logger.debug("Updating cached PETSc tangent from COO values...")
     A = _get_petsc_tangent_cache(problem).update(problem)
 

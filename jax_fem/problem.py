@@ -717,6 +717,8 @@ class Problem:
         cells_sol_list = [sol[cells] for cells, sol in zip(self.cells_list, sol_list)] # [(num_cells, num_nodes, vec), ...]
         cells_sol_flat = self._flatten_cells_sol(cells_sol_list) # (num_cells, num_nodes*vec + ...)
         # (num_cells, num_nodes*vec + ...),  (num_cells, num_nodes*vec + ..., num_nodes*vec + ...)
+        if getattr(self, "device_tangent", False):
+            return self._compute_newton_vars_device(cells_sol_flat, internal_vars, internal_vars_surfaces)
         if TANGENT_HOST_PATH == "legacy":
             weak_form_flat, cells_jac_flat = self.split_and_compute_cell(cells_sol_flat, onp, True, internal_vars)
             self.V = onp.array(cells_jac_flat.reshape(-1))
@@ -736,6 +738,16 @@ class Problem:
         weak_form_face_flat, cells_jac_face_flat = self.compute_face(cells_sol_flat, onp, True, internal_vars_surfaces)
         writer.write(cells_jac_face_flat)
         self.V = writer.finish()
+        return self.compute_residual_vars_helper(weak_form_flat, weak_form_face_flat)
+
+    def _compute_newton_vars_device(self, cells_sol_flat, internal_vars, internal_vars_surfaces):
+        """Element tangents stay on the device (``device_tangent=True``, set with a device assembler such as
+        jax_fem_am.solvers.device_assembly): cells then face blocks, flattened in the order of I / J, go to
+        ``self.V_device``; ``self.V`` is not filled (jax_fem.solver.get_A then asks the assembler)."""
+        weak_form_flat, cells_jac_flat = self.split_and_compute_cell(cells_sol_flat, np, True, internal_vars)
+        weak_form_face_flat, cells_jac_face_flat = self.compute_face(cells_sol_flat, np, True, internal_vars_surfaces)
+        self.V_device = np.concatenate([cells_jac_flat.reshape(-1)] + [x.reshape(-1) for x in cells_jac_face_flat])
+        self.V = None
         return self.compute_residual_vars_helper(weak_form_flat, weak_form_face_flat)
 
     def compute_residual(self, sol_list):

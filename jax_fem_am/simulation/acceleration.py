@@ -1913,6 +1913,11 @@ def install_problem_local_assembly_timing_patch(
                 sol[cells] for cells, sol in zip(self.cells_list, sol_list)
             ]
             cells_sol_flat = self._flatten_cells_sol(cells_sol_list)
+            if getattr(self, "device_tangent", False):
+                # tangents stay on the device (no host copy to time)
+                return self._compute_newton_vars_device(
+                    cells_sol_flat, internal_vars, internal_vars_surfaces
+                )
             if getattr(problem_module, "TANGENT_HOST_PATH", "legacy") != "legacy":
                 writer = problem_module._TangentHostWriter(self)
                 weak_form_flat, cells_jac_flat = self.split_and_compute_cell(
