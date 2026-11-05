@@ -1653,6 +1653,13 @@ def main():
                     value=0.0,
                 ),
             )
+        _masm = getattr(mechanics, "device_tangent_assembler", None)
+        if _masm is not None and hasattr(_masm, "release"):
+            # the build-step K1 buffers (~0.7 GB) are not needed by the release solve (host path, own problem)
+            _masm.release()
+            mechanics.device_tangent = False
+            mechanics.device_tangent_chunks = False
+            print("[device-assembly] mechanics K1 buffers released before the release solve")
         release_mechanics = ThermoMechanical(
             mesh=mesh,
             vec=3,
@@ -1666,6 +1673,10 @@ def main():
         release_mechanics.set_flow_curve_active_mask(
             last_flow_curve_active_quad
         )
+        shared_geometry = share_cell_geometry(thermal, release_mechanics)
+        if shared_geometry:
+            print(f"[share-geometry] release mechanics reuses the thermal {', '.join(sorted(shared_geometry))} "
+                  f"({sum(shared_geometry.values()) / 2**20:.0f} MB released)")
         # The raft cut plus rigid-body anchors make this the worst-conditioned
         # solve of the run; iterative linear solvers stall here, so the
         # acceleration solver patch routes this solve to a direct factorization.

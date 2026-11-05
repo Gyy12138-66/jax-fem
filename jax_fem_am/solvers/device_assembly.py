@@ -197,6 +197,8 @@ class MechDeviceCSR:
         return self.shape
 
     def device_free_spd(self):
+        if self.values_ff is None:
+            raise RuntimeError("mechanics device matrix used after its assembler was released")
         return self.pattern, self.values_ff
 
     def upper_host(self):
@@ -330,7 +332,21 @@ class MechDeviceAssembler:
         self.pattern_seconds += time.perf_counter() - t0
         return self._pattern
 
+    def release(self):
+        """Free the device buffers (block map, compaction index, last matrix values), e.g. before the release
+        solve builds its own problem on the same mesh. The matrices handed out so far become unusable."""
+        last = self._last
+        if last is not None:
+            last.upper = None
+            last.values_ff = None
+        self._last = None
+        self._pattern = None
+        self._contrib = self._pos = self._diag = None
+        self.released = True
+
     def matrix(self, problem):
+        if getattr(self, "released", False):
+            raise RuntimeError("mechanics device assembly: assembler already released")
         chunks = getattr(problem, "V_device_chunks", None)
         if chunks is None:
             if self._last is None:

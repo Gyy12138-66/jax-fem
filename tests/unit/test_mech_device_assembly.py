@@ -140,3 +140,9 @@ def test_cudss_device_path_solves_like_the_host_path():
     # CPU fallback on the device matrix (as after a cuDSS failure)
     x5 = dev._cpu_solve(A_dev, b, None, None)
     assert onp.max(onp.abs(x5 - x_ref)) <= 1e-9 * onp.max(onp.abs(x_ref))
+    # release (before the release solve): buffers dropped, stale matrices refuse to be used
+    asm.release()
+    with pytest.raises(RuntimeError):
+        A2.device_free_spd()
+    with pytest.raises(RuntimeError):
+        solver_mod.get_A(p)
