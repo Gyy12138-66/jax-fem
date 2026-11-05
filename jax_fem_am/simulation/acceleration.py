@@ -1049,12 +1049,14 @@ def build_arg_parser(parser: Optional[argparse.ArgumentParser] = None
     g.add_argument("--xla-petsc-gpu", action="store_true",
                    help="use PETSc aijcusparse/cuda Mat/Vec types")
     g.add_argument("--xla-pardiso-mode",
-                   choices=["base", "nocmp", "cache-idx", "phase23", "fp32ir", "free-spd"],
+                   choices=["base", "nocmp", "cache-idx", "phase23", "fp32ir", "free-spd",
+                            "free-spd-cudss"],
                    default=None,
                    help=("PARDISO optimization ladder. phase23 reuses CSR indices and "
                          "symbolic factorization while recomputing numeric factors when "
                          "matrix values change. free-spd solves only the free block "
-                         "(pinned unit rows split off) as an SPD system (mtype=2). "
+                         "(pinned unit rows split off) as an SPD system (mtype=2); "
+                         "free-spd-cudss factors that block on the GPU with cuDSS. "
                          "Default preserves the base path (or the "
                          "legacy V07_PARDISO_MODE environment override)."))
     g.add_argument("--xla-amgx-config", default=None,

@@ -604,7 +604,7 @@ class PardisoCustomSolver:
 
     def __init__(self, mode=None):
         valid_modes = {None, "base", "nocmp", "cache-idx", "phase23", "fp32ir",
-                       "free-spd"}
+                       "free-spd", "free-spd-cudss"}
         if mode not in valid_modes:
             raise ValueError(f"unsupported PARDISO mode: {mode!r}")
         self._solver = None
@@ -632,6 +632,13 @@ class PardisoCustomSolver:
                 self._v07_variant = False
             elif mode == "free-spd":
                 self._v07_variant = FreeBlockSPDSolver()
+                self.label = self._v07_variant.label
+            elif mode == "free-spd-cudss":
+                # same free-block split, Cholesky of K_FF on the GPU (cuDSS); a pattern cuDSS fails on is
+                # solved by FreeBlockSPDSolver (cudss-plus, 2026-11-05: in tree, was an out-of-tree hook)
+                from jax_fem_am.solvers.cudss import CudssFreeBlockSPDSolver
+
+                self._v07_variant = CudssFreeBlockSPDSolver(FreeBlockSPDSolver, _pinned_rows)
                 self.label = self._v07_variant.label
             else:
                 self._v07_variant = VariantSolver(mode)
