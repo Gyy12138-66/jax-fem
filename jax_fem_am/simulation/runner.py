@@ -7,6 +7,7 @@ only as a frozen comparison baseline.
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 import sys
 from typing import Any, Optional, Sequence
@@ -24,6 +25,7 @@ from jax_fem_am.verification.thermal_ledger import (  # noqa: E402
     EnergyLedgerRecorder,
     extract_solver_step,
 )
+from jax_fem_am.verification import thermal_ledger_device as _ledger_device  # noqa: E402
 from jax_fem_am.verification.online_observables import (  # noqa: E402
     recorder_from_args,
 )
@@ -353,7 +355,12 @@ def install_thermal_ledger_wrapper(base_module):
         solver_options = solver_options or {}
         newton_options = solver_options.get("newton", solver_options)
         residual_tolerance = float(newton_options.get("tol", 1.0e-6))
-        row = extract_solver_step(
+        # JAX_FEM_LEDGER_DEVICE=1: same row from a device gather (cudss-plus plan C, thermal_ledger_device)
+        if _ledger_device.enabled():
+            extract = partial(_ledger_device.extract_solver_step_device, output_dir=REGISTRY.args.output_dir)
+        else:
+            extract = extract_solver_step
+        row = extract(
             problem,
             solution,
             step_index=step_index,

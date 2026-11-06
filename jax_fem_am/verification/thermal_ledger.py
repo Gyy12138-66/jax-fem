@@ -590,99 +590,34 @@ def extract_solver_step(
     constrained, dirichlet_values = _dirichlet_mask_and_values(
         fe, len(temperature_new)
     )
-    dirichlet_exchange = float(dt_s * np.sum(raw_residual[constrained]))
     free = raw_residual[~constrained]
-    free_signed = float(dt_s * np.sum(free))
-    explicit_total = (
-        volume["storage_j"]
-        - volume["laser_deposited_j"]
-        + volume["front_loss_j"]
-        + volume["old_layer_loss_j"]
-        + surface_loss
-    )
-    residual_total = float(dt_s * np.sum(raw_residual))
-    assembly_identity_signed = explicit_total - residual_total
+    residual_stats = {
+        "dirichlet_exchange_j": float(dt_s * np.sum(raw_residual[constrained])),
+        "free_signed_j": float(dt_s * np.sum(free)),
+        "residual_total_j": float(dt_s * np.sum(raw_residual)),
+        "free_l1_j": float(dt_s * np.sum(np.abs(free))),
+        "free_l2_j": float(dt_s * np.linalg.norm(free)),
+        "free_node_count": int(np.count_nonzero(~constrained)),
+    }
 
-    absorptivity = float(absorptivity)
-    if not np.isfinite(absorptivity) or not 0.0 <= absorptivity <= 1.0:
-        raise ValueError("absorptivity must lie in [0, 1]")
-    absorbed_nominal = effective_power * laser_switch * dt_s
-    if step_state is not None:
-        commanded = (
-            float(step_state.laser_power)
-            * float(step_state.laser_switch)
-            * dt_s
+    def invariants():
+        return check_temperature_invariants(
+            np.asarray(temperature_old_quad, dtype=np.float64)[..., 0],
+            temperature_new,
+            ambient=environment_ambient,
+            dirichlet_values=dirichlet_values,
+            deposited_source_j=volume["laser_deposited_j"],
+            coefficients_valid=True,
+            atol_k=temperature_atol_k,
         )
-    elif absorptivity > 0.0:
-        commanded = absorbed_nominal / absorptivity
-    else:
-        commanded = 0.0
-    balance = compute_discrete_balance(
-        **volume,
-        surface_loss_j=surface_loss,
-        dirichlet_exchange_into_domain_j=dirichlet_exchange,
-        assembly_identity_error_j=abs(assembly_identity_signed),
-        free_residual_l1_j=float(dt_s * np.sum(np.abs(free))),
-        free_residual_l2_j=float(dt_s * np.linalg.norm(free)),
-        laser_commanded_j=commanded,
-        laser_absorbed_nominal_j=absorbed_nominal,
-    )
-    solver_residual_tolerance_w = float(solver_residual_tolerance_w)
-    relative_balance_tolerance = float(relative_balance_tolerance)
-    if (
-        not np.isfinite(solver_residual_tolerance_w)
-        or solver_residual_tolerance_w < 0.0
-        or not np.isfinite(relative_balance_tolerance)
-        or relative_balance_tolerance < 0.0
-    ):
-        raise ValueError("balance tolerances must be finite and nonnegative")
-    balance_scale = (
-        abs(volume["storage_j"])
-        + abs(volume["laser_deposited_j"])
-        + abs(volume["front_loss_j"])
-        + abs(volume["old_layer_loss_j"])
-        + abs(surface_loss)
-        + abs(dirichlet_exchange)
-    )
-    absolute_balance_tolerance = (
-        np.sqrt(max(int(np.count_nonzero(~constrained)), 1))
-        * dt_s
-        * solver_residual_tolerance_w
-    )
-    balance_within_tolerance = bool(
-        abs(balance.balance_error_j)
-        <= absolute_balance_tolerance
-        + relative_balance_tolerance * balance_scale
-    )
-    assembly_tolerance = assembly_identity_tolerance_j(
-        explicit_total,
-        residual_total,
-        term_magnitudes_j=(
-            volume["storage_j"],
-            volume["laser_deposited_j"],
-            volume["front_loss_j"],
-            volume["old_layer_loss_j"],
-            surface_loss,
-        ),
-    )
-    assembly_within_tolerance = bool(
-        abs(assembly_identity_signed) <= assembly_tolerance
-    )
-    invariants = check_temperature_invariants(
-        np.asarray(temperature_old_quad, dtype=np.float64)[..., 0],
-        temperature_new,
-        ambient=environment_ambient,
-        dirichlet_values=dirichlet_values,
-        deposited_source_j=volume["laser_deposited_j"],
-        coefficients_valid=True,
-        atol_k=temperature_atol_k,
-    )
-    state_override = None
-    if previous_solution is not None:
+
+    def state_override():
+        if previous_solution is None:
+            return None
         previous_quad = np.asarray(
             fe.convert_from_dof_to_quad(previous_solution), dtype=np.float64
         )[..., 0]
-        state_override = float(
+        return float(
             np.sum(
                 np.asarray(fe.JxW, dtype=np.float64)
                 * _storage_increment_density(
@@ -725,6 +660,127 @@ def extract_solver_step(
                 )
             )
         )
+
+    return _assemble_row(
+        volume=volume,
+        surface_loss=surface_loss,
+        residual_stats=residual_stats,
+        dt_s=dt_s,
+        effective_power=effective_power,
+        laser_switch=laser_switch,
+        absorptivity=absorptivity,
+        step_state=step_state,
+        step_index=step_index,
+        solver_residual_tolerance_w=solver_residual_tolerance_w,
+        relative_balance_tolerance=relative_balance_tolerance,
+        invariants=invariants,
+        state_override=state_override,
+    )
+
+
+def _assemble_row(
+    *,
+    volume,
+    surface_loss,
+    residual_stats,
+    dt_s,
+    effective_power,
+    laser_switch,
+    absorptivity,
+    step_state,
+    step_index,
+    solver_residual_tolerance_w,
+    relative_balance_tolerance,
+    invariants,
+    state_override,
+):
+    """Balance, tolerances and the ledger row from the gathered step terms.
+
+    Shared by the NumPy gather (``extract_solver_step``) and the device gather
+    (``thermal_ledger_device``): the gathers only produce the volume / surface
+    integrals, the raw-residual sums and the invariant / state-override callables
+    (evaluated here, in the original order); every criterion lives here.
+    """
+    dirichlet_exchange = residual_stats["dirichlet_exchange_j"]
+    free_signed = residual_stats["free_signed_j"]
+    explicit_total = (
+        volume["storage_j"]
+        - volume["laser_deposited_j"]
+        + volume["front_loss_j"]
+        + volume["old_layer_loss_j"]
+        + surface_loss
+    )
+    residual_total = residual_stats["residual_total_j"]
+    assembly_identity_signed = explicit_total - residual_total
+
+    absorptivity = float(absorptivity)
+    if not np.isfinite(absorptivity) or not 0.0 <= absorptivity <= 1.0:
+        raise ValueError("absorptivity must lie in [0, 1]")
+    absorbed_nominal = effective_power * laser_switch * dt_s
+    if step_state is not None:
+        commanded = (
+            float(step_state.laser_power)
+            * float(step_state.laser_switch)
+            * dt_s
+        )
+    elif absorptivity > 0.0:
+        commanded = absorbed_nominal / absorptivity
+    else:
+        commanded = 0.0
+    balance = compute_discrete_balance(
+        **volume,
+        surface_loss_j=surface_loss,
+        dirichlet_exchange_into_domain_j=dirichlet_exchange,
+        assembly_identity_error_j=abs(assembly_identity_signed),
+        free_residual_l1_j=residual_stats["free_l1_j"],
+        free_residual_l2_j=residual_stats["free_l2_j"],
+        laser_commanded_j=commanded,
+        laser_absorbed_nominal_j=absorbed_nominal,
+    )
+    solver_residual_tolerance_w = float(solver_residual_tolerance_w)
+    relative_balance_tolerance = float(relative_balance_tolerance)
+    if (
+        not np.isfinite(solver_residual_tolerance_w)
+        or solver_residual_tolerance_w < 0.0
+        or not np.isfinite(relative_balance_tolerance)
+        or relative_balance_tolerance < 0.0
+    ):
+        raise ValueError("balance tolerances must be finite and nonnegative")
+    balance_scale = (
+        abs(volume["storage_j"])
+        + abs(volume["laser_deposited_j"])
+        + abs(volume["front_loss_j"])
+        + abs(volume["old_layer_loss_j"])
+        + abs(surface_loss)
+        + abs(dirichlet_exchange)
+    )
+    free_node_count = int(residual_stats["free_node_count"])
+    absolute_balance_tolerance = (
+        np.sqrt(max(free_node_count, 1))
+        * dt_s
+        * solver_residual_tolerance_w
+    )
+    balance_within_tolerance = bool(
+        abs(balance.balance_error_j)
+        <= absolute_balance_tolerance
+        + relative_balance_tolerance * balance_scale
+    )
+    assembly_tolerance = assembly_identity_tolerance_j(
+        explicit_total,
+        residual_total,
+        term_magnitudes_j=(
+            volume["storage_j"],
+            volume["laser_deposited_j"],
+            volume["front_loss_j"],
+            volume["old_layer_loss_j"],
+            surface_loss,
+        ),
+    )
+    assembly_within_tolerance = bool(
+        abs(assembly_identity_signed) <= assembly_tolerance
+    )
+    invariants = invariants()
+    state_override = state_override()
     state_override_tolerance = max(
         float(absolute_balance_tolerance), 1.0e-12
     )
@@ -746,7 +802,7 @@ def extract_solver_step(
                 state_override_within_tolerance
             ),
             "balance_scale_j": float(balance_scale),
-            "free_node_count": int(np.count_nonzero(~constrained)),
+            "free_node_count": free_node_count,
             "dt_s": float(dt_s),
             "solver_residual_tolerance_w": float(
                 solver_residual_tolerance_w
