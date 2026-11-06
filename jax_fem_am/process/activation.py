@@ -159,11 +159,31 @@ def physical_node_mask(cells, physical_cell, num_nodes=None):
     return mask
 
 
+_POSTSTEP_DEVICE = __import__("os").environ.get("JAX_FEM_POSTSTEP_JIT", "") == "1"
+
+
+def _device_contributing_impl(fields):
+    mask = None
+    for field in fields:
+        m = field != 0 if field.ndim == 1 else np.any(field != 0, axis=tuple(range(1, field.ndim)))
+        mask = m if mask is None else (mask | m)
+    return mask
+
+
+_device_contributing = __import__("jax").jit(_device_contributing_impl)
+
+
 def contributing_cell_mask(*quad_fields):
     """Return cells with at least one nonzero assembled material coefficient."""
 
     if not quad_fields:
         raise ValueError("at least one quadrature field is required")
+    if _POSTSTEP_DEVICE and all(hasattr(field, "devices") for field in quad_fields):
+        # cudss-plus 2026-11-06 (JAX_FEM_POSTSTEP_JIT=1): reduce on the device, copy one bool per cell instead
+        # of every full quadrature field (~12.5 MB each on 0119, every step). Same mask (exact comparisons).
+        num_cells = quad_fields[0].shape[0] if quad_fields[0].ndim else None
+        if num_cells is not None and all(f.ndim >= 1 and f.shape[0] == num_cells for f in quad_fields):
+            return onp.asarray(_device_contributing(tuple(quad_fields)))
     arrays = [onp.asarray(field) for field in quad_fields]
     num_cells = len(arrays[0])
     if any(array.ndim < 1 or len(array) != num_cells for array in arrays):
@@ -305,6 +325,10 @@ def make_inactive_node_dirichlet_bc(inactive_node_mask, *, vec, value):
 
     def prescribed_value(_point):
         return value
+
+    # host shortcuts of jax_fem FE.Dirichlet_boundary_conditions (JAX_FEM_POSTSTEP_JIT=1): same arrays
+    inactive_node._jfa_host_mask = inactive_node_mask
+    prescribed_value._jfa_const_value = value
 
     return [
         [inactive_node for _ in range(vec)],

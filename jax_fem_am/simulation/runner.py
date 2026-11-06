@@ -8,6 +8,7 @@ only as a frozen comparison baseline.
 from __future__ import annotations
 
 from functools import partial
+import os as _os
 from pathlib import Path
 import sys
 from typing import Any, Optional, Sequence
@@ -26,6 +27,9 @@ from jax_fem_am.verification.thermal_ledger import (  # noqa: E402
     extract_solver_step,
 )
 from jax_fem_am.verification import thermal_ledger_device as _ledger_device  # noqa: E402
+
+# JAX_FEM_POSTSTEP_JIT=1 (cudss-plus 2026-11-06): jitted per-step return maps (_v06_batched)
+_POSTSTEP_JIT = _os.environ.get("JAX_FEM_POSTSTEP_JIT", "") == "1"
 from jax_fem_am.verification.online_observables import (  # noqa: E402
     recorder_from_args,
 )
@@ -597,6 +601,56 @@ def install_v06_adapter(base_module, profiler=None):
             )
             REGISTRY.eps_ref = self._eps_ref_state
 
+        def _v06_batched(self, name, fn):
+            """jax.vmap(jax.vmap(fn)) over (cell, quad); with JAX_FEM_POSTSTEP_JIT=1 jitted once per problem
+            (cudss-plus 2026-11-06: the eager double vmap dispatched every primitive of the J2 return map on
+            its own, ~100-200 ms per call on 0119; the traced attributes dim / mechanics_model / flow_curve /
+            yield_saturation are fixed at construction)."""
+            if not _POSTSTEP_JIT:
+                return jax.vmap(jax.vmap(fn))
+            cache = self.__dict__.setdefault("_v06_batched_cache", {})
+            f = cache.get(name)
+            if f is None:
+                f = cache[name] = jax.jit(jax.vmap(jax.vmap(fn)))
+            return f
+
+        def _eqp_one_quad(
+            self,
+            u_grad,
+            T,
+            dT,
+            active,
+            young,
+            alpha,
+            poisson,
+            yield_stress,
+            hardening,
+            eqp_old,
+            eps_p_old,
+            eps_ref_old,
+            flow_curve_active,
+        ):
+            _, delta_eqp, delta_eps_p = self._return_map(
+                u_grad,
+                dT,
+                young,
+                alpha,
+                poisson,
+                yield_stress,
+                hardening,
+                eqp_old,
+                eps_p_old,
+                eps_ref_old,
+                T=T,
+                active_factor=active,
+                flow_curve_active=flow_curve_active,
+            )
+            mask = np.where(active[0] > 0.5, 1.0, 0.0)
+            return (
+                np.array([eqp_old[0] + mask * delta_eqp]),
+                eps_p_old + mask * delta_eps_p,
+            )
+
         def compute_cell_stress(self, sol, params):
             BaseMech._require_flow_curve_mask_bound(self)
             (
@@ -616,7 +670,7 @@ def install_v06_adapter(base_module, profiler=None):
                 if self.flow_curve is not None
                 else np.zeros_like(active_quad[..., :1])
             )
-            stress = jax.vmap(jax.vmap(self.stress_fn))(
+            stress = self._v06_batched("stress", self.stress_fn)(
                 self._u_grads(sol),
                 T_quad,
                 dT_quad,
@@ -659,48 +713,12 @@ def install_v06_adapter(base_module, profiler=None):
             ) = params
             dT_quad = self._effective_dT(dT_quad)
 
-            def one_quad(
-                u_grad,
-                T,
-                dT,
-                active,
-                young,
-                alpha,
-                poisson,
-                yield_stress,
-                hardening,
-                eqp_old,
-                eps_p_old,
-                eps_ref_old,
-                flow_curve_active,
-            ):
-                _, delta_eqp, delta_eps_p = self._return_map(
-                    u_grad,
-                    dT,
-                    young,
-                    alpha,
-                    poisson,
-                    yield_stress,
-                    hardening,
-                    eqp_old,
-                    eps_p_old,
-                    eps_ref_old,
-                    T=T,
-                    active_factor=active,
-                    flow_curve_active=flow_curve_active,
-                )
-                mask = np.where(active[0] > 0.5, 1.0, 0.0)
-                return (
-                    np.array([eqp_old[0] + mask * delta_eqp]),
-                    eps_p_old + mask * delta_eps_p,
-                )
-
             selector = (
                 self._flow_curve_active_mask
                 if self.flow_curve is not None
                 else np.zeros_like(active_quad[..., :1])
             )
-            eqp_new, eps_p_new = jax.vmap(jax.vmap(one_quad))(
+            eqp_new, eps_p_new = self._v06_batched("eqp", self._eqp_one_quad)(
                 self._u_grads(sol),
                 T_quad,
                 dT_quad,

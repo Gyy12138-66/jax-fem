@@ -505,6 +505,8 @@ def main():
         def bottom_temperature_value(_point):
             return bottom_temperature_effective
 
+        bottom_temperature_value._jfa_const_value = bottom_temperature_effective
+
         thermal_bc = [[bottom], [0], [bottom_temperature_value]]
     else:
         location_fns.append(bottom_for_flux)
@@ -1151,6 +1153,8 @@ def main():
                 _value=state.bottom_temperature,
             ):
                 return _value
+
+            ramped_bottom_value._jfa_const_value = state.bottom_temperature
 
             thermal_step_bc = [[bottom], [0], [ramped_bottom_value]]
 

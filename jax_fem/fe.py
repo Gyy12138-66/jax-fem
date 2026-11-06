@@ -7,6 +7,16 @@ import functools
 from dataclasses import dataclass
 from typing import Any, Optional
 from jax_fem.generate_mesh import Mesh
+import os as _os
+
+# JAX_FEM_POSTSTEP_JIT=1 (cudss-plus 2026-11-06): Dirichlet updates take three host shortcuts, each giving the
+# arrays of the device evaluation exactly: a location function carrying ``_jfa_host_mask`` (a host bool mask over
+# all nodes, e.g. the inactive-node constraint) is that mask; one carrying ``_jfa_static_location`` (pure function
+# of the fixed node coordinates, e.g. the base plane) is evaluated once per FE and cached; a value function carrying
+# ``_jfa_const_value`` is that constant. The thermal Dirichlet set is rebuilt every step (element birth): the vmap
+# over all nodes + two device->host copies per constraint were ~250 s of the 0119 build.
+_HOST_BC = _os.environ.get("JAX_FEM_POSTSTEP_JIT", "") == "1"
+_NO_CONST = object()
 from jax_fem.basis import get_face_shape_vals_and_grads, get_shape_vals_and_grads
 from jax_fem import logger
 
@@ -254,11 +264,28 @@ class FiniteElement:
                 # selection happens on the host. A device argwhere / gather over the selected
                 # nodes would compile once per new constrained count, i.e. at every element-birth
                 # update of the inactive-node constraints.
-                mask = onp.asarray(jax.vmap(location_fn)(self.points, np.arange(self.num_total_nodes))).reshape(-1)
+                host_mask = getattr(location_fns[i], "_jfa_host_mask", None) if _HOST_BC else None
+                if host_mask is not None and onp.shape(host_mask) == (self.num_total_nodes,):
+                    mask = onp.asarray(host_mask, dtype=bool)
+                elif _HOST_BC and getattr(location_fns[i], "_jfa_static_location", False):
+                    cache = self.__dict__.setdefault("_jfa_location_cache", {})
+                    hit = cache.get(id(location_fns[i]))
+                    if hit is None or hit[0] is not location_fns[i]:
+                        hit = (location_fns[i], onp.asarray(
+                            jax.vmap(location_fn)(self.points, np.arange(self.num_total_nodes))).reshape(-1))
+                        cache[id(location_fns[i])] = hit
+                    mask = hit[1]
+                else:
+                    mask = onp.asarray(jax.vmap(location_fn)(self.points, np.arange(self.num_total_nodes))).reshape(-1)
                 node_inds = onp.flatnonzero(mask)
                 vec_inds = onp.full(node_inds.shape, vecs[i], dtype=onp.int32)
-                all_values = onp.asarray(jax.vmap(value_fns[i])(self.points)).reshape(len(mask), -1)
-                values = all_values[node_inds].reshape(-1)
+                const = getattr(value_fns[i], "_jfa_const_value", _NO_CONST) if _HOST_BC else _NO_CONST
+                if const is not _NO_CONST and onp.ndim(const) == 0:
+                    dtype = jax.dtypes.canonicalize_dtype(onp.result_type(const))
+                    values = onp.full(node_inds.shape, const, dtype=dtype)
+                else:
+                    all_values = onp.asarray(jax.vmap(value_fns[i])(self.points)).reshape(len(mask), -1)
+                    values = all_values[node_inds].reshape(-1)
                 node_inds_list.append(node_inds)
                 vec_inds_list.append(vec_inds)
                 vals_list.append(values)

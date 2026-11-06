@@ -34,6 +34,8 @@ def make_box_locations(points, build_axis="x", base_side="min", tol_ratio=1e-8, 
     def bottom(point):
         return np.isclose(point[build_axis_id], base_coord, rtol=0.0, atol=atol)
 
+    bottom._jfa_static_location = True      # pure function of the fixed node coordinates (cached BC mask)
+
     def exposed(point):
         return np.isclose(point[build_axis_id], exposed_coord, rtol=0.0, atol=atol)
 

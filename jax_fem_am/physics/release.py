@@ -467,6 +467,8 @@ def make_full_bottom_mechanics_bc(bottom):
     def zero(_point):
         return 0.0
 
+    zero._jfa_const_value = 0.0
+
     return [[bottom, bottom, bottom], [0, 1, 2], [zero, zero, zero]]
 
 def make_edge_minimal_mechanics_bc(
