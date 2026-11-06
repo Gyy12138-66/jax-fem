@@ -77,6 +77,51 @@ class JaxSolveJitTest(unittest.TestCase):
                 jf_solver.jax_solve(FakePetscMat(A), b, None, True, method="sor", jit_solve=jit)
 
 
+@unittest.skipIf(pyamg is None, "pyamg not installed")
+class DeviceResidualCheckTest(unittest.TestCase):
+    """JAX_FEM_DEVICE_RESIDUAL_CHECK: same Krylov executable (x equal up to the GPU BCOO matvec's own run-to-run
+    nondeterminism, ~3e-16 relative: the old path is not bitwise repeatable either), same accept / reject decision,
+    one host sync."""
+
+    def setUp(self):
+        self._flag = jf_solver._DEVICE_RESIDUAL_CHECK
+
+    def tearDown(self):
+        jf_solver._DEVICE_RESIDUAL_CHECK = self._flag
+
+    def _solve(self, flag, A, b, **kw):
+        jf_solver._DEVICE_RESIDUAL_CHECK = flag
+        timing = {}
+        x = jf_solver.jax_solve(FakePetscMat(A), b, None, True, method="cg", jit_solve=True, timing=timing, **kw)
+        return np.asarray(x), timing
+
+    def test_same_solution_and_counter(self):
+        A, b = _system()
+        x_old, t_old = self._solve(False, A, b, tol=1e-8, atol=1e-12, maxiter=500)
+        x_new, t_new = self._solve(True, A, b, tol=1e-8, atol=1e-12, maxiter=500)
+        np.testing.assert_allclose(x_new, x_old, rtol=1e-12, atol=1e-15 * np.abs(x_old).max())
+        counts = t_new.get("counts", t_new)
+        self.assertEqual(counts.get("device_residual_checks"), 1)
+        self.assertFalse(t_old.get("counts", t_old).get("device_residual_checks"))
+
+    def test_rejects_an_unconverged_solve_like_the_host_check(self):
+        A, b = _system()
+        for flag in (False, True):
+            with self.assertRaisesRegex(RuntimeError, "failed to converge"):
+                self._solve(flag, A, b, tol=1e-12, atol=1e-14, maxiter=1, check_factor=1.0)
+
+    def test_norms_match_the_host_formula(self):
+        A, b = _system()
+        x = np.asarray(jf_solver.jax_solve(FakePetscMat(A), b, None, True, method="cg", tol=1e-6, atol=1e-12,
+                                           maxiter=500, jit_solve=True))
+        coo = A.tocoo()
+        idx = np.stack([coo.row, coo.col], 1).astype(np.int32)
+        norms = np.asarray(jf_solver._jitted_residual_norms(coo.data, idx, x, b, shape=A.shape))
+        # |A x - b| is a cancellation-dominated small number: summation order alone moves it by ~1e-12
+        np.testing.assert_allclose(norms[0], np.linalg.norm(A @ x - b), rtol=1e-9)
+        np.testing.assert_allclose(norms[1], np.linalg.norm(b), rtol=1e-13)
+
+
 class JaxJitRegistryTest(unittest.TestCase):
     def test_key_is_optional_validated_and_reaches_the_block_and_the_label(self):
         # default ON since 2026-09-23 (the E0j setting)

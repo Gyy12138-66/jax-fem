@@ -293,8 +293,8 @@ def _jax_csr_arrays_from_petsc_csr(indptr, indices, data):
     )
 
 
-def _check_linear_residual(err, b, tol, atol, check_factor, method):
-    """Relative post-solve residual guard.
+def _check_linear_residual(err, b, tol, atol, check_factor, method, b_norm=None):
+    """Relative post-solve residual guard (``b_norm`` given: |b| already computed, ``b`` unused).
 
     Replaces the historical absolute ``assert err < 0.1``: the true residual
     must satisfy ``err <= check_factor * max(tol * |b|, atol)``, i.e. a
@@ -303,7 +303,7 @@ def _check_linear_residual(err, b, tol, atol, check_factor, method):
     relative). Failure (or NaN) raises RuntimeError, which the acceleration
     wrapper catches and retries on the configured fallback solver.
     """
-    b_norm = float(np.linalg.norm(b))
+    b_norm = float(np.linalg.norm(b)) if b_norm is None else float(b_norm)
     limit = float(check_factor) * max(float(tol) * b_norm, float(atol))
     err_value = float(err)
     if not (err_value <= limit):  # NaN fails this test too
@@ -346,6 +346,20 @@ _jitted_krylov = jax.jit(
     _krylov_core,
     static_argnames=('shape', 'method', 'maxiter', 'restart', 'solve_method', 'precond'),
 )
+
+# JAX_FEM_DEVICE_RESIDUAL_CHECK=1 (cudss-plus, 2026-11-06): the explicit post-solve residual check of the jitted
+# Krylov path computes |A x - b| and |b| in ONE jitted call and fetches both with ONE device->host copy, instead of
+# blocking on x, an eager matvec + norm, float(err) and float(|b|) (three host syncs, ~1-2 ms each under WSL; 6.2 vs
+# 1.4 ms per thermal call on the Q3 dump). Same criterion, same x (the Krylov executable is unchanged).
+_DEVICE_RESIDUAL_CHECK = _os.environ.get("JAX_FEM_DEVICE_RESIDUAL_CHECK", "") == "1"
+
+
+def _residual_norms_core(data, indices, x, b, *, shape):
+    A = BCOO((data, indices), shape=shape, indices_sorted=False, unique_indices=False)
+    return np.stack([np.linalg.norm(A @ x - b), np.linalg.norm(b)])
+
+
+_jitted_residual_norms = jax.jit(_residual_norms_core, static_argnames=('shape',))
 
 
 def jax_solve(
@@ -475,11 +489,21 @@ def _jax_solve_bcoo(A, b, x0, jacobi, precond, method, tol, atol, maxiter, resta
     if jit_solve and not issubclass(PETSc.ScalarType, np.complexfloating):
         # one compiled executable for the whole build instead of one per call
         _counter_record(timing, 'jax_jit_solves')
+        b_dev = np.asarray(b)
         x, info = _jitted_krylov(
-            A.data, A.indices, np.asarray(b), x0, jacobi, tol, atol,
+            A.data, A.indices, b_dev, x0, jacobi, tol, atol,
             shape=tuple(int(v) for v in A.shape), method=method, maxiter=int(maxiter),
             restart=int(restart), solve_method=solve_method, precond=bool(precond),
         )
+        if check_residual and _DEVICE_RESIDUAL_CHECK:
+            # one host sync for solve + check: the norms are queued right behind the Krylov executable
+            norms = onp.asarray(_jitted_residual_norms(A.data, A.indices, x, b_dev,
+                                                       shape=tuple(int(v) for v in A.shape)))
+            _timing_record(timing, 'linear_kernel', time.perf_counter() - solve_t0)
+            _counter_record(timing, 'device_residual_checks')
+            logger.debug("JAX Solver - Finished solving, linear solve res = %.3g", norms[0])
+            _check_linear_residual(norms[0], None, tol, atol, check_factor, method, b_norm=norms[1])
+            return x
     elif method == 'bicgstab':
         x, info = jax.scipy.sparse.linalg.bicgstab(A, b, **solve_kwargs)
     elif method == 'cg':
