@@ -10,7 +10,9 @@ resident at a time, analysis once per
 pattern, numeric factorization per call, back-substitution only when the values are unchanged. Only the Cholesky
 factor/solve moves to the GPU (cuDSS 1.0, MTYPE_SPD, MVIEW_UPPER).
 
-Variant from env ``JAX_FEM_CUDSS_VARIANT`` (or the lane's ``CUDSS_LANE``; default ``emu53+dc+ir2``):
+Variant from env ``JAX_FEM_CUDSS_VARIANT`` (or the lane's ``CUDSS_LANE``; default ``emu53+mt8`` since 2026-11-09, before
+``emu53+dc+ir2``: at 0119 layer 170 emu53+mt8 factors+solves 14% faster and peaks 2.3 GB LOWER, dc only lowers the
+resident factor; 0119 full height M3b: factorization 5,517 -> 4,487 s, same numerics):
 ``mtN`` host threading layer with N threads (reordering), ``emuNN`` FP64 emulation with NN mantissa bits in the
 factorization, ``dc`` factors stored in FP32 with the diagonal blocks kept in FP64, ``irN`` N refinement steps in FP64.
 
@@ -308,7 +310,7 @@ class CudssFreeBlockSPDSolver:
         self.pinned_rows = pinned_rows      # jax_fem_am.solvers.pardiso._pinned_rows
         self.mode = "free-spd"
         self.variant = (variant or os.environ.get("JAX_FEM_CUDSS_VARIANT", "").strip()
-                        or os.environ.get("CUDSS_LANE", "").strip() or "emu53+dc+ir2")
+                        or os.environ.get("CUDSS_LANE", "").strip() or "emu53+mt8")
         self.label = "cudss_free_spd(%s)" % self.variant
         self._handle = None
         self._pattern = None
