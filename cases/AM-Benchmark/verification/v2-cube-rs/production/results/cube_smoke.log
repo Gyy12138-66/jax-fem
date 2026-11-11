@@ -1,0 +1,169 @@
+[2026-08-27T06:47:47Z] ======== V2 cube smoke pid=2350580 TAG=prodB STAGES='1 2 S' REPO=/home/user/work/d11_B_tree ========
+[2026-08-27T06:47:47Z] branch: agent/gpt5-6sol/v2-stress-reproduction @ 76ef4f0 dirty=2
+[2026-08-27T06:47:47Z] stage 1: unit tests for the preflight
+..................                                                       [100%]
+18 passed in 0.56s
+[2026-08-27T06:47:48Z] stage 1: generating preflight artefacts -> /home/user/work/159/output/v2_cube_smoke_prodB/preflight
+substrate: 100 x 100 x 8 = 80,000 cells (z ladder um: [1506, 1229, 1076, 768, 549, 392, 280, 200])
+part:      50 x 50 x 50 = 125,000 cells (columns offset 25)
+total:     205,000 cells @ 200 um
+runner hint: --support-thickness 6.0e-03 --layer-thickness 2.0e-4 --layers 50 (5:1 lumped; D-V2-11 for event-series granularity)
+wrote /home/user/work/159/output/v2_cube_smoke_prodB/preflight/v2_cube_smoke_c3d8.inp: 221,859 nodes, 205,000 elements
+{
+  "footprint_m": 0.01,
+  "physical_layers": 250,
+  "activation_slabs": 50,
+  "tracks_per_physical_layer": 82,
+  "path_rows": 5490,
+  "recoat_time_s": 1245.0,
+  "total_time_s": 1554.0769230768894,
+  "build_clock_s": 2154.076923076889,
+  "expected_runner_steps": 5550,
+  "nominal_laser_energy_J": 43270.769230769285,
+  "absorbed_laser_energy_nominal_J": 26827.876923076958
+}
+activation events:
+  slab 1: physical layer 1 row 0 t=0.000154 s z=[6.00, 6.20] mm
+  slab 2: physical layer 6 row 110 t=31.181692 s z=[6.20, 6.40] mm
+  slab 3: physical layer 11 row 220 t=62.363231 s z=[6.40, 6.60] mm
+  slab 4: physical layer 16 row 330 t=93.544769 s z=[6.60, 6.80] mm
+  slab 5: physical layer 21 row 440 t=124.726308 s z=[6.80, 7.00] mm
+  slab 6: physical layer 26 row 550 t=155.907846 s z=[7.00, 7.20] mm
+  slab 7: physical layer 31 row 660 t=187.089385 s z=[7.20, 7.40] mm
+  slab 8: physical layer 36 row 770 t=218.270923 s z=[7.40, 7.60] mm
+  slab 9: physical layer 41 row 880 t=249.452462 s z=[7.60, 7.80] mm
+  slab 10: physical layer 46 row 990 t=280.634000 s z=[7.80, 8.00] mm
+  slab 11: physical layer 51 row 1100 t=311.815538 s z=[8.00, 8.20] mm
+  slab 12: physical layer 56 row 1210 t=342.997077 s z=[8.20, 8.40] mm
+  slab 13: physical layer 61 row 1320 t=374.178615 s z=[8.40, 8.60] mm
+  slab 14: physical layer 66 row 1430 t=405.360154 s z=[8.60, 8.80] mm
+  slab 15: physical layer 71 row 1540 t=436.541692 s z=[8.80, 9.00] mm
+  slab 16: physical layer 76 row 1650 t=467.723231 s z=[9.00, 9.20] mm
+  slab 17: physical layer 81 row 1760 t=498.904769 s z=[9.20, 9.40] mm
+  slab 18: physical layer 86 row 1870 t=530.086308 s z=[9.40, 9.60] mm
+  slab 19: physical layer 91 row 1980 t=561.267846 s z=[9.60, 9.80] mm
+  slab 20: physical layer 96 row 2090 t=592.449385 s z=[9.80, 10.00] mm
+  slab 21: physical layer 101 row 2200 t=623.630923 s z=[10.00, 10.20] mm
+  slab 22: physical layer 106 row 2310 t=654.812462 s z=[10.20, 10.40] mm
+  slab 23: physical layer 111 row 2420 t=685.994000 s z=[10.40, 10.60] mm
+  slab 24: physical layer 116 row 2530 t=717.175538 s z=[10.60, 10.80] mm
+  slab 25: physical layer 121 row 2640 t=748.357077 s z=[10.80, 11.00] mm
+  slab 26: physical layer 126 row 2750 t=779.538615 s z=[11.00, 11.20] mm
+  slab 27: physical layer 131 row 2860 t=810.720154 s z=[11.20, 11.40] mm
+  slab 28: physical layer 136 row 2970 t=841.901692 s z=[11.40, 11.60] mm
+  slab 29: physical layer 141 row 3080 t=873.083231 s z=[11.60, 11.80] mm
+  slab 30: physical layer 146 row 3190 t=904.264769 s z=[11.80, 12.00] mm
+  slab 31: physical layer 151 row 3300 t=935.446308 s z=[12.00, 12.20] mm
+  slab 32: physical layer 156 row 3410 t=966.627846 s z=[12.20, 12.40] mm
+  slab 33: physical layer 161 row 3520 t=997.809385 s z=[12.40, 12.60] mm
+  slab 34: physical layer 166 row 3630 t=1028.990923 s z=[12.60, 12.80] mm
+  slab 35: physical layer 171 row 3740 t=1060.172462 s z=[12.80, 13.00] mm
+  slab 36: physical layer 176 row 3850 t=1091.354000 s z=[13.00, 13.20] mm
+  slab 37: physical layer 181 row 3960 t=1122.535538 s z=[13.20, 13.40] mm
+  slab 38: physical layer 186 row 4070 t=1153.717077 s z=[13.40, 13.60] mm
+  slab 39: physical layer 191 row 4180 t=1184.898615 s z=[13.60, 13.80] mm
+  slab 40: physical layer 196 row 4290 t=1216.080154 s z=[13.80, 14.00] mm
+  slab 41: physical layer 201 row 4400 t=1247.261692 s z=[14.00, 14.20] mm
+  slab 42: physical layer 206 row 4510 t=1278.443231 s z=[14.20, 14.40] mm
+  slab 43: physical layer 211 row 4620 t=1309.624769 s z=[14.40, 14.60] mm
+  slab 44: physical layer 216 row 4730 t=1340.806308 s z=[14.60, 14.80] mm
+  slab 45: physical layer 221 row 4840 t=1371.987846 s z=[14.80, 15.00] mm
+  slab 46: physical layer 226 row 4950 t=1403.169385 s z=[15.00, 15.20] mm
+  slab 47: physical layer 231 row 5060 t=1434.350923 s z=[15.20, 15.40] mm
+  slab 48: physical layer 236 row 5170 t=1465.532462 s z=[15.40, 15.60] mm
+  slab 49: physical layer 241 row 5280 t=1496.714000 s z=[15.60, 15.80] mm
+  slab 50: physical layer 246 row 5390 t=1527.895538 s z=[15.80, 16.00] mm
+[2026-08-27T06:47:49Z] stage 1 gate: complete=True solver_compatible=True mesh_check=True rows=5490 steps=5550 slabs=50 energy=43270.769 J
+[2026-08-27T06:47:49Z] capture_r100000_band start -> /home/user/work/159/output/v2_cube_smoke_prodB/capture_r100000_band (python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python platform=gpu extra: --path-file /home/user/work/159/output/v2_cube_smoke_prodB/preflight/v2_cube_smoke_path_layer1.csv --mechanics-every 0 --cooling-steps 0 --thermal-output-every 100000 --summary-every 100 --no-release-after-cooling --beam-radius 0.1)
+[2026-08-27T06:49:02Z] capture_r100000_band end rc=0 ledger=12 complete=yes
+[2026-08-27T06:49:02Z] capture gate [capture_r100000_band]:
+{
+  "checks": {
+    "ledger_complete": true,
+    "no_nan_or_inf_in_log": true,
+    "newton_converged_everywhere": true
+  },
+  "energy": {
+    "capture_fraction": 0.0063449968574526665,
+    "per_step_capture_min": 0.0063449968574526665,
+    "per_step_capture_max": 0.0063449968574526665,
+    "max_relative_balance_error": 9.626745837734835e-07
+  },
+  "profile": {
+    "wall_seconds": 71.39303287502844,
+    "steps": 12,
+    "newton_wall_seconds": 56.233725982951,
+    "seconds_per_step": 5.94941940625237
+  },
+  "all_checks_passed": true
+}
+capture ladder -> /home/user/work/159/output/v2_cube_smoke_prodB/capture_ladder.json
+  capture_r100000_band     r=1.0e-01 capture=0.0063 step[min,max,std]=[0.006,0.006,0.000] Tmax=546K 5.949s/step
+[2026-08-27T06:49:02Z] shakedown_2slabs start -> /home/user/work/159/output/v2_cube_smoke_prodB/shakedown_2slabs (python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python platform=gpu extra: --max-print-layers 2 --cooling-steps 6 --cooling-dt 100)
+[2026-08-27T07:37:11Z] shakedown_2slabs end rc=0 ledger=226 complete=yes
+[2026-08-27T07:37:11Z] shakedown gate (slabs <= 2):
+{
+  "checks": {
+    "ledger_complete": true,
+    "no_nan_or_inf_in_log": true,
+    "newton_converged_everywhere": true,
+    "step_count_matches_run_ledger": true,
+    "activation_steps_match_preflight": true,
+    "part_consolidated_on_activation": true,
+    "stress_free_reference_applied": true,
+    "release_solve_present": true,
+    "release_removed_substrate": true,
+    "release_changed_part_stress": true
+  },
+  "energy": {
+    "capture_fraction": 0.006344996857452684,
+    "per_step_capture_min": 0.006344996857452666,
+    "per_step_capture_max": 0.006344996857452703,
+    "max_relative_balance_error": 0.00010357377154181356
+  },
+  "profile": {
+    "wall_seconds": 2883.2169088110095,
+    "steps": 226,
+    "newton_wall_seconds": 2767.940314099542,
+    "seconds_per_step": 12.757596941641635
+  },
+  "all_checks_passed": true
+}
+[2026-08-27T07:37:13Z] SHAKEDOWN_GATE_RC=0
+shakedown: 226 steps, wall 2883 s (12.76 s/step); assembly 213 s, solver 2520 s, newton 2768 s; nonlinear solves 242, mechanics solves seen in summaries >= 3
+per physical layer 288 s -> 250 layers ~ 20.0 h (+ cooldown/release); NOTE: early slabs are cheaper than late ones (matrix grows with printed volume)
+[2026-08-27T07:37:13Z] CUBE_SMOKE_DONE /home/user/work/159/output/v2_cube_smoke_prodB
+[2026-08-27T07:38:17Z] ======== V2 cube smoke pid=2354994 TAG=prodB STAGES='3' REPO=/home/user/work/d11_B_tree ========
+[2026-08-27T07:38:17Z] branch: agent/gpt5-6sol/v2-stress-reproduction @ 76ef4f0 dirty=4
+[2026-08-27T07:38:17Z] smoke start -> /home/user/work/159/output/v2_cube_smoke_prodB/smoke (python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python platform=gpu extra: )
+[2026-08-28T02:41:12Z] smoke end rc=0 ledger=5550 complete=yes
+[2026-08-28T02:41:12Z] smoke gate:
+{
+  "checks": {
+    "ledger_complete": true,
+    "no_nan_or_inf_in_log": true,
+    "newton_converged_everywhere": true,
+    "step_count_matches_preflight": true,
+    "activation_steps_match_preflight": true,
+    "part_consolidated_on_activation": true,
+    "stress_free_reference_applied": true,
+    "release_solve_present": true,
+    "release_removed_substrate": true,
+    "release_changed_part_stress": true
+  },
+  "energy": {
+    "capture_fraction": 0.0063449968574526725,
+    "per_step_capture_min": 0.006344996857452607,
+    "per_step_capture_max": 0.00634499685745275,
+    "max_relative_balance_error": 0.0003870616961909824
+  },
+  "profile": {
+    "wall_seconds": 68562.31163938798,
+    "steps": 5550,
+    "newton_wall_seconds": 66063.05583533761,
+    "seconds_per_step": 12.35356966475459
+  },
+  "all_checks_passed": true
+}
+[2026-08-28T02:41:16Z] SMOKE_GATE_RC=0
+[2026-08-28T02:41:16Z] CUBE_SMOKE_DONE /home/user/work/159/output/v2_cube_smoke_prodB

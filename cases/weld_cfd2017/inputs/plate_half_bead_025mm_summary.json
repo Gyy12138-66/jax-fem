@@ -1,0 +1,64 @@
+{
+ "model": "half",
+ "units": "inp in meters; this summary in mm",
+ "axes": {
+  "x": "along the weld",
+  "y": "across the weld (y=0 symmetry plane)",
+  "z": "through thickness (top = z max)"
+ },
+ "geometry_mm": {
+  "length_x": 44.0,
+  "width_y": 20.0,
+  "thickness_z": 6.0,
+  "y_extent": [
+   0.0,
+   10.0
+  ],
+  "weld_centre_y": 0.0
+ },
+ "counts": {
+  "nx": 88,
+  "ny": 31,
+  "nz": 19,
+  "nodes": 61396,
+  "cells": 55936,
+  "dof": 184188,
+  "plate_cells": 51832,
+  "bead_cells": 4104,
+  "symmetry_nodes": 2040,
+  "top_surface_nodes": 2848
+ },
+ "bead": {
+  "source": "/mnt/c/Users/user/Desktop/\u7194\u6c60\u6e29\u5ea6\u573aresult/output/v1.2/bead_height.npz",
+  "frame": 5,
+  "time_s": 1.505,
+  "layers": 4,
+  "min_height_mm": 0.25,
+  "cells": 4104,
+  "nodes_added": 4436,
+  "height_max_mm": 1.4122000673589907,
+  "volume_mm3": 109.44133637909985,
+  "footprint_x_mm": [
+   8.0,
+   40.0
+  ],
+  "footprint_y_mm": [
+   0.0,
+   4.5
+  ]
+ },
+ "spacing_mm": {
+  "dx_min": 0.5,
+  "dx_max": 0.5,
+  "dy_min": 0.25,
+  "dy_max": 0.8852746896486519,
+  "dz_min": 0.25,
+  "dz_max": 0.47001223990208096
+ },
+ "checks": {
+  "volume_closure": 1.0,
+  "node_ids_consecutive": true,
+  "all_positive_jacobian": true
+ },
+ "output": "/home/user/work/rongchi_tree/cases/weld_cfd2017/inputs/plate_half_bead_025mm.inp"
+}

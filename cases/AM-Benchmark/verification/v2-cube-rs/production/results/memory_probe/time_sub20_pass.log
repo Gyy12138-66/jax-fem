@@ -1,0 +1,50 @@
+E0827 14:06:27.477062 2342726 cuda_executor.cc:1182] [0] Failed to allocate device memory of 4.00GiB (4294967296 bytes): RESOURCE_EXHAUSTED: : CUDA_ERROR_OUT_OF_MEMORY: out of memory
+[cube-prod-memprobe] wall=680.733s steps=4 lin_iters=37
+  nonlinear_solve     655.683s   96.3%  calls=9  per_step=163920.627 ms
+  solver              606.894s   89.2%  calls=37  per_step=151723.472 ms
+  assembly             41.330s    6.1%  calls=107  per_step=10332.487 ms
+  local_assembly       27.960s    4.1%  calls=65  per_step=6989.999 ms
+  cell_jacobian        17.359s    2.6%  calls=42  per_step=4339.711 ms
+  global_matrix        13.370s    2.0%  calls=42  per_step=3342.489 ms
+  setup                 8.482s    1.2%  calls=1  per_step=2120.600 ms
+  python_overhead       8.350s    1.2%  calls=0  per_step=2087.391 ms
+  cell_residual         7.743s    1.1%  calls=55  per_step=1935.727 ms
+  io                    7.212s    1.1%  calls=6  per_step=1802.924 ms
+  nonlinear_solve_overhead      6.012s    0.9%  calls=9  per_step=1503.108 ms
+  residual_vector       0.861s    0.1%  calls=65  per_step=215.305 ms
+  residual_bc           0.851s    0.1%  calls=65  per_step=212.875 ms
+  residual_scatter      0.662s    0.1%  calls=97  per_step=165.477 ms
+  face_jacobian         0.635s    0.1%  calls=42  per_step=158.659 ms
+  material              0.602s    0.1%  calls=8  per_step=150.379 ms
+  bc_initial_guess      0.585s    0.1%  calls=37  per_step=146.254 ms
+  dof_to_quad           0.284s    0.0%  calls=12  per_step=70.983 ms
+  face_residual         0.159s    0.0%  calls=55  per_step=39.767 ms
+  history               0.051s    0.0%  calls=4  per_step=12.850 ms
+  quad_state            0.047s    0.0%  calls=19  per_step=11.869 ms
+  postprocess           0.023s    0.0%  calls=9  per_step=5.663 ms
+  residual_flatten      0.009s    0.0%  calls=65  per_step=2.320 ms
+  activation            0.000s    0.0%  calls=4  per_step=0.060 ms
+[v07-pardiso phase23] {'solves': 37, 'analyze_calls': 2, 'pattern_rebuilds': 0, 'backsolve_hits': 0, 'transpose_backsolves': 0, 'ir_steps_total': 0, 'ir_steps_max': 0}
+	Command being timed: "/home/user/miniconda3/envs/jax-fem-gpu/bin/python -m jax_fem_am.simulation.runner --config /home/user/work/159/output/v2_cube_smoke_smoke2/preflight/material_config.json --inp /home/user/work/159/output/v2_cube_smoke_smoke2/preflight/v2_cube_smoke_c3d8.inp --path-file /home/user/work/159/output/v2_cube_smoke_smoke2/preflight/v2_cube_smoke_path.csv --path-length-scale 1.0 --build-axis z --base-side min --layer-thickness 0.0002 --layers 5 --support-thickness 0.0016 --layer-activation-mode layer_on_scan --layer-activation-geometry centroid --future-layer-mode void --active-window-below-layers 0 --inactive-mass-factor 1.0 --powder-mode powder --surface-selection exterior --boundary-tol 1.0e-6 --quadrature-order 2 --thermal-mass-lumping --source-model legacy --beam-radius 0.0002 --source-depth 0.000125935 --source-depth-cutoff 0.000199 --source-cutoff-renormalize --laser-power 140 --absorptivity 0.62 --dt 0.000307692307692 --recoat-time 0 --solidus-temperature 10000 --liquidus-temperature 10000 --latent-heat 0 --phase-history-model legacy_reset --stress-relaxation-temperature 1273.15 --reset-activation-temperature --activation-reset-temperature 353.15 --ambient 313 --preheat-temperature 353.15 --bottom-thermal-bc fixed --bottom-temperature 353.15 --cooling-steps 60 --cooling-dt 10 --mechanics-model j2_plastic --bottom-mechanics-bc fixed --mechanics-every 100 --mechanics-rel-tol 5e-05 --mechanics-acceptance abaqus --mechanics-max-iter 50 --mechanics-max-cuts 3 --mechanics-temperature-floor 293.15 --thermal-output-every 650 --mechanics-output-every 100 --summary-every 50 --xla-platform cpu --xla-preallocate off --xla-linear-solver pardiso --xla-pardiso-mode phase23 --mechanics-line-search --release-after-cooling --release-anchor-mode rigid_body --release-cut-box 0 0.008 0 0.008 0 0.0016 --inp /home/user/work/159/output/v2_cube_prod_memprobe/v2_cube_prod_graded_sub20_c3d8.inp --path-file /home/user/work/159/output/v2_cube_prod_memprobe/path_probe.csv --layers 50 --support-thickness 6.0e-3 --dt 0.1 --mechanics-every 1 --cooling-steps 1 --cooling-dt 10.0 --release-after-cooling --release-anchor-mode rigid_body --release-cut-box 0 20.0e-3 0 20.0e-3 0 6.0e-3 --thermal-output-every 100000 --mechanics-output-every 100000 --summary-every 1 --xla-platform gpu --xla-cell-target-batch-size 32768 --output-dir /home/user/work/159/output/v2_cube_prod_memprobe/run --profile-json /home/user/work/159/output/v2_cube_prod_memprobe/run/profile.json --profile-label cube-prod-memprobe"
+	User time (seconds): 9717.08
+	System time (seconds): 90.18
+	Percent of CPU this job got: 1434%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 11:23.79
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 37663692
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 902
+	Minor (reclaiming a frame) page faults: 14572540
+	Voluntary context switches: 461751
+	Involuntary context switches: 12277
+	Swaps: 0
+	File system inputs: 1792627
+	File system outputs: 547744
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

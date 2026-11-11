@@ -1,0 +1,133 @@
+[2026-08-28T10:34:28Z] ======== 159 pid=2748084 TAG=a_snap STAGES='1' CFG=/home/user/work/d11_B_tree/cases/159_simulation/inputs/0119-flash.json ========
+[2026-08-28T10:34:28Z] branch: agent/gpt5-6sol/v2-stress-reproduction @ f9c4b96 dirty=1
+[2026-08-28T10:34:28Z] stage 1: generating preflight artefacts -> /home/user/work/159/output/v159_a_snap/preflight
+Traceback (most recent call last):
+  File "/home/user/work/d11_B_tree/cases/159_simulation/model/make_159_preflight.py", line 510, in <module>
+    main()
+    ~~~~^^
+  File "/home/user/work/d11_B_tree/cases/159_simulation/model/make_159_preflight.py", line 489, in main
+    led = build_preflight(args.config.resolve(), args.repo.resolve(), args.output.resolve())
+  File "/home/user/work/d11_B_tree/cases/159_simulation/model/make_159_preflight.py", line 460, in build_preflight
+    rows, ledger = generate_schedule(cfg, mesh)
+                   ~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/home/user/work/d11_B_tree/cases/159_simulation/model/make_159_preflight.py", line 267, in generate_schedule
+    validate_schedule(rows, ledger, cfg, mesh)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/work/d11_B_tree/cases/159_simulation/model/make_159_preflight.py", line 308, in validate_schedule
+    raise ValueError(f"time ledger mismatch on {name}")
+ValueError: time ledger mismatch on scan_time_s
+[2026-08-28T10:34:29Z] preflight FAILED, stop
+[2026-08-28T10:35:01Z] ======== 159 pid=2748155 TAG=a_snap STAGES='1' CFG=/home/user/work/d11_B_tree/cases/159_simulation/inputs/0119-flash.json ========
+[2026-08-28T10:35:01Z] branch: agent/gpt5-6sol/v2-stress-reproduction @ f9c4b96 dirty=1
+[2026-08-28T10:35:01Z] stage 1: generating preflight artefacts -> /home/user/work/159/output/v159_a_snap/preflight
+{
+  "part_cells": 191899,
+  "raft_cells": 13000,
+  "nodes": 268740,
+  "activation_slabs": 455,
+  "physical_layers": 2275,
+  "slab_area_mm2_first_min_max_last": [
+    889.2818166932791,
+    106.58059583534668,
+    889.2818166932791,
+    106.62403158493922
+  ],
+  "layer_scan_time_s_min_max": [
+    1.3664178953249575,
+    11.401048931965116
+  ],
+  "capture_fraction_slab_min_max": [
+    6.763290038200573e-05,
+    0.0005646723982823153
+  ],
+  "uniformity_min_over_max": 0.9935432827299856,
+  "commanded_power_W_min_max": [
+    9183494520.956945,
+    9192590319.809837
+  ],
+  "path_rows": 50040,
+  "expected_runner_steps": 50100,
+  "build_clock_s": 19979.489880126024,
+  "nominal_laser_energy_J": 1121328.5832175163,
+  "absorbed_laser_energy_nominal_J": 695223.7215948601,
+  "release_cut_box_m": [
+    1.079052169e-05,
+    0.08743397354,
+    1.082604165e-05,
+    0.0964011381,
+    0.0,
+    0.002
+  ]
+}
+  slab 1: physical layer 1 row 0 t=0.0002 s z=[2.00, 2.20] mm
+  slab 2: physical layer 6 row 110 t=82.0054 s z=[2.20, 2.40] mm
+  slab 3: physical layer 11 row 220 t=163.5574 s z=[2.40, 2.60] mm
+  slab 454: physical layer 2266 row 49830 t=19320.8206 s z=[92.60, 92.80] mm
+  slab 455: physical layer 2271 row 49940 t=19352.6552 s z=[92.80, 93.00] mm
+[2026-08-28T10:35:03Z] stage 1 gate: complete=True rows=50040 steps=50100 slabs=455 layers=2275 energy=1121328.6 J build_clock=19979 s
+[2026-08-28T10:35:03Z] V159_DONE /home/user/work/159/output/v159_a_snap
+[2026-08-28T10:35:18Z] ======== 159 pid=2748205 TAG=a_snap STAGES='2' CFG=/home/user/work/d11_B_tree/cases/159_simulation/inputs/0119-flash.json ========
+[2026-08-28T10:35:18Z] branch: agent/gpt5-6sol/v2-stress-reproduction @ f9c4b96 dirty=1
+[2026-08-28T10:35:18Z] energy_layer1 start -> /home/user/work/159/output/v159_a_snap/energy_layer1 (python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python platform=gpu extra: --path-file /home/user/work/159/output/v159_a_snap/preflight/0119_path_layer1.csv --mechanics-every 0 --cooling-steps 0 --thermal-output-every 100000 --summary-every 2 --no-release-after-cooling)
+[2026-08-28T10:36:08Z] energy_layer1 end rc=0 ledger=12 complete=yes
+[2026-08-28T10:36:08Z] energy gate:
+{
+  "checks": {
+    "ledger_complete": true,
+    "no_nan_or_inf_in_log": true,
+    "newton_converged_everywhere": true
+  },
+  "energy": {
+    "capture_fraction": 0.0005645132323995885,
+    "per_step_capture_min": 0.0005645132323995885,
+    "per_step_capture_max": 0.0005645132323995885,
+    "max_relative_balance_error": 7.87225723670571e-06
+  },
+  "profile": {
+    "wall_seconds": 47.530458951951005,
+    "steps": 12,
+    "newton_wall_seconds": 29.873494136845693,
+    "seconds_per_step": 3.9608715793292504
+  },
+  "all_checks_passed": true
+}
+[2026-08-28T10:36:08Z] ENERGY_GATE_RC=0
+energy trial: deposited 989.3321 J vs physical absorbed 989.6110 J (ratio 0.999718); capture 5.645132e-04 vs mesh 5.646724e-04 (ratio 0.999718); balance err max 7.87e-06; T_max 353 K; 3.96 s/step over 12 steps
+[2026-08-28T10:36:08Z] V159_DONE /home/user/work/159/output/v159_a_snap
+[2026-08-28T10:38:16Z] ======== 159 pid=2750029 TAG=a_snap STAGES='S' CFG=/home/user/work/d11_B_tree/cases/159_simulation/inputs/0119-flash.json ========
+[2026-08-28T10:38:16Z] branch: agent/gpt5-6sol/v2-stress-reproduction @ f9c4b96 dirty=1
+[2026-08-28T10:38:16Z] shakedown_2slabs start -> /home/user/work/159/output/v159_a_snap/shakedown_2slabs (python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python platform=gpu extra: --max-print-layers 2 --cooling-steps 6 --cooling-dt 100)
+[2026-08-28T10:40:53Z] ======== 159 pid=2754225 TAG=a_snap STAGES='S' CFG=/home/user/work/d11_B_tree/cases/159_simulation/inputs/0119-flash.json ========
+[2026-08-28T10:40:53Z] branch: agent/gpt5-6sol/v2-stress-reproduction @ f9c4b96 dirty=1
+[2026-08-28T10:40:53Z] shakedown_2slabs start -> /home/user/work/159/output/v159_a_snap/shakedown_2slabs (python=/home/user/miniconda3/envs/jax-fem-gpu/bin/python platform=gpu extra: --max-print-layers 2 --cooling-steps 6 --cooling-dt 100)
+[2026-08-28T10:53:50Z] shakedown_2slabs end rc=0 ledger=226 complete=yes
+[2026-08-28T10:53:50Z] shakedown gate (slabs <= 2):
+{
+  "checks": {
+    "ledger_complete": true,
+    "no_nan_or_inf_in_log": true,
+    "newton_converged_everywhere": true,
+    "step_count_matches_run_ledger": true,
+    "activation_steps_match_preflight": true,
+    "part_consolidated_on_activation": true,
+    "stress_free_reference_applied": true,
+    "release_solve_present": true,
+    "release_removed_substrate": true,
+    "release_changed_part_stress": true
+  },
+  "energy": {
+    "capture_fraction": 0.0005622795297982036,
+    "per_step_capture_min": 0.0005600457849370201,
+    "per_step_capture_max": 0.0005645132323995885,
+    "max_relative_balance_error": 7.872257228642144e-06
+  },
+  "profile": {
+    "wall_seconds": 774.4969610230764,
+    "steps": 226,
+    "newton_wall_seconds": 652.5277571821352,
+    "seconds_per_step": 3.4269777036419313
+  },
+  "all_checks_passed": true
+}
+[2026-08-28T10:53:52Z] SHAKEDOWN_GATE_RC=0
+[2026-08-28T10:53:52Z] V159_DONE /home/user/work/159/output/v159_a_snap

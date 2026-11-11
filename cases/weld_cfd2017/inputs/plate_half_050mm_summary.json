@@ -1,0 +1,39 @@
+{
+ "model": "half",
+ "units": "inp in meters; this summary in mm",
+ "geometry_mm": {
+  "width_x": 20.0,
+  "length_y": 44.0,
+  "thickness_z": 6.0,
+  "x_extent": [
+   0.0,
+   10.0
+  ],
+  "weld_centre_x": 0.0
+ },
+ "counts": {
+  "nx": 17,
+  "ny": 88,
+  "nz": 12,
+  "nodes": 20826,
+  "cells": 17952,
+  "dof": 62478,
+  "symmetry_nodes": 1157,
+  "top_surface_nodes": 1602
+ },
+ "spacing_mm": {
+  "dx_min": 0.5,
+  "dx_max": 0.9126559714795022,
+  "dy_min": 0.5,
+  "dy_max": 0.5,
+  "dz_min": 0.5,
+  "dz_max": 0.5
+ },
+ "checks": {
+  "min_cell_volume_mm3": 0.125,
+  "volume_closure": 1.0,
+  "node_ids_consecutive": true,
+  "all_positive_jacobian": true
+ },
+ "output": "/home/user/work/rongchi_tree/cases/weld_cfd2017/inputs/plate_half_050mm.inp"
+}

@@ -1,0 +1,161 @@
+{
+  "schema": "v2.cube-in-depth-rs/1",
+  "protocol": "Balbaa Sec 3.4/4.3.2: 2 mm spot at the cube centre, top face, depth 0-1 mm; cell-row bins of 200 um; 0.1 mm grid linearly interpolated (flagged); no polishing re-equilibration",
+  "frame": "release.vtu",
+  "spot_diameter_m": 0.002,
+  "centre_xy_m": [
+    0.01,
+    0.01
+  ],
+  "top_z_m": 0.015999999999999983,
+  "cells_in_spot_per_row": 80,
+  "profile_cell_rows": [
+    {
+      "depth_m": 9.999999999999983e-05,
+      "cells": 80,
+      "sxx_MPa": 769.9833984375,
+      "syy_MPa": 769.9833984375,
+      "szz_MPa": 0.1888359934091568,
+      "sxy_MPa": 1.757812451153029e-09,
+      "vm_MPa": 769.7977294921875,
+      "sxx_std_MPa": 1.1890586614608765,
+      "syy_std_MPa": 1.189061164855957,
+      "eqp_mean": 0.011535851284861565
+    },
+    {
+      "depth_m": 0.0002999999999999995,
+      "cells": 80,
+      "sxx_MPa": 625.1455078125,
+      "syy_MPa": 625.1455078125,
+      "szz_MPa": 0.78687983751297,
+      "sxy_MPa": 7.812500091297636e-10,
+      "vm_MPa": 624.3679809570312,
+      "sxx_std_MPa": 0.3542424440383911,
+      "syy_std_MPa": 0.3542456030845642,
+      "eqp_mean": 0.012006530538201332
+    },
+    {
+      "depth_m": 0.0004999999999999991,
+      "cells": 80,
+      "sxx_MPa": 524.8571166992188,
+      "syy_MPa": 524.857177734375,
+      "szz_MPa": 1.1703721284866333,
+      "sxy_MPa": 0.0,
+      "vm_MPa": 523.6992797851562,
+      "sxx_std_MPa": 1.9027960300445557,
+      "syy_std_MPa": 1.9027925729751587,
+      "eqp_mean": 0.012034078128635883
+    },
+    {
+      "depth_m": 0.0006999999999999988,
+      "cells": 80,
+      "sxx_MPa": 475.8445129394531,
+      "syy_MPa": 475.8445129394531,
+      "szz_MPa": 0.3334754407405853,
+      "sxy_MPa": -1.2499999968440534e-07,
+      "vm_MPa": 476.51422119140625,
+      "sxx_std_MPa": 24.29063606262207,
+      "syy_std_MPa": 24.29063606262207,
+      "eqp_mean": 0.019413277506828308
+    },
+    {
+      "depth_m": 0.0008999999999999985,
+      "cells": 80,
+      "sxx_MPa": 394.6565246582031,
+      "syy_MPa": 394.6565856933594,
+      "szz_MPa": -2.295308828353882,
+      "sxy_MPa": 2.5000000292152436e-08,
+      "vm_MPa": 397.3704528808594,
+      "sxx_std_MPa": 18.984811782836914,
+      "syy_std_MPa": 18.984811782836914,
+      "eqp_mean": 0.022562582045793533
+    },
+    {
+      "depth_m": 0.0010999999999999981,
+      "cells": 80,
+      "sxx_MPa": 271.8501892089844,
+      "syy_MPa": 271.8501892089844,
+      "szz_MPa": -7.728234767913818,
+      "sxy_MPa": 2.1874999589499566e-08,
+      "vm_MPa": 280.8140869140625,
+      "sxx_std_MPa": 5.076057434082031,
+      "syy_std_MPa": 5.076057434082031,
+      "eqp_mean": 0.022245127707719803
+    }
+  ],
+  "profile_0p1mm_grid": [
+    {
+      "depth_m": 0.0,
+      "sxx_MPa": 769.9833984375,
+      "syy_MPa": 769.9833984375,
+      "interpolated": true
+    },
+    {
+      "depth_m": 0.0001,
+      "sxx_MPa": 769.9833984374999,
+      "syy_MPa": 769.9833984374999,
+      "interpolated": false
+    },
+    {
+      "depth_m": 0.0002,
+      "sxx_MPa": 697.5644531249998,
+      "syy_MPa": 697.5644531249998,
+      "interpolated": true
+    },
+    {
+      "depth_m": 0.00030000000000000003,
+      "sxx_MPa": 625.1455078124998,
+      "syy_MPa": 625.1455078124998,
+      "interpolated": false
+    },
+    {
+      "depth_m": 0.0004,
+      "sxx_MPa": 575.001312255859,
+      "syy_MPa": 575.0013427734372,
+      "interpolated": true
+    },
+    {
+      "depth_m": 0.0005,
+      "sxx_MPa": 524.8571166992185,
+      "syy_MPa": 524.8571777343748,
+      "interpolated": false
+    },
+    {
+      "depth_m": 0.0006000000000000001,
+      "sxx_MPa": 500.35081481933565,
+      "syy_MPa": 500.3508453369138,
+      "interpolated": true
+    },
+    {
+      "depth_m": 0.0007,
+      "sxx_MPa": 475.8445129394526,
+      "syy_MPa": 475.8445129394526,
+      "interpolated": false
+    },
+    {
+      "depth_m": 0.0008,
+      "sxx_MPa": 435.25051879882756,
+      "syy_MPa": 435.2505493164057,
+      "interpolated": true
+    },
+    {
+      "depth_m": 0.0009000000000000001,
+      "sxx_MPa": 394.6565246582021,
+      "syy_MPa": 394.65658569335835,
+      "interpolated": false
+    },
+    {
+      "depth_m": 0.001,
+      "sxx_MPa": 333.25335693359267,
+      "syy_MPa": 333.2533874511708,
+      "interpolated": true
+    }
+  ],
+  "in_plane_anisotropy_note": "flash reading has no scan direction; sxx vs syy difference is model anisotropy only",
+  "whole_part": {
+    "vm_mean_MPa": 443.77728271484375,
+    "vm_max_MPa": 918.7568359375,
+    "sxx_mean_MPa": 0.0,
+    "eqp_max": 0.13764126598834991
+  }
+}

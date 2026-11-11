@@ -1,0 +1,17 @@
+{
+  "arm": "gpu_jax_bicgstab",
+  "role": "upstream jax-fem default jax_solver (iterative on GPU)",
+  "conda_env": "jax-fem-gpu",
+  "platform": "gpu",
+  "linear_solver": "jax_fem.solver.jax_solver: PETSc CSR -> JAX BCOO on device -> jax.scipy.sparse.linalg.bicgstab with Jacobi (diagonal) preconditioner, tol 1e-10, atol 1e-10, maxiter 10000; SciPy spsolve fallback ON (counted in profile meta solver_fallbacks)",
+  "extra_argv": [
+    "--xla-linear-solver",
+    "jax",
+    "--xla-jax-method",
+    "bicgstab",
+    "--xla-jax-precond"
+  ],
+  "notes": "The pipeline the user sketched: GPU element level -> host CSR assembly -> GPU sparse iterative solve. Accuracy is expected to drift (iterative tolerance) and the mechanics matrix (non-symmetric, 1e-4/1e-2/1% stiffness contrasts) is where Jacobi-preconditioned Krylov is expected to struggle.",
+  "python_bin": "/home/user/miniconda3/envs/jax-fem-gpu/bin/python",
+  "env_note": "jax-fem-env lives under miniforge3; jax-fem-gpu was cloned under miniconda3 (output/gpu_env_setup.sh) -- `conda activate` from miniforge's conda.sh cannot see it, so arms are launched by absolute python path (the L0/D-11 PYTHON_BIN convention)."
+}

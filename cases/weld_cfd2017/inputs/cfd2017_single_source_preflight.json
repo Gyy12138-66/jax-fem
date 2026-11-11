@@ -1,0 +1,17 @@
+{
+ "rows": 365,
+ "heating_rows": 300,
+ "heating_energy_J": 3810.0,
+ "power_W": 2540.0,
+ "travel_mm": [
+  8.0,
+  34.99999999999999
+ ],
+ "total_time_s": 60.0,
+ "cfd_end_s": 1.7,
+ "notes": [
+  "single equivalent source (D-C-01)",
+  "coordinates: mesh metres, weld along y at x_centre",
+  "run with --dt 0.005 --absorptivity 1.0 --recoat-time 0 --cooling-steps 0 --layers 1"
+ ]
+}

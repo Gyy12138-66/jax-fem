@@ -1,0 +1,67 @@
+{
+  "schema": "v2.cube-smoke-gate/1",
+  "run_dir": "/home/user/work/159/output/v2_cube_smoke_prodB/capture_r100000_band",
+  "ledger_complete": true,
+  "solver_completed": true,
+  "recorded_step_count": 12,
+  "expected_step_count": 12,
+  "max_relative_balance_error": 9.626745837734835e-07,
+  "all_balance_steps_within_tolerance": true,
+  "energy": {
+    "laser_commanded_J": 27278.5428448958,
+    "laser_absorbed_nominal_J": 16912.696563835394,
+    "laser_deposited_J": 107.31100654858609,
+    "capture_fraction": 0.0063449968574526665,
+    "per_step_capture_min": 0.0063449968574526665,
+    "per_step_capture_max": 0.0063449968574526665,
+    "per_step_capture_std": 0.0,
+    "laser_on_steps": 2,
+    "max_relative_balance_error": 9.626745837734835e-07,
+    "flash": {
+      "capture_fraction_analytic": 0.006345026488661997,
+      "capture_fraction_ledger_over_analytic": 0.9999953300101452,
+      "layers_in_run": 1.0,
+      "physical_absorbed_J": 107.3115076923077,
+      "deposited_over_physical_absorbed": 0.9999953300094987
+    }
+  },
+  "log": {
+    "summary_lines": 2,
+    "newton_nonconvergence_count": 0,
+    "cutback_mentions": 0,
+    "nan_or_inf_mentions": 0,
+    "last_summary": [
+      "11",
+      "hold",
+      "1",
+      "50",
+      "1",
+      "82500",
+      "205000",
+      "0",
+      "-1",
+      "353.15",
+      "546.157553822",
+      "0",
+      "0"
+    ],
+    "mechanics_steps_seen": [],
+    "highest_printed_layer_first_step": {
+      "1": 0
+    },
+    "release_u_max": null,
+    "release_cut_cells": null
+  },
+  "profile": {
+    "wall_seconds": 71.39303287502844,
+    "steps": 12,
+    "newton_wall_seconds": 56.233725982951,
+    "seconds_per_step": 5.94941940625237
+  },
+  "checks": {
+    "ledger_complete": true,
+    "no_nan_or_inf_in_log": true,
+    "newton_converged_everywhere": true
+  },
+  "all_checks_passed": true
+}

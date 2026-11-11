@@ -1,0 +1,106 @@
+{
+  "schema": "v159.flash-preflight/1",
+  "scope": "0119 part on the HyperMesh 0.5 mm voxel HEX8 (centre-inside filtered), flash reading A' with grouped flashes",
+  "purpose": "Real-part transfer of the cube-stress production contract (cube-stress-production-dwellflash.json). Geometry-specific quantities (layer count, per-layer area, scan time, energy, capture fraction, release box) are derived from the HEX8 mesh so that swapping the mesh only re-runs the preflight. Process parameters are the Balbaa 140 W condition until the real machine settings are supplied.",
+  "provenance": {
+    "inherits": "cases/AM-Benchmark/verification/v2-cube-rs/inputs/cube-stress-production-dwellflash.json",
+    "deviations": [
+      "D-V2-10",
+      "D-V2-11",
+      "D-V2-17",
+      "D-V2-22",
+      "D-V2-26"
+    ],
+    "zero_calibration": true
+  },
+  "mesh": {
+    "inp": "cases/159_simulation/mesh/out_voxel/0119_hm_voxel.inp",
+    "units": "m",
+    "build_axis": "z",
+    "part_elset": "PART",
+    "raft_elset": "RAFT",
+    "raft_height_m": 0.001,
+    "cell_height_m": 0.0005,
+    "note": "HyperMesh voxel lattice 0.5 mm (mode 3) filtered to centre-inside voxels (convert_hm_voxel.py), rotated to +Z, raft = 2 voxel layers"
+  },
+  "layer_schedule": {
+    "physical_layer_thickness_m": 4e-05,
+    "activation_slab_thickness_m": 0.0005,
+    "physical_layers_per_slab": 5,
+    "activation_rule": "activate a 0.5 mm slab when its first flash starts; 5 flashes per slab, each carrying 2.5 real (40 um) layers of energy and clock (12.5 real layers per slab)",
+    "deposition_mode": "flash",
+    "deposition_z_rule": "slab_top",
+    "recoat_time_s": 5.0,
+    "recoat_substeps": 10,
+    "recoat_substep_ratio": 1.5,
+    "recoat_after_final_layer": false,
+    "flash_grouping": "energy per flash per cell mass = validated 0.2 mm reading"
+  },
+  "scan": {
+    "power_W": 140.0,
+    "speed_m_s": 0.65,
+    "hatch_m": 0.00012,
+    "scan_time_rule": "t_scan(layer) = A(slab) / (hatch x speed): full-area hatching, contours and jumps excluded",
+    "flash": {
+      "beam_radius_m": 1.0,
+      "substeps": 2,
+      "duration_s": 0.0003076923076923077,
+      "hold_substeps": 10,
+      "hold_substep_ratio": 1.5,
+      "power_rule": "commanded(layer) = P x t_scan(layer) / (t_flash x capture(slab))",
+      "note": "reading A' (D-V2-11): the whole physical layer's energy P x t_scan is flashed in the cell dwell time 0.2 mm / 650 mm/s, then laser-off hold sub-steps span the rest of t_scan. The legacy Gaussian exp(-2 rho^2/r^2) with r = 1 m over a 96 mm part drops 1.0 % centre-to-corner; capture(slab) is evaluated on the mesh (sum over the slab's cells of A_cell x exp(-2 rho^2/r^2) x 2/(pi r^2)), so deposited energy per layer equals Ac x P x t_scan(layer) by construction and the ledger measures it."
+    }
+  },
+  "thermal_mechanical": {
+    "initial_temperature_K": 353.15,
+    "ambient_K": 313.0,
+    "stress_free_reference_K": 1273.15,
+    "final_cooldown_s": 600.0,
+    "final_cooldown_steps": 60,
+    "bottom_mechanics_bc": "fixed_until_release",
+    "release_after_cooling": true,
+    "release_rule": "raft cells cut (stiffness and locked-in stress removed) + 3-point rigid-body anchors on printed nodes; bottom Dirichlet temperature held at the preheat value through cooldown"
+  },
+  "runner": {
+    "material_config": "cases/AM-Benchmark/verification/v2-cube-rs/model/v2_material_config.json",
+    "material_config_relocate_prefix": "/home/user/work/159/jax-fem/",
+    "layer_activation_geometry": "centroid",
+    "absorptivity": 0.62,
+    "beam_radius_m": 0.0002,
+    "source_depth_m": 0.00031418176065722966,
+    "source_depth_cutoff_m": 0.000499,
+    "source_cutoff_renormalize": true,
+    "heat_source_note": "depth band re-derived for 0.5 mm cells under the vertex rule: cutoff 499 um (< slab), d = 314.182 um, discrete band integral 1.000000",
+    "consolidation": {
+      "solidus_K": 10000.0,
+      "liquidus_K": 10000.0,
+      "latent_heat_J_kg": 0.0,
+      "phase_history_model": "legacy_reset",
+      "stress_relaxation_temperature_K": 1273.15,
+      "activation_reset_temperature_K": 353.15
+    },
+    "mechanics": {
+      "model": "j2_plastic",
+      "every_steps": 22,
+      "rel_tol": 5e-05,
+      "acceptance": "abaqus",
+      "max_iter": 50,
+      "line_search": true,
+      "max_cuts": 3,
+      "temperature_floor_K": 293.15,
+      "note": "22 rows per flash (2 flash + 10 hold + 10 recoat); one mechanics solve per flash = 5 per 0.5 mm slab"
+    },
+    "output": {
+      "thermal_output_every": 1000,
+      "mechanics_output_every": 1000,
+      "summary_every": 20
+    },
+    "linear_solver": {
+      "platform": "gpu",
+      "python_bin": "/home/user/miniconda3/envs/jax-fem-gpu/bin/python",
+      "solver": "pardiso",
+      "pardiso_mode": "phase23",
+      "cell_target_batch_size": 32768
+    }
+  }
+}

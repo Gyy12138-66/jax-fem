@@ -1,0 +1,9 @@
+T,value,source
+293.15,8.2,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); combined convection+radiation coefficient, REFERENCE ONLY (solver: h=8.2 + eps=0.6)"
+373.15,10.9,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); combined convection+radiation coefficient, REFERENCE ONLY (solver: h=8.2 + eps=0.6)"
+523.15,18.5,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); combined convection+radiation coefficient, REFERENCE ONLY (solver: h=8.2 + eps=0.6)"
+673.15,33.6,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); combined convection+radiation coefficient, REFERENCE ONLY (solver: h=8.2 + eps=0.6)"
+823.15,49.1,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); combined convection+radiation coefficient, REFERENCE ONLY (solver: h=8.2 + eps=0.6)"
+973.15,55.9,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); combined convection+radiation coefficient, REFERENCE ONLY (solver: h=8.2 + eps=0.6)"
+1123.15,57.9,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); combined convection+radiation coefficient, REFERENCE ONLY (solver: h=8.2 + eps=0.6)"
+1273.15,60.2,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); combined convection+radiation coefficient, REFERENCE ONLY (solver: h=8.2 + eps=0.6)"

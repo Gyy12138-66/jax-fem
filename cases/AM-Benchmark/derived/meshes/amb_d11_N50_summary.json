@@ -1,0 +1,56 @@
+{
+ "schema_version": "ambench.d11-mesh/1",
+ "N": 50,
+ "physical_layers": 350,
+ "computational_layers": 7,
+ "layer_thickness_mm": 1.0,
+ "dx_part_mm": 0.25,
+ "dy_part_mm": 0.5,
+ "grid": [
+  56,
+  20,
+  18
+ ],
+ "nodes": 22743,
+ "elements": 20160,
+ "sets": {
+  "SUBSTRATE": 12320,
+  "PART": 2480,
+  "POWDER": 5360
+ },
+ "domain_mm": {
+  "x": [
+   0.0,
+   14.0
+  ],
+  "y": [
+   -10.0,
+   10.0
+  ],
+  "z": [
+   -12.7,
+   7.0
+  ]
+ },
+ "legs_in_domain": {
+  "L1_thick": [
+   0.0,
+   5.0
+  ],
+  "L2_thin": [
+   7.0,
+   7.5
+  ],
+  "L3_med": [
+   9.5,
+   12.0
+  ]
+ },
+ "notes": [
+  "one leg-group period of the D-07 cell; pitch 14 mm from feature_id_map (L1 at 0.0, L4 at 14.0)",
+  "x=0 is the part real free end; x=14 cuts powder gap (legs band)",
+  "cut faces traction-free / no side-face BC: registered truncation assumption, identical across all 15 matrix members",
+  "only the build z-discretisation varies with N; in-plane grid and substrate grading held fixed",
+  "thin 0.5 mm leg: 2 elements across"
+ ]
+}

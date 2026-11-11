@@ -1,0 +1,18 @@
+{
+  "arm": "gpu_full_phase23",
+  "role": "GPU-assembly full-Newton baseline",
+  "comparison_baseline": "gpu_full_phase23",
+  "accuracy_baseline": "cpu_full_phase23",
+  "conda_env": "jax-fem-gpu",
+  "python_bin": "/home/user/miniconda3/envs/jax-fem-gpu/bin/python",
+  "platform": "gpu",
+  "decomposition": "Build every mechanics tangent on GPU, transfer the sparse system to the host, and run CPU PARDISO phase 23 for every Newton correction.",
+  "extra_argv": [
+    "--xla-linear-solver",
+    "pardiso",
+    "--xla-pardiso-mode",
+    "phase23",
+    "--mechanics-residual-only-check"
+  ],
+  "notes": "GPU means JAX element residual/tangent work only; the FP64 sparse direct factorization remains on CPU. Residual-only convergence checking is shared with the modified arm for a fair reuse ablation."
+}

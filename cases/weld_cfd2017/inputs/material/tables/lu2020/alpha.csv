@@ -1,0 +1,9 @@
+T,value,source
+293.15,2.38e-05,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); assumed secant CTE from 20 C (ANSYS ALPX convention)"
+373.15,2.42e-05,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); assumed secant CTE from 20 C (ANSYS ALPX convention)"
+523.15,2.52e-05,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); assumed secant CTE from 20 C (ANSYS ALPX convention)"
+673.15,2.65e-05,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); assumed secant CTE from 20 C (ANSYS ALPX convention)"
+823.15,2.71e-05,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); assumed secant CTE from 20 C (ANSYS ALPX convention)"
+973.15,2.76e-05,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); assumed secant CTE from 20 C (ANSYS ALPX convention)"
+1123.15,2.81e-05,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); assumed secant CTE from 20 C (ANSYS ALPX convention)"
+1273.15,2.9e-05,"Lu 2020 JMP 50:380-393 Table 1 (no column source cited); assumed secant CTE from 20 C (ANSYS ALPX convention)"

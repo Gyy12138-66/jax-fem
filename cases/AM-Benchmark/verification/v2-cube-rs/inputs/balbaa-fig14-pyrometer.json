@@ -1,0 +1,373 @@
+{
+  "id": "balbaa2022-fig14-pyrometer",
+  "provenance": "Balbaa2022 Figure 14(Sec 4.2.1,p.17):仓库内 PDF 第 17 页内嵌位图 2755x1804(原始分辨率,未二次渲染)",
+  "what": "多道模型温度预测 vs 双色高温计实测",
+  "condition": {
+    "power_W": 220,
+    "speed_mm_s": 650,
+    "hatch_mm": 0.12,
+    "layer_mm": 0.04,
+    "_source": "Balbaa2022 Sec 3.3"
+  },
+  "instrument": "Fluke Endurance 双色高温计,Si/Si ~1 um,slope 0.96,量程 1000-3000 degC,响应 10 ms,85 mm 处光斑 2 mm",
+  "SCOPE_FINDING": "Fig 14 是 5 组离散点对,不是连续轨迹。可比对的观测量因此是 5 个采样时刻(t = 0.548 .. 0.733 s),而不是一条 10 ms 分辨的温度曲线;Sec 3.3 的 10 ms 只是模型侧的抽样/平均增量,不代表图里有 10 ms 密度的数据",
+  "axes": {
+    "x": "Time (s)",
+    "y": "Temperature (degC)",
+    "xlim": [
+      0.5,
+      0.75
+    ],
+    "ylim": [
+      1000.0,
+      1700.0
+    ]
+  },
+  "calibration": {
+    "frame_px": {
+      "top": {
+        "center": 104.0,
+        "half_thickness": 2.5
+      },
+      "bottom": {
+        "center": 1517.0,
+        "half_thickness": 4.5
+      },
+      "left": {
+        "center": 416.0,
+        "half_thickness": 4.5
+      },
+      "right": {
+        "center": 2625.0,
+        "half_thickness": 2.5
+      }
+    },
+    "scale_s_per_px": 0.00011317338162064282,
+    "scale_C_per_px": -0.4953998584571833,
+    "tick_cross_check": {
+      "x": {
+        "n_major_ticks": 6,
+        "median_spacing_px": 441.0,
+        "intervals_across_frame": 5,
+        "max_residual_px": 2.5,
+        "rms_residual_px": 1.6758082626998843
+      },
+      "y": {
+        "n_major_ticks": 15,
+        "median_spacing_px": 100.5,
+        "intervals_across_frame": 14,
+        "max_residual_px": 2.0,
+        "rms_residual_px": 1.1338934190276826
+      }
+    },
+    "legend_bbox_excluded": [
+      120,
+      477,
+      1886,
+      2613
+    ]
+  },
+  "experimental": [
+    {
+      "time_s": 0.5480421004979629,
+      "temperature_C": 1147.1337579617834,
+      "pixel_bbox_center": [
+        1220.0,
+        840.5
+      ],
+      "anchor_ambiguity_px": [
+        0.6426914153132657,
+        0.0
+      ],
+      "marker_px": 862,
+      "temperature_C_uncertainty": 2.46025027891052,
+      "time_s_uncertainty": 0.0005825956394854572,
+      "uncertainty_terms_C": {
+        "frame_line_half_thickness": 2.229299363057325,
+        "tick_cross_check": 0.9907997169143666,
+        "marker_anchor": 0.31838923617783865
+      },
+      "uncertainty_terms_s": {
+        "frame_line_half_thickness": 0.0005092802172928927,
+        "tick_cross_check": 0.00028293345405160705,
+        "marker_anchor": 0.0
+      },
+      "temperature_K": 1420.2837579617835
+    },
+    {
+      "time_s": 0.5922363060208239,
+      "temperature_C": 1399.2922859164896,
+      "pixel_bbox_center": [
+        711.0,
+        1231.0
+      ],
+      "anchor_ambiguity_px": [
+        0.5326688815060834,
+        0.585825027685587
+      ],
+      "marker_px": 903,
+      "temperature_C_uncertainty": 2.4537918700106296,
+      "time_s_uncertainty": 0.0005863559861984511,
+      "uncertainty_terms_C": {
+        "frame_line_half_thickness": 2.229299363057325,
+        "tick_cross_check": 0.9907997169143666,
+        "marker_anchor": 0.2638840885026599
+      },
+      "uncertainty_terms_s": {
+        "frame_line_half_thickness": 0.0005092802172928927,
+        "tick_cross_check": 0.00028293345405160705,
+        "marker_anchor": 6.629979942118459e-05
+      },
+      "temperature_K": 1672.4422859164897
+    },
+    {
+      "time_s": 0.6226799456767769,
+      "temperature_C": 1469.6390658174098,
+      "pixel_bbox_center": [
+        569.0,
+        1500.0
+      ],
+      "anchor_ambiguity_px": [
+        0.5931263858093416,
+        0.5898004434588984
+      ],
+      "marker_px": 902,
+      "temperature_C_uncertainty": 2.457193231371056,
+      "time_s_uncertainty": 0.0005864070284552163,
+      "uncertainty_terms_C": {
+        "frame_line_half_thickness": 2.229299363057325,
+        "tick_cross_check": 0.9907997169143666,
+        "marker_anchor": 0.29383472757716855
+      },
+      "uncertainty_terms_s": {
+        "frame_line_half_thickness": 0.0005092802172928927,
+        "tick_cross_check": 0.00028293345405160705,
+        "marker_anchor": 6.674971066759828e-05
+      },
+      "temperature_K": 1742.7890658174097
+    },
+    {
+      "time_s": 0.6525577184246265,
+      "temperature_C": 1423.0714791224345,
+      "pixel_bbox_center": [
+        663.0,
+        1764.0
+      ],
+      "anchor_ambiguity_px": [
+        0.5250278086763274,
+        0.5728587319242706
+      ],
+      "marker_px": 899,
+      "temperature_C_uncertainty": 2.4533876709565785,
+      "time_s_uncertainty": 0.000586191874760679,
+      "uncertainty_terms_C": {
+        "frame_line_half_thickness": 2.229299363057325,
+        "tick_cross_check": 0.9907997169143666,
+        "marker_anchor": 0.2600987021043377
+      },
+      "uncertainty_terms_s": {
+        "frame_line_half_thickness": 0.0005092802172928927,
+        "tick_cross_check": 0.00028293345405160705,
+        "marker_anchor": 6.4832359882783e-05
+      },
+      "temperature_K": 1696.2214791224346
+    },
+    {
+      "time_s": 0.732571299230421,
+      "temperature_C": 1389.384288747346,
+      "pixel_bbox_center": [
+        731.0,
+        2471.0
+      ],
+      "anchor_ambiguity_px": [
+        0.3885209713024551,
+        0.5309050772625596
+      ],
+      "marker_px": 906,
+      "temperature_C_uncertainty": 2.4471423487499213,
+      "time_s_uncertainty": 0.0005856857561930521,
+      "uncertainty_terms_C": {
+        "frame_line_half_thickness": 2.229299363057325,
+        "tick_cross_check": 0.9907997169143666,
+        "marker_anchor": 0.19247323419088364
+      },
+      "uncertainty_terms_s": {
+        "frame_line_half_thickness": 0.0005092802172928927,
+        "tick_cross_check": 0.00028293345405160705,
+        "marker_anchor": 6.0084322913372524e-05
+      },
+      "temperature_K": 1662.5342887473462
+    }
+  ],
+  "balbaa_numerical": [
+    {
+      "time_s": 0.5479855138071525,
+      "temperature_C": 1183.793347487615,
+      "pixel_bbox_center": [
+        1146.0,
+        840.0
+      ],
+      "anchor_ambiguity_px": [
+        5.7000000000000455,
+        0.52800000000002
+      ],
+      "marker_px": 1000,
+      "temperature_C_uncertainty": 3.7316469100315914,
+      "time_s_uncertainty": 0.0005856521188939367,
+      "uncertainty_terms_C": {
+        "frame_line_half_thickness": 2.229299363057325,
+        "tick_cross_check": 0.9907997169143666,
+        "marker_anchor": 2.8237791932059673
+      },
+      "uncertainty_terms_s": {
+        "frame_line_half_thickness": 0.0005092802172928927,
+        "tick_cross_check": 0.00028293345405160705,
+        "marker_anchor": 5.9755545495701676e-05
+      },
+      "temperature_K": 1456.943347487615
+    },
+    {
+      "time_s": 0.5922928927116342,
+      "temperature_C": 1348.0184005661713,
+      "pixel_bbox_center": [
+        814.5,
+        1231.5
+      ],
+      "anchor_ambiguity_px": [
+        5.801411290322562,
+        0.5504032258063489
+      ],
+      "marker_px": 992,
+      "temperature_C_uncertainty": 3.769806507273826,
+      "time_s_uncertainty": 0.0005859162458242391,
+      "uncertainty_terms_C": {
+        "frame_line_half_thickness": 2.229299363057325,
+        "tick_cross_check": 0.9907997169143666,
+        "marker_anchor": 2.8740183320777026
+      },
+      "uncertainty_terms_s": {
+        "frame_line_half_thickness": 0.0005092802172928927,
+        "tick_cross_check": 0.00028293345405160705,
+        "marker_anchor": 6.229099431941477e-05
+      },
+      "temperature_K": 1621.1684005661714
+    },
+    {
+      "time_s": 0.6227365323675871,
+      "temperature_C": 1402.0169851380042,
+      "pixel_bbox_center": [
+        705.5,
+        1500.5
+      ],
+      "anchor_ambiguity_px": [
+        5.29368213228031,
+        0.2393879565647694
+      ],
+      "marker_px": 1013,
+      "temperature_C_uncertainty": 3.5817468185775105,
+      "time_s_uncertainty": 0.0005832252346061739,
+      "uncertainty_terms_C": {
+        "frame_line_half_thickness": 2.229299363057325,
+        "tick_cross_check": 0.9907997169143666,
+        "marker_anchor": 2.622489379048986
+      },
+      "uncertainty_terms_s": {
+        "frame_line_half_thickness": 0.0005092802172928927,
+        "tick_cross_check": 0.00028293345405160705,
+        "marker_anchor": 2.7092344563690518e-05
+      },
+      "temperature_K": 1675.1669851380043
+    },
+    {
+      "time_s": 0.6525577184246265,
+      "temperature_C": 1619.0021231422506,
+      "pixel_bbox_center": [
+        267.5,
+        1764.0
+      ],
+      "anchor_ambiguity_px": [
+        5.3466257668711705,
+        0.2995910020449628
+      ],
+      "marker_px": 978,
+      "temperature_C_uncertainty": 3.600994988706411,
+      "time_s_uncertainty": 0.0005835814231601391,
+      "uncertainty_terms_C": {
+        "frame_line_half_thickness": 2.229299363057325,
+        "tick_cross_check": 0.9907997169143666,
+        "marker_anchor": 2.648717648131507
+      },
+      "uncertainty_terms_s": {
+        "frame_line_half_thickness": 0.0005092802172928927,
+        "tick_cross_check": 0.00028293345405160705,
+        "marker_anchor": 3.390572680454536e-05
+      },
+      "temperature_K": 1892.1521231422507
+    },
+    {
+      "time_s": 0.7326278859212313,
+      "temperature_C": 1157.2894550601557,
+      "pixel_bbox_center": [
+        1199.5,
+        2471.5
+      ],
+      "anchor_ambiguity_px": [
+        5.710526315789366,
+        0.542884990253242
+      ],
+      "marker_px": 1026,
+      "temperature_C_uncertainty": 3.7355945145296245,
+      "time_s_uncertainty": 0.0005858263981281183,
+      "uncertainty_terms_C": {
+        "frame_line_half_thickness": 2.229299363057325,
+        "tick_cross_check": 0.9907997169143666,
+        "marker_anchor": 2.8289939285580723
+      },
+      "uncertainty_terms_s": {
+        "frame_line_half_thickness": 0.0005092802172928927,
+        "tick_cross_check": 0.00028293345405160705,
+        "marker_anchor": 6.144013017804912e-05
+      },
+      "temperature_K": 1430.4394550601555
+    }
+  ],
+  "pairs": [
+    {
+      "time_s": 0.5480138071525578,
+      "time_mismatch_s": 5.658669081032297e-05,
+      "experimental_C": 1147.1337579617834,
+      "balbaa_numerical_C": 1183.793347487615,
+      "balbaa_minus_experiment_C": 36.65958952583151
+    },
+    {
+      "time_s": 0.592264599366229,
+      "time_mismatch_s": 5.658669081032297e-05,
+      "experimental_C": 1399.2922859164896,
+      "balbaa_numerical_C": 1348.0184005661713,
+      "balbaa_minus_experiment_C": -51.273885350318324
+    },
+    {
+      "time_s": 0.622708239022182,
+      "time_mismatch_s": 5.658669081021195e-05,
+      "experimental_C": 1469.6390658174098,
+      "balbaa_numerical_C": 1402.0169851380042,
+      "balbaa_minus_experiment_C": -67.6220806794056
+    },
+    {
+      "time_s": 0.6525577184246265,
+      "time_mismatch_s": 0.0,
+      "experimental_C": 1423.0714791224345,
+      "balbaa_numerical_C": 1619.0021231422506,
+      "balbaa_minus_experiment_C": 195.9306440198161
+    },
+    {
+      "time_s": 0.7325995925758262,
+      "time_mismatch_s": 5.658669081032297e-05,
+      "experimental_C": 1389.384288747346,
+      "balbaa_numerical_C": 1157.2894550601557,
+      "balbaa_minus_experiment_C": -232.09483368719043
+    }
+  ],
+  "read_off_uncertainty_note": "逐点分项:框线半厚 + 刻度线独立标定的最大残差 + 标记锚点歧义(包围盒中心 vs 像素质心),方和根合成。未含 Balbaa 制图本身的误差与高温计自身的测量不确定度 —— 后者论文未给",
+  "zero_calibration_note": "只读图,不拟合、不平滑、不向任何模型结果靠拢"
+}

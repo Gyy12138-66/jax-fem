@@ -1,0 +1,35 @@
+[2026-09-03 17:59:34] waiting for the jax_fem_am runner to exit
+[2026-09-03 18:29:34] runner gone; starting group B
+[18:29:34] mesh points 301456
+[18:29:35] mechanics L30: free dofs=278562 (92854 nodes) nnz=18839934
+[18:29:40]   pardiso_direct: setup 0.0s iters 1 solve 2.2s total 4.9s rel_res 1.4e-15 converged=True
+[18:29:53]   jacobi_cg: setup 0.0s iters 1000 solve 12.9s total 13.0s rel_res 1.4e-05 converged=False
+[18:30:14]   jacobi_bicgstab: setup 0.0s iters 856 solve 21.4s total 21.4s rel_res 8.7e-07 converged=True
+[18:30:28]   blockjacobi_cg: setup 0.1s iters 1000 solve 13.2s total 13.4s rel_res 8.2e-06 converged=False
+[18:31:10]   sa_amg_default_cg: setup 0.9s iters 371 solve 41.6s total 42.5s rel_res 9.6e-07 converged=True opc 1.01 levels 3
+[18:31:19]   sa_amg_rbm_cg: setup 2.5s iters 49 solve 6.7s total 9.2s rel_res 9.6e-07 converged=True opc 1.19 levels 3
+[18:31:28]   sa_amg_rbm_scaled_cg: setup 2.7s iters 46 solve 5.9s total 8.6s rel_res 8.1e-07 converged=True opc 1.19 levels 3
+[18:32:20]   rs_amg_cg: setup 2.9s iters 365 solve 49.1s total 52.0s rel_res 9.9e-07 converged=True opc 1.30 levels 4
+[18:32:22] mechanics L90: free dofs=560607 (186869 nodes) nnz=36203247
+[18:32:30]   pardiso_direct: setup 0.0s iters 1 solve 4.0s total 8.4s rel_res 2.2e-15 converged=True
+[18:32:54]   jacobi_cg: setup 0.0s iters 1000 solve 24.2s total 24.2s rel_res 2.6e-04 converged=False
+[18:33:42]   jacobi_bicgstab: setup 0.0s iters 1000 solve 48.0s total 48.1s rel_res 8.0e-05 converged=False
+[18:34:09]   blockjacobi_cg: setup 0.3s iters 1000 solve 25.9s total 26.2s rel_res 2.0e-04 converged=False
+[18:37:41]   sa_amg_default_cg: setup 1.6s iters 1000 solve 211.2s total 212.9s rel_res 7.7e-06 converged=False opc 1.01 levels 3
+[18:38:00]   sa_amg_rbm_cg: setup 5.3s iters 49 solve 12.8s total 18.1s rel_res 8.9e-07 converged=True opc 1.20 levels 3
+[18:38:16]   sa_amg_rbm_scaled_cg: setup 5.1s iters 43 solve 11.2s total 16.3s rel_res 9.3e-07 converged=True opc 1.20 levels 3
+
+[18:42:30]   rs_amg_cg: setup 5.3s iters 1000 solve 248.3s total 253.6s rel_res 8.4e-06 converged=False opc 1.27 levels 5
+[18:42:31] mechanics L150: free dofs=818394 (272798 nodes) nnz=52515468
+[18:42:45]   pardiso_direct: setup 0.0s iters 1 solve 6.4s total 13.6s rel_res 5.4e-15 converged=True
+[18:43:20]   jacobi_cg: setup 0.0s iters 1000 solve 34.9s total 35.0s rel_res 4.9e-04 converged=False
+[18:44:30]   jacobi_bicgstab: setup 0.0s iters 1000 solve 69.6s total 69.6s rel_res 2.5e-05 converged=False
+[18:45:06]   blockjacobi_cg: setup 0.4s iters 1000 solve 36.5s total 36.9s rel_res 4.4e-04 converged=False
+[18:50:22]   sa_amg_default_cg: setup 3.0s iters 1000 solve 312.3s total 315.3s rel_res 4.7e-05 converged=False opc 1.01 levels 3
+[18:50:51]   sa_amg_rbm_cg: setup 7.5s iters 56 solve 21.3s total 28.8s rel_res 8.1e-07 converged=True opc 1.20 levels 3
+[18:51:18]   sa_amg_rbm_scaled_cg: setup 8.1s iters 50 solve 18.9s total 27.0s rel_res 9.0e-07 converged=True opc 1.20 levels 3
+
+[18:57:23]   rs_amg_cg: setup 7.6s iters 1000 solve 357.4s total 365.0s rel_res 5.0e-05 converged=False opc 1.27 levels 5
+[18:57:23] wrote /home/user/work/159/output/v159_voxel_fast2/matrix_dumps/analysis/B_mechanics_ladder.png
+[18:57:23] B mechanics benchmark done
+[2026-09-03 18:57:23] group B finished rc=0

@@ -1,0 +1,22 @@
+{
+  "arm": "gpu_modified_phase33",
+  "role": "GPU-assembly modified-Newton candidate",
+  "comparison_baseline": "gpu_full_phase23",
+  "accuracy_baseline": "cpu_full_phase23",
+  "conda_env": "jax-fem-gpu",
+  "python_bin": "/home/user/miniconda3/envs/jax-fem-gpu/bin/python",
+  "platform": "gpu",
+  "decomposition": "Build a mechanics tangent on GPU only when required, then reuse its CPU PARDISO factorization for up to two corrections with a 0.9 true-residual refresh guard.",
+  "extra_argv": [
+    "--xla-linear-solver",
+    "pardiso",
+    "--xla-pardiso-mode",
+    "phase23",
+    "--mechanics-residual-only-check",
+    "--mechanics-jacobian-reuse",
+    "2",
+    "--mechanics-jacobian-refresh-ratio",
+    "0.9"
+  ],
+  "notes": "This tests both avoided GPU tangent assembly and avoided numeric refactorization. Phase 33 still executes on CPU."
+}

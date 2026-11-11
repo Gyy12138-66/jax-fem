@@ -1,0 +1,103 @@
+{
+  "file": "0119.inp",
+  "nodes": 52739,
+  "node_id_range": [
+    1,
+    52739
+  ],
+  "bbox_min": [
+    3.7539972470985,
+    -0.303573629522,
+    -0.236982682746
+  ],
+  "bbox_max": [
+    3.8449011074875,
+    -0.215309937905,
+    -0.14052466143
+  ],
+  "extent": [
+    0.090903860389,
+    0.08826369161700001,
+    0.09645802131600001
+  ],
+  "duplicate_coordinate_nodes": 3,
+  "element_blocks": [
+    {
+      "type": "AC1D2",
+      "elset": "",
+      "count": 4,
+      "nodes_per_elem": 2,
+      "elem_id_range": [
+        1,
+        4
+      ],
+      "note": "non-solid element block (ignored for solid checks)",
+      "length_min_med_max": [
+        0.00040093473019495255,
+        0.00040093473044641205,
+        0.00040093473069787155
+      ],
+      "unique_centroid_z_levels": 2
+    },
+    {
+      "type": "C3D4",
+      "elset": "",
+      "count": 197266,
+      "nodes_per_elem": 4,
+      "elem_id_range": [
+        78363,
+        275628
+      ],
+      "volume_total": 2.5350300837270913e-05,
+      "inverted_or_zero_volume": 0,
+      "edge_len_min_med_max": [
+        1.12339100366605e-06,
+        0.001032195298342701,
+        0.0020584682733798608
+      ],
+      "aspect_ratio_Lmax_over_hmin_med_p95_max": [
+        1.9278064372483468,
+        2.5466352015870517,
+        1518.7534059522445
+      ],
+      "min_dihedral_deg_min_p05_med": [
+        0.39523797366386665,
+        37.000863485804416,
+        50.305937197085356
+      ],
+      "elements_min_dihedral_below_10deg": 533,
+      "volume_min_med_max": [
+        4.873098976558817e-15,
+        1.1952470078456987e-10,
+        4.085148632802091e-10
+      ],
+      "unique_centroid_z_levels": 168422
+    }
+  ],
+  "unused_nodes": 0,
+  "nsets": {},
+  "elsets": {},
+  "node_z_levels": 48925,
+  "node_z_spacing_min_med_max": [
+    9.999999997511999e-08,
+    1.000000000001e-06,
+    0.0001879000000000186
+  ],
+  "faces": {
+    "boundary(1)": 78358,
+    "interior(2)": 355353,
+    "nonmanifold(>2)": 0
+  },
+  "boundary_surface": {
+    "edges_in_1_face(open)": 0,
+    "edges_in_2_faces": 117537,
+    "edges_in_>2_faces": 0
+  },
+  "connected_components": {
+    "count": 2,
+    "node_counts_sorted": [
+      52736,
+      3
+    ]
+  }
+}

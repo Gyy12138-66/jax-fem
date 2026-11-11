@@ -1,0 +1,99 @@
+{
+  "schema": "v2.cube-stress-smoke/2",
+  "purpose": "阶段 1/2 缩高 cube smoke 的冻结输入：25 个真实 40 um 层 -> 5 个 200 um 激活 slab，验证真实层到 slab 的映射、显式 recoat、0/90 旋转、时间/能量台账，以及 runner 的激活与温度映射合同。smoke 几何（4 x 4 mm 足印、8 x 8 x 1.6 mm 基板）只用于机制验证，不承载结果；生产几何字段保持 Balbaa 原值。",
+  "provenance": {
+    "paper": "Balbaa2022 Sec 2.6.3, Fig 4-5",
+    "deviations": ["D-V2-07", "D-V2-10", "D-V2-11", "D-V2-12", "D-V2-28"],
+    "zero_calibration": true
+  },
+  "geometry": {
+    "part_xy_m": 0.01,
+    "smoke_part_xy_m": 0.004,
+    "smoke_part_z_m": 0.001,
+    "production_part_z_m": 0.01,
+    "substrate_xy_m": 0.03,
+    "substrate_z_m": 0.006,
+    "substrate_grading": 1.4,
+    "smoke_substrate_xy_m": 0.008,
+    "smoke_substrate_z_m": 0.0016,
+    "smoke_substrate_grading": null,
+    "cell_size_m": 0.0002
+  },
+  "layer_schedule": {
+    "physical_layer_thickness_m": 0.00004,
+    "activation_slab_thickness_m": 0.0002,
+    "physical_layers_per_slab": 5,
+    "smoke_physical_layers": 25,
+    "production_physical_layers": 250,
+    "activation_rule": "activate a 200 um slab when its first contained 40 um physical-layer scan starts",
+    "deposition_z_rule": "slab_top",
+    "recoat_time_s": 5.0,
+    "recoat_substeps": 10,
+    "recoat_substep_ratio": 1.5,
+    "recoat_after_final_layer": false
+  },
+  "scan": {
+    "power_W": 140.0,
+    "speed_m_s": 0.65,
+    "hatch_m": 0.00012,
+    "margin_m": 0.0001,
+    "sample_step_m": 0.0002,
+    "jump_speed_m_s": 5.0,
+    "start_angle_deg": 0.0,
+    "rotation_per_physical_layer_deg": 90.0,
+    "serpentine": true
+  },
+  "thermal_mechanical": {
+    "initial_temperature_K": 353.15,
+    "ambient_K": 313.0,
+    "stress_free_reference_K": 1273.15,
+    "final_cooldown_s": 600.0,
+    "final_cooldown_steps": 60,
+    "bottom_mechanics_bc": "fixed_until_release",
+    "release_after_cooling": true,
+    "release_rule": "substrate cells cut (stiffness and locked-in stress removed) + 3-point rigid-body anchors on printed nodes; bottom Dirichlet temperature held at the preheat value through cooldown (Balbaa: 600 s cooling, then model-change removal of the substrate)"
+  },
+  "runner": {
+    "material_config": "cases/AM-Benchmark/verification/v2-cube-rs/model/v2_material_config.json",
+    "material_config_relocate_prefix": "/home/user/work/159/jax-fem/",
+    "layer_activation_geometry": "centroid",
+    "layer_activation_note": "centroid, NOT intersection: jax_fem_am.mesh.model.cells_intersect_distance_band is boundary-INCLUSIVE, so with slab faces exactly on cell faces the band [0, k*lt] also captures the touching cells of slab k+1 (observed 2026-08-26: printed_cells 13600 = substrate 12800 + TWO slabs on the very first scan row). The centroid rule ceil(z_c/lt) maps slab k cells to layer id k unambiguously (AM-Bench L0 rev-4 uses the same rule).",
+    "absorptivity": 0.62,
+    "beam_radius_m": 0.0002,
+    "source_depth_m": 0.000125935,
+    "source_depth_cutoff_m": 0.000199,
+    "source_cutoff_renormalize": true,
+    "heat_source_note": "legacy Gaussian x exponential source read as a lumped-slab deposition (D-V2-10). In-plane radius = one 200 um cell (sigma 100 um; vertex-lattice ripple 2*exp(-2*pi^2*(sigma/h)^2) = 1.4 % per axis, measured +-1.4 % track to track; edge tracks lose ~15 %). DEPTH: with --thermal-mass-lumping the HEX8 source is collocated at cell VERTICES (jax_fem_am/mesh/quadrature.py recomputes physical_quad_points), so the exponential profile is sampled at depth 0 (slab top) and depth 200 um (slab bottom, counted again by the substrate cell below); with d = 100 um / cutoff = 200 um that trapezoid over-integrates the band by (1 + 2 e^-2)/2 / (1 - e^-2) = 1.4696 (measured 1.447-1.47 on 2026-08-26). The contract therefore cuts the band at 199 um (only the slab-top samples remain inside) and sets d so that the discrete band integral under the vertex rule is exactly 1: d(1 - exp(-cutoff/d)) = h/2 -> d = 125.935 um (the same pair gives 1.0007 under 2-point Gauss sampling). This is a quadrature-consistency choice, not a fit to any measurement; the capture fraction is still MEASURED by the stage-2 capture trial.",
+    "consolidation": {
+      "solidus_K": 10000.0,
+      "liquidus_K": 10000.0,
+      "latent_heat_J_kg": 0.0,
+      "phase_history_model": "legacy_reset",
+      "stress_relaxation_temperature_K": 1273.15,
+      "activation_reset_temperature_K": 353.15,
+      "note": "consolidation-on-activation with melt detection OFF: solidus = liquidus = 10000 K is a sentinel above any reachable temperature (peaks ~1.7-2.0e3 K on 200 um cells), so an activated slab is solid immediately and stays solid; T_ref := 1273.15 K once at activation (Balbaa: stress model initial temperature 1000 C, above which thermal stress is negligible). LESSON 2026-08-26: 'liquidus == solidus' at the physical 1563 K does NOT disable melt detection -- the L0 convention only looked that way because L0 peaks stayed below it; with peaks above 1563 K cells entered/left the melted state every scan step (melt bookkeeping, liquid softening x1e-4, eqp reset on melt). The sentinel removes all of that. It does NOT change the mechanics cadence: the v06 lifecycle also raises a reference event whenever a managed cell heats ABOVE the relaxation temperature T_cut = 1273.15 K (runner.py: reference_event = newly_solidified | became_melted | became_relaxation_hot) and wipes eqp on the cooling crossing (D-11 complete history reset); every such event FORCES a mechanics solve (install_mechanics_event_wrapper). With a moving source and peaks of 1.7-2.0e3 K that is nearly every scan step: measured 2.27 s/step with the physical solidus and 2.11 s/step with the sentinel, against 0.31 s/step thermal-only, i.e. ~9-10 h for the 16.3k-step smoke. This IS the Denlinger/D-11 'stress-free above T_cut' semantics that Balbaa's 1000 C reference invokes, so it is kept; mechanics.every_steps is therefore a FLOOR on the cadence, not the cadence."
+    },
+    "mechanics": {
+      "model": "j2_plastic",
+      "every_steps": 100,
+      "rel_tol": 5e-05,
+      "acceptance": "abaqus",
+      "max_iter": 50,
+      "line_search": true,
+      "max_cuts": 3,
+      "temperature_floor_K": 293.15
+    },
+    "output": {
+      "thermal_output_every": 650,
+      "mechanics_output_every": 100,
+      "summary_every": 50
+    },
+    "linear_solver": {
+      "platform": "gpu",
+      "python_bin": "/home/user/miniconda3/envs/jax-fem-gpu/bin/python",
+      "solver": "pardiso",
+      "pardiso_mode": "phase23",
+      "note": "GPU assembly + CPU MKL PARDISO. Adopted 2026-08-27 after solver-compare/: single layer 1364 s (CPU) -> 831 s (GPU), T/u/vm identical to 12 digits (results/RESULTS.md). smoke2 itself ran on CPU (its preflight fingerprint predates this switch); jax-fem-gpu lives under miniconda3, so the runner is launched by absolute interpreter path."
+    }
+  }
+}

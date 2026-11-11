@@ -1,0 +1,71 @@
+       __       ___      ___   ___                _______  _______ .___  ___. 
+      |  |     /   \     \  \ /  /               |   ____||   ____||   \/   | 
+      |  |    /  ^  \     \  V  /      ______    |  |__   |  |__   |  \  /  | 
+.--.  |  |   /  /_\  \     >   <      |______|   |   __|  |   __|  |  |\/|  | 
+|  `--'  |  /  _____  \   /  .  \                |  |     |  |____ |  |  |  | 
+ \______/  /__/     \__\ /__/ \__\               |__|     |_______||__|  |__| 
+                                                                              
+
+v06: paper-validation constitutive adapter installed
+============================================================
+mech100 XLA/GPU upgrade wrapper (v04)
+original_solver_module = /home/user/work/d11_B_tree/jax_fem_am/simulation/stepper.py
+linear_solver_override = pardiso_v07(phase23)
+xla_platform           = gpu
+xla_preallocate       = off
+xla_mem_fraction      = None
+fallback_to_spsolve   = True
+thermal_warm_start    = False
+loop_kernel_jit       = True
+skip_unused_mech_mat = True
+dof_to_quad_cache    = True
+quiet_jax_fem_logs = True
+lazy_output_postprocess = False
+thermal_only_mech_surrogate = True
+cell_assembly_chunking = auto target_batch_size=262144
+full_loop_xla         = disabled; v03 Python/jax-fem loop is preserved
+============================================================
+v06: lifecycle wrapper refreshed after v04 JIT patches
+v06: mechanics-event wrapper refreshed after v04 caches
+v06: thermal energy ledger installed after v04 solver patch
+mesh element type: HEX8; mechanics B-bar: ON (--mechanics-bbar auto)
+thermal mass lumping: HEX8 vertex collocation (conduction stays at Gauss points) installed (diagonal capacitance)
+path_output: /home/user/work/159/output/v2_cube_smoke_smoke2/solver_compare/gpu_pardiso/path_used.csv
+inp: /home/user/work/159/output/v2_cube_smoke_smoke2/preflight/v2_cube_smoke_c3d8.inp
+selected_cells: 14800
+points: 17334
+raw_pmin: [0. 0. 0.]
+raw_pmax: [0.008  0.008  0.0026]
+mesh_length_scale: 1.0
+path_length_scale: 1.0
+...
+global_step=400 mode=scan layer=1/5 highest_printed_layer=1 hatch=21/1 scan=22/20 front_z=0.0018 active_window_cells=13200/14800 printed_cells=13200/14800 cooling_only_cells=0/14800 mechanics_current=1 mechanics_source_step=400 T_min=353.090703182 T_max=1715.17055055 u_max=5.03749701931e-06 vm_max=662340965.941 laser_center=[0.0023  0.00454 0.0018 ] laser_switch=1 effective_power=86.8 vtk=/home/user/work/159/output/v2_cube_smoke_smoke2/solver_compare/gpu_pardiso/step_000400_scan.vtu
+global_step=500 mode=scan layer=1/5 highest_printed_layer=1 hatch=26/1 scan=27/20 front_z=0.0018 active_window_cells=13200/14800 printed_cells=13200/14800 cooling_only_cells=0/14800 mechanics_current=1 mechanics_source_step=500 T_min=353.083666252 T_max=1715.63005822 u_max=5.363305588e-06 vm_max=678853400.184 laser_center=[0.0057  0.00514 0.0018 ] laser_switch=1 effective_power=86.8 vtk=/home/user/work/159/output/v2_cube_smoke_smoke2/solver_compare/gpu_pardiso/step_000500_scan.vtu
+global_step=600 mode=scan layer=1/5 highest_printed_layer=1 hatch=31/1 scan=32/20 front_z=0.0018 active_window_cells=13200/14800 printed_cells=13200/14800 cooling_only_cells=0/14800 mechanics_current=1 mechanics_source_step=600 T_min=353.077382135 T_max=1717.20365435 u_max=5.50878730065e-06 vm_max=689961174.596 laser_center=[0.0023  0.00574 0.0018 ] laser_switch=1 effective_power=86.8 vtk=/home/user/work/159/output/v2_cube_smoke_smoke2/solver_compare/gpu_pardiso/step_000600_scan.vtu
+global_step=638 mode=scan layer=1/5 highest_printed_layer=1 hatch=32/1 scan=33/20 front_z=0.0018 active_window_cells=13200/14800 printed_cells=13200/14800 cooling_only_cells=0/14800 mechanics_current=1 mechanics_source_step=638 T_min=353.075137426 T_max=1539.44607865 u_max=5.59695238644e-06 vm_max=692765078.125 laser_center=[0.0021  0.00586 0.0018 ] laser_switch=1 effective_power=86.8 vtk=/home/user/work/159/output/v2_cube_smoke_smoke2/solver_compare/gpu_pardiso/step_000638_scan.vtu
+[solver-compare-gpu_pardiso] wall=830.881s steps=639 lin_iters=2784
+  nonlinear_solve     593.582s   71.4%  calls=1153  per_step=928.923 ms
+  solver              363.976s   43.8%  calls=2784  per_step=569.602 ms
+  python_overhead     215.394s   25.9%  calls=0  per_step=337.079 ms
+  assembly            136.350s   16.4%  calls=7843  per_step=213.380 ms
+  local_assembly      108.673s   13.1%  calls=4545  per_step=170.067 ms
+  residual_vector      47.431s    5.7%  calls=4545  per_step=74.227 ms
+  residual_bc          46.977s    5.7%  calls=4545  per_step=73.517 ms
+  nonlinear_solve_overhead     37.010s    4.5%  calls=1153  per_step=57.918 ms
+  global_matrix        27.677s    3.3%  calls=3298  per_step=43.313 ms
+  residual_scatter     21.752s    2.6%  calls=8258  per_step=34.041 ms
+  bc_initial_guess      8.816s    1.1%  calls=2784  per_step=13.796 ms
+  material              8.206s    1.0%  calls=1278  per_step=12.842 ms
+  setup                 4.621s    0.6%  calls=1  per_step=7.232 ms
+  io                    4.166s    0.5%  calls=11  per_step=6.519 ms
+  face_residual         3.763s    0.5%  calls=4960  per_step=5.888 ms
+  dof_to_quad           2.646s    0.3%  calls=1917  per_step=4.141 ms
+  face_jacobian         2.393s    0.3%  calls=3298  per_step=3.745 ms
+  quad_state            1.873s    0.2%  calls=2558  per_step=2.931 ms
+  cell_jacobian         1.778s    0.2%  calls=3298  per_step=2.783 ms
+  cell_residual         1.275s    0.2%  calls=4960  per_step=1.995 ms
+  residual_flatten      0.422s    0.1%  calls=4545  per_step=0.660 ms
+  postprocess           0.270s    0.0%  calls=1279  per_step=0.422 ms
+  history               0.105s    0.0%  calls=639  per_step=0.165 ms
+  activation            0.018s    0.0%  calls=639  per_step=0.029 ms
+[v07-pardiso phase23] {'solves': 2784, 'analyze_calls': 2, 'pattern_rebuilds': 0, 'backsolve_hits': 0, 'transpose_backsolves': 0, 'ir_steps_total': 0, 'ir_steps_max': 0}

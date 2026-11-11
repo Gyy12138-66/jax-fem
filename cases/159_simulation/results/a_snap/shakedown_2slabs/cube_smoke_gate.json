@@ -1,0 +1,142 @@
+{
+  "schema": "v159.gate/1",
+  "run_dir": "/home/user/work/159/output/v159_a_snap/shakedown_2slabs",
+  "ledger_complete": true,
+  "solver_completed": true,
+  "recorded_step_count": 226,
+  "expected_step_count": 226,
+  "max_relative_balance_error": 7.872257228642144e-06,
+  "all_balance_steps_within_tolerance": true,
+  "energy": {
+    "laser_commanded_J": 28266509.16110994,
+    "laser_absorbed_nominal_J": 17525235.679888163,
+    "laser_deposited_J": 9854.081277690218,
+    "capture_fraction": 0.0005622795297982036,
+    "per_step_capture_min": 0.0005600457849370201,
+    "per_step_capture_max": 0.0005645132323995885,
+    "per_step_capture_std": 2.233723731284189e-06,
+    "laser_on_steps": 20,
+    "max_relative_balance_error": 7.872257228642144e-06,
+    "flash": {
+      "capture_fraction_analytic": 0.0005624330719369647,
+      "capture_fraction_ledger_over_analytic": 0.9997270037157803,
+      "layers_in_run": 10,
+      "physical_absorbed_J": 9856.772517528494,
+      "deposited_over_physical_absorbed": 0.999726965410484
+    }
+  },
+  "log": {
+    "summary_lines": 13,
+    "newton_nonconvergence_count": 0,
+    "cutback_mentions": 0,
+    "nan_or_inf_mentions": 0,
+    "last_summary": [
+      "225",
+      "cooling",
+      "2",
+      "2",
+      "2",
+      "15588",
+      "204899",
+      "1",
+      "225",
+      "352.831760733",
+      "353.15",
+      "2.74041196598e-05",
+      "939598581.46"
+    ],
+    "mechanics_steps_seen": [
+      0,
+      220,
+      225
+    ],
+    "highest_printed_layer_first_step": {
+      "2": 120,
+      "1": 0
+    },
+    "release_u_max": 0.000424051673111,
+    "release_cut_cells": 13000
+  },
+  "profile": {
+    "wall_seconds": 774.4969610230764,
+    "steps": 226,
+    "newton_wall_seconds": 652.5277571821352,
+    "seconds_per_step": 3.4269777036419313
+  },
+  "checks": {
+    "ledger_complete": true,
+    "no_nan_or_inf_in_log": true,
+    "newton_converged_everywhere": true,
+    "step_count_matches_run_ledger": true,
+    "activation_steps_match_preflight": true,
+    "part_consolidated_on_activation": true,
+    "stress_free_reference_applied": true,
+    "release_solve_present": true,
+    "release_removed_substrate": true,
+    "release_changed_part_stress": true
+  },
+  "activation": {
+    "checked": true,
+    "vtu": "step_000225_cooling.vtu",
+    "events": [
+      {
+        "slab": 1,
+        "expected_global_step": 0,
+        "observed_activation_steps": [
+          0
+        ],
+        "cells": 1300,
+        "ok": true,
+        "material_state_values": [
+          2.0
+        ],
+        "stress_free_temperature_values": [
+          1273.1500244140625
+        ]
+      },
+      {
+        "slab": 2,
+        "expected_global_step": 110,
+        "observed_activation_steps": [
+          110
+        ],
+        "cells": 1288,
+        "ok": true,
+        "material_state_values": [
+          2.0
+        ],
+        "stress_free_temperature_values": [
+          1273.1500244140625
+        ]
+      }
+    ],
+    "all_events_match": true,
+    "slab_limit": 2,
+    "part_cells": 2588,
+    "part_all_solid_at_end": true,
+    "part_stress_free_temperature_unique": [
+      1273.1500244140625
+    ],
+    "slab_thickness_m": 0.0002000000000000001
+  },
+  "release": {
+    "checked": true,
+    "release_removed_cells": 13000,
+    "substrate_cells": 13000,
+    "removed_equals_substrate": true,
+    "part_vm_MPa_before": {
+      "mean": 791.97998046875,
+      "max": 862.2692260742188
+    },
+    "part_vm_MPa_after": {
+      "mean": 186.83827209472656,
+      "max": 531.888671875
+    },
+    "part_vm_changed_by_release": true,
+    "part_eqp_max_before": 0.0163890291005373,
+    "u_max_before_m": 2.7404119464335963e-05,
+    "u_max_after_m": 0.00042405168642289937,
+    "removed_cells_vm_MPa_max_after": 0.0
+  },
+  "all_checks_passed": true
+}
